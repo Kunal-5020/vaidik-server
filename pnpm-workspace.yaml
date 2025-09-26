@@ -2,4 +2,7 @@ ignoredBuiltDependencies:
   - '@nestjs/core'
 
 onlyBuiltDependencies:
+  - '@firebase/util'
+  - protobufjs
+  - sharp
   - unrs-resolver
