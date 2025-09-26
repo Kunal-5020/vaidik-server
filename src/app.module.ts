@@ -1,0 +1,92 @@
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { MongooseModule } from '@nestjs/mongoose';
+import { CacheModule } from '@nestjs/cache-manager';
+import { redisStore } from 'cache-manager-redis-store';
+
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+
+// Import configuration files
+import databaseConfig from './config/database.config';
+import redisConfig from './config/redis.config';
+import jwtConfig from './config/jwt.config';
+
+// Import modules
+import { AuthModule } from './auth/auth.module';
+import { UsersModule } from './users/users.module';
+import { AstrologersModule } from './astrologers/astrologers.module';
+import { ChatModule } from './chat/chat.module';
+import { FirebaseModule } from './firebase/firebase.module';
+import { CallsModule } from './calls/calls.module';
+import { StreamingModule } from './streaming/streaming.module';
+import { AdminModule } from './admin/admin.module';
+
+@Module({
+  imports: [
+    // Global configuration
+    ConfigModule.forRoot({
+      isGlobal: true,
+      load: [databaseConfig, redisConfig, jwtConfig],
+      envFilePath: '.env',
+    }),
+
+    // MongoDB connection
+    MongooseModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        uri: configService.get<string>('database.uri'),
+        ...configService.get('database.options'),
+      }),
+      inject: [ConfigService],
+    }),
+
+     // FIXED Redis cache connection
+    CacheModule.registerAsync({
+      isGlobal: true,
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => {
+        try {
+          const store = await redisStore({
+            socket: {
+              host: configService.get<string>('redis.host') || 'localhost',
+              port: configService.get<number>('redis.port') || 6379,
+            },
+            ttl: 300, // 5 minutes default TTL
+            // Add these options for better compatibility
+            database: 0,
+            keyPrefix: 'vaidiktalk:',
+          });
+
+          console.log('✅ Redis store created successfully');
+          return {
+            store: () => store,
+          };
+        } catch (error) {
+          console.error('❌ Redis store creation failed:', error);
+          
+          // Fallback to memory store for development
+          console.log('🔄 Falling back to memory cache...');
+          return {
+            ttl: 300,
+          };
+        }
+      },
+      inject: [ConfigService],
+    }),
+
+    AuthModule,
+    UsersModule,
+    AstrologersModule,
+    ChatModule,
+    FirebaseModule,
+    CallsModule,
+    StreamingModule,
+    AdminModule,
+  ],
+  controllers: [AppController],
+  providers: [
+    AppService,
+  ],
+})
+export class AppModule {}

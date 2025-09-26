@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "functions": {
+    "dist/main.js": {
+      "runtime": "@vercel/node@3.3.5",
+      "maxDuration": 10
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/v1/(.*)",
+      "dest": "/dist/main.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/dist/main.js"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
