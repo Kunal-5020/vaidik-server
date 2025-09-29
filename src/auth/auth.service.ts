@@ -26,7 +26,7 @@ export class AuthService {
     private jwtAuthService: JwtAuthService,
     private truecallerService: TruecallerService,
     private configService: ConfigService,
-    private cacheService: SimpleCacheService, // Using your simple cache instead
+    private cacheService: SimpleCacheService,
   ) {}
 
   async sendOtp(phoneNumber: string, countryCode: string) {
