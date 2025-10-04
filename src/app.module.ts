@@ -21,6 +21,7 @@ import { FirebaseModule } from './firebase/firebase.module';
 import { CallsModule } from './calls/calls.module';
 import { StreamingModule } from './streaming/streaming.module';
 import { AdminModule } from './admin/admin.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -83,6 +84,7 @@ import { AdminModule } from './admin/admin.module';
     CallsModule,
     StreamingModule,
     AdminModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [

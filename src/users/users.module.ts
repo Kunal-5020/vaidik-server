@@ -4,7 +4,6 @@ import { MulterModule } from '@nestjs/platform-express';
 
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
-import { FileUploadService } from './services/file-upload.service';
 import { AwsS3Service } from './services/aws-s3.service';
 import { ProfileCompletionService } from './services/profile-completion.service';
 import { User, UserSchema } from './schemas/user.schema';
@@ -20,7 +19,6 @@ import { multerConfig } from '../common/static-files.config';
   controllers: [UsersController],
   providers: [
     UsersService,
-    FileUploadService,
     AwsS3Service, 
     ProfileCompletionService,
   ],

@@ -1,19 +1,12 @@
+// src/auth/dto/truecaller-verify.dto.ts
 import { IsString, IsNotEmpty } from 'class-validator';
 
 export class TruecallerVerifyDto {
   @IsString()
   @IsNotEmpty()
-  phoneNumber: string;
+  authorizationCode: string;
 
   @IsString()
   @IsNotEmpty()
-  signature: string;
-
-  @IsString()
-  @IsNotEmpty()
-  payload: string;
-
-  @IsString()
-  @IsNotEmpty()
-  signatureAlgorithm: string;
+  codeVerifier: string;
 }

@@ -2,25 +2,15 @@ import {
   Controller, 
   Get, 
   Put, 
-  Post, 
-  Delete,
   Body, 
   Req, 
   UseGuards,
-  UseInterceptors,
-  UploadedFile,
   HttpCode,
   HttpStatus,
-  ParseFilePipe,
-  MaxFileSizeValidator,
-  FileTypeValidator,
   Query,
-  Param
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
 import { UsersService } from './users.service';
-import { FileUploadService } from './services/file-upload.service';
 import { ProfileCompletionService } from './services/profile-completion.service'; // Add this
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -46,7 +36,6 @@ interface UserActivity {
 export class UsersController {
   constructor(
     private readonly usersService: UsersService,
-    private readonly fileUploadService: FileUploadService,
     private readonly profileCompletionService: ProfileCompletionService, // Add this
   ) {}
 
@@ -93,34 +82,6 @@ export class UsersController {
   ) {
     const userId = (req.user._id as any).toString();
     return this.usersService.updatePreferences(userId, updatePreferencesDto);
-  }
-
-  // Upload profile picture
-  @Post('profile-picture')
-  @UseInterceptors(FileInterceptor('profilePicture'))
-  @HttpCode(HttpStatus.OK)
-  async uploadProfilePicture(
-    @Req() req: AuthenticatedRequest,
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }), // 5MB
-          new FileTypeValidator({ fileType: /(jpg|jpeg|png|webp)$/ }),
-        ],
-      }),
-    )
-    file: Express.Multer.File
-  ) {
-    const userId = (req.user._id as any).toString();
-    return this.usersService.uploadProfilePicture(userId, file);
-  }
-
-  // Delete profile picture
-  @Delete('profile-picture')
-  @HttpCode(HttpStatus.OK)
-  async deleteProfilePicture(@Req() req: AuthenticatedRequest) {
-    const userId = (req.user._id as any).toString();
-    return this.usersService.deleteProfilePicture(userId);
   }
 
   // === NEW ENDPOINTS ===
@@ -361,15 +322,6 @@ export class UsersController {
         favoriteAstrologers: user.data.favoriteAstrologers || [],
         totalFavorites: user.data.favoriteAstrologers?.length || 0
       }
-    };
-  }
-
-  // Get storage info (for debugging)
-  @Get('storage-info')
-  async getStorageInfo() {
-    return {
-      success: true,
-      data: this.fileUploadService.getStorageInfo()
     };
   }
 

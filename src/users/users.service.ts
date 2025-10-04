@@ -4,13 +4,11 @@ import { Model, Types } from 'mongoose';
 import { User, UserDocument } from './schemas/user.schema';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
-import { FileUploadService, UploadResult } from './services/file-upload.service';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
-    private fileUploadService: FileUploadService,
   ) {}
 
   // Get user profile by ID
@@ -148,93 +146,6 @@ export class UsersService {
         privacy: user.privacy,
         updatedAt: user.updatedAt
       }
-    };
-  }
-
-  // Upload profile picture
-  async uploadProfilePicture(userId: string, file: Express.Multer.File): Promise<any> {
-  const user = await this.userModel.findById(userId);
-  
-  if (!user) {
-    throw new NotFoundException('User not found');
-  }
-
-  // Delete old profile picture if exists
-  if (user.profileImage) {
-    try {
-      if (user.profileImageStorageType === 's3' && user.profileImageS3Key) {
-        // Delete from S3
-        await this.fileUploadService.deleteProfilePicture('', user.profileImageS3Key);
-      } else {
-        // Delete from local storage
-        const oldFilename = user.profileImage.split('/').pop();
-        if (oldFilename) {
-          await this.fileUploadService.deleteProfilePicture(oldFilename);
-        }
-      }
-    } catch (error) {
-      console.log('❌ Failed to delete old profile picture:', error);
-    }
-  }
-
-  // Upload new profile picture
-  const uploadResult: UploadResult = await this.fileUploadService.uploadProfilePicture(file, userId);
-
-  // Update user record
-  user.profileImage = uploadResult.url;
-  user.profileImageS3Key = uploadResult.s3Key;
-  user.profileImageStorageType = uploadResult.storageType;
-  await user.save();
-
-  console.log(`✅ Profile picture uploaded for user: ${userId} (${uploadResult.storageType})`);
-
-  return {
-    success: true,
-    message: 'Profile picture uploaded successfully',
-    data: {
-      profileImage: user.profileImage,
-      storageType: uploadResult.storageType,
-      uploadDetails: {
-        filename: uploadResult.filename,
-        size: uploadResult.size,
-        url: uploadResult.url,
-        ...(uploadResult.s3Key && { s3Key: uploadResult.s3Key })
-      }
-    }
-  };
-}
-
-  // Delete profile picture
-  async deleteProfilePicture(userId: string): Promise<any> {
-    const user = await this.userModel.findById(userId);
-    
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    if (!user.profileImage) {
-      throw new BadRequestException('No profile picture to delete');
-    }
-
-    // Delete file
-    try {
-      const filename = user.profileImage.split('/').pop();
-      if (filename) {
-        await this.fileUploadService.deleteProfilePicture(filename);
-      }
-    } catch (error) {
-      console.log('❌ Failed to delete profile picture file:', error);
-    }
-
-    // Update user record
-    user.profileImage = undefined;
-    await user.save();
-
-    console.log(`✅ Profile picture deleted for user: ${userId}`);
-
-    return {
-      success: true,
-      message: 'Profile picture deleted successfully'
     };
   }
 

@@ -14,7 +14,7 @@ export class User {
     unique: true, 
     validate: {
       validator: function(v: string) {
-        return /^[6-9]\d{9}$/.test(v);
+        return /^(\+\d{10,15}|\d{10,15})$/.test(v);
       },
       message: 'Invalid phone number format'
     }
