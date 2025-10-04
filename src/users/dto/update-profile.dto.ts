@@ -50,4 +50,8 @@ export class UpdateProfileDto {
   @IsString({ message: 'Pincode must be a string' })
   @Matches(/^[1-9][0-9]{5}$/, { message: 'Pincode must be a valid 6-digit Indian pincode' })
   pincode?: string;
+
+  @IsOptional()
+  @IsString({ message: 'Profile image must be a string' })
+  profileImage?: string;
 }

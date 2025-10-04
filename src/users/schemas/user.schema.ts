@@ -118,7 +118,8 @@ export class User {
   pincode?: string;
 
   @Prop({ 
-    required: false 
+    required: false,
+    default: 'default'
   })
   profileImage?: string;
 

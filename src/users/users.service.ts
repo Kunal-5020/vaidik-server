@@ -90,7 +90,8 @@ export class UsersService {
         state: user.state,
         country: user.country,
         pincode: user.pincode,
-        updatedAt: user.updatedAt
+        updatedAt: user.updatedAt,
+        profileImage: user.profileImage
       }
     };
   }
