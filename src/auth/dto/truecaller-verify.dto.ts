@@ -1,5 +1,4 @@
-// src/auth/dto/truecaller-verify.dto.ts
-import { IsString, IsNotEmpty } from 'class-validator';
+import { IsString, IsNotEmpty, ValidateNested } from 'class-validator';
 
 export class TruecallerVerifyDto {
   @IsString()
@@ -9,4 +8,5 @@ export class TruecallerVerifyDto {
   @IsString()
   @IsNotEmpty()
   codeVerifier: string;
+
 }

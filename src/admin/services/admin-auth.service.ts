@@ -1,132 +1,237 @@
-// src/admin/services/admin-auth.service.ts 
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { JwtService } from '@nestjs/jwt';
 import { Model } from 'mongoose';
+import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { Admin, AdminDocument } from '../schemas/admin.schema';
-import { AdminRole } from '../enums/admin-role.enum';
-import { getRolePermissions } from '../config/admin-permissions.config';
-
-export interface AdminLoginDto {
-  email: string;
-  password: string;
-}
-
-export interface CreateAdminDto {
-  email: string;
-  password: string;
-  name: string;
-  role: AdminRole;
-  phone?: string;
-  createdBy: string;
-}
-
-export interface AdminJwtPayload {
-  adminId: string;
-  email: string;
-  role: AdminRole;
-  permissions: string[];
-}
+import { AdminRole, AdminRoleDocument } from '../schemas/admin-role.schema';
+import { AdminActivityLogService } from './admin-activity-log.service';
 
 @Injectable()
 export class AdminAuthService {
   constructor(
     @InjectModel(Admin.name) private adminModel: Model<AdminDocument>,
+    @InjectModel(AdminRole.name) private roleModel: Model<AdminRoleDocument>,
     private jwtService: JwtService,
+    private activityLogService: AdminActivityLogService,
   ) {}
 
-  async login(loginDto: AdminLoginDto) {
-    const { email, password } = loginDto;
-    
-    const admin = await this.adminModel.findOne({ 
-      email: email.toLowerCase(),
-      isActive: true 
-    });
+  async login(email: string, password: string, ipAddress?: string, userAgent?: string): Promise<any> {
+    const admin = await this.adminModel
+      .findOne({ email })
+      .populate('roleId')
+      .exec();
 
-    if (!admin || !await bcrypt.compare(password, admin.password)) {
+    if (!admin) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Update last login
-    await this.adminModel.findByIdAndUpdate(admin._id, {
-      lastLoginAt: new Date()
+    // Check if account is locked
+    if (admin.lockedUntil && admin.lockedUntil > new Date()) {
+      const minutesLeft = Math.ceil((admin.lockedUntil.getTime() - Date.now()) / 60000);
+      throw new UnauthorizedException(`Account is locked. Try again in ${minutesLeft} minutes`);
+    }
+
+    // Check status
+    if (admin.status !== 'active') {
+      throw new UnauthorizedException('Account is not active');
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, admin.password);
+    if (!isPasswordValid) {
+      admin.failedLoginAttempts += 1;
+
+      if (admin.failedLoginAttempts >= 5) {
+        admin.lockedUntil = new Date(Date.now() + 30 * 60 * 1000);
+        admin.status = 'locked';
+        await admin.save();
+
+        await this.activityLogService.log({
+          adminId: String(admin._id), // ✅ Use String() instead
+          action: 'admin.account_locked',
+          module: 'auth',
+          status: 'warning',
+          details: { reason: 'Multiple failed login attempts' },
+          ipAddress,
+          userAgent,
+        });
+
+        throw new UnauthorizedException('Account locked due to multiple failed login attempts');
+      }
+
+      await admin.save();
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // Reset failed attempts on successful login
+    admin.failedLoginAttempts = 0;
+    admin.lastLoginAt = new Date();
+    admin.lastLoginIp = ipAddress;
+    admin.lastActivityAt = new Date();
+    
+if ((admin.status as string) === 'locked') {
+  admin.status = 'active';
+  admin.lockedUntil = undefined;
+}
+
+    
+    await admin.save();
+
+    // Generate JWT token
+    const token = this.jwtService.sign({
+      _id: String(admin._id), // ✅ Use String()
+      email: admin.email,
+      roleType: admin.roleType,
+      isAdmin: true,
+      isSuperAdmin: admin.isSuperAdmin,
     });
 
-    const permissions = getRolePermissions(admin.role);
-    
-    const payload: AdminJwtPayload = {
-      adminId: (admin._id as string).toString(), // Fix: Cast _id
-      email: admin.email,
-      role: admin.role,
-      permissions: [...permissions, ...admin.permissions],
-    };
-
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '8h' });
-    const refreshToken = this.jwtService.sign(
-      { adminId: admin._id }, 
-      { expiresIn: '7d' }
-    );
+    // Log activity
+    await this.activityLogService.log({
+      adminId: String(admin._id), // ✅ Use String()
+      action: 'admin.login',
+      module: 'auth',
+      status: 'success',
+      ipAddress,
+      userAgent,
+    });
 
     return {
       success: true,
+      message: 'Login successful',
       data: {
+        token,
         admin: {
-          id: admin._id,
+          adminId: admin.adminId,
           name: admin.name,
           email: admin.email,
-          role: admin.role,
-          permissions: payload.permissions,
-          lastLoginAt: admin.lastLoginAt,
-        },
-        tokens: {
-          accessToken,
-          refreshToken,
+          roleType: admin.roleType,
+          isSuperAdmin: admin.isSuperAdmin,
+          requirePasswordChange: admin.requirePasswordChange,
+          permissions: (admin.roleId as any)?.permissions || [],
         },
       },
     };
   }
 
-  async validateToken(token: string): Promise<AdminDocument> {
-    try {
-      const payload = this.jwtService.verify(token) as AdminJwtPayload;
-      const admin = await this.adminModel.findById(payload.adminId);
-      
-      if (!admin || !admin.isActive) {
-        throw new UnauthorizedException('Admin not found or inactive');
-      }
-
-      return admin;
-    } catch (error) {
-      throw new UnauthorizedException('Invalid token');
+  async createAdmin(
+    createData: {
+      name: string;
+      email: string;
+      password: string;
+      phoneNumber?: string;
+      roleType: string;
+      department?: string;
+    },
+    createdById: string
+  ): Promise<any> {
+    const existing = await this.adminModel.findOne({ email: createData.email });
+    if (existing) {
+      throw new ConflictException('Email already exists');
     }
+
+    const role = await this.roleModel.findOne({ name: createData.roleType });
+    if (!role) {
+      throw new BadRequestException('Invalid role');
+    }
+
+    const count = await this.adminModel.countDocuments();
+    const adminId = `ADMIN_${String(count + 1).padStart(4, '0')}`;
+
+    const hashedPassword = await bcrypt.hash(createData.password, 10);
+
+    const admin = new this.adminModel({
+      adminId,
+      name: createData.name,
+      email: createData.email,
+      password: hashedPassword,
+      phoneNumber: createData.phoneNumber,
+      roleId: role._id,
+      roleType: createData.roleType,
+      department: createData.department,
+      status: 'active',
+      isSuperAdmin: createData.roleType === 'super_admin',
+      requirePasswordChange: true,
+      createdBy: createdById,
+      createdAt: new Date(),
+    });
+
+    await admin.save();
+
+    await this.activityLogService.log({
+      adminId: createdById,
+      action: 'admin.created',
+      module: 'admins',
+      targetId: admin.adminId,
+      targetType: 'Admin',
+      status: 'success',
+      details: {
+        newAdminId: admin.adminId,
+        email: admin.email,
+        roleType: admin.roleType,
+      },
+    });
+
+    return {
+      success: true,
+      message: 'Admin created successfully',
+      data: {
+        adminId: admin.adminId,
+        name: admin.name,
+        email: admin.email,
+        roleType: admin.roleType,
+      },
+    };
   }
 
-  async refreshToken(refreshToken: string) {
-    try {
-      const payload = this.jwtService.verify(refreshToken);
-      const admin = await this.adminModel.findById(payload.adminId);
-
-      if (!admin || !admin.isActive) {
-        throw new UnauthorizedException('Admin not found');
-      }
-
-      const permissions = getRolePermissions(admin.role);
-      const newPayload: AdminJwtPayload = {
-        adminId: (admin._id as string).toString(), // Fix: Cast _id
-        email: admin.email,
-        role: admin.role,
-        permissions: [...permissions, ...admin.permissions],
-      };
-
-      const accessToken = this.jwtService.sign(newPayload, { expiresIn: '8h' });
-
-      return {
-        success: true,
-        data: { accessToken },
-      };
-    } catch (error) {
-      throw new UnauthorizedException('Invalid refresh token');
+  async changePassword(
+    adminId: string,
+    oldPassword: string,
+    newPassword: string
+  ): Promise<any> {
+    const admin = await this.adminModel.findById(adminId);
+    if (!admin) {
+      throw new UnauthorizedException('Admin not found');
     }
+
+    const isValid = await bcrypt.compare(oldPassword, admin.password);
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid current password');
+    }
+
+    admin.password = await bcrypt.hash(newPassword, 10);
+    admin.passwordChangedAt = new Date();
+    admin.requirePasswordChange = false;
+    await admin.save();
+
+    await this.activityLogService.log({
+      adminId: String(admin._id), // ✅ Use String()
+      action: 'admin.password_changed',
+      module: 'auth',
+      status: 'success',
+    });
+
+    return {
+      success: true,
+      message: 'Password changed successfully',
+    };
+  }
+
+  async getProfile(adminId: string): Promise<any> {
+    const admin = await this.adminModel
+      .findById(adminId)
+      .populate('roleId')
+      .select('-password')
+      .lean();
+
+    if (!admin) {
+      throw new UnauthorizedException('Admin not found');
+    }
+
+    return {
+      success: true,
+      data: admin,
+    };
   }
 }

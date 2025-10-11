@@ -1,31 +1,46 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
-import { AstrologersService } from './astrologers.service';
-import { AstrologersController } from './astrologers.controller';
-import { AstrologerSearchService } from './services/astrologer-search.service';
-import { RatingReviewService } from './services/rating-review.service';
-
 // Schemas
 import { Astrologer, AstrologerSchema } from './schemas/astrologer.schema';
-import { User, UserSchema } from '../users/schemas/user.schema';
+import { ProfileChangeRequest, ProfileChangeRequestSchema } from './schemas/profile-change-request.schema';
+
+// Services
+import { AstrologersService } from './services/astrologers.service';
+import { OnboardingService } from './services/onboarding.service';
+import { AvailabilityService } from './services/availability.service';
+import { ProfileChangeService } from './services/profile-change.service';
+import { EarningsService } from './services/earnings.service';
+
+// Controllers
+import { AstrologersController } from './controllers/astrologers.controller';
+import { AstrologerProfileController } from './controllers/astrologer-profile.controller';
+import { AstrologerOnboardingController } from './controllers/astrologer-onboarding.controller';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Astrologer.name, schema: AstrologerSchema },
-      { name: User.name, schema: UserSchema } // Needed for rating service
+      { name: ProfileChangeRequest.name, schema: ProfileChangeRequestSchema },
     ]),
   ],
-  controllers: [AstrologersController],
+  controllers: [
+    AstrologersController,
+    AstrologerProfileController,
+    AstrologerOnboardingController,
+  ],
   providers: [
     AstrologersService,
-    AstrologerSearchService,
-    RatingReviewService,
+    OnboardingService,
+    AvailabilityService,
+    ProfileChangeService,
+    EarningsService,
   ],
   exports: [
     AstrologersService,
-    MongooseModule,
+    OnboardingService,
+    AvailabilityService,
+    EarningsService,
   ],
 })
 export class AstrologersModule {}

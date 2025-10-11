@@ -1,67 +1,84 @@
-// src/admin/admin.module.ts (Updated with all controllers and services)
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { JwtModule } from '@nestjs/jwt';
-
-// Controllers
-import { AdminAuthController } from './controllers/admin-auth.controller';
-import { AdminDashboardController } from './controllers/admin-dashboard.controller';
-import { AdminUsersController } from './controllers/admin-users.controller';
-import { AdminAstrologersController } from './controllers/admin-astrologers.controller';
-import { AdminManagementController } from './controllers/admin-management.controller';
-import { AdminPaymentsController } from './controllers/admin-payments.controller';
-
-// Services
-import { AdminAuthService } from './services/admin-auth.service';
-import { AdminAnalyticsService } from './services/admin-analytics.service';
-import { AdminUsersService } from './services/admin-users.service';
-import { AdminAstrologersService } from './services/admin-astrologers.service';
-import { AdminManagementService } from './services/admin-management.service';
-import { AdminPaymentsService } from './services/admin-payments.service';
-
-// Guards
-import { AdminAuthGuard } from './guards/admin-auth.guard';
-import { PermissionsGuard } from './guards/permissions.guard';
-import { RolesGuard } from './guards/roles.guard';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 
 // Schemas
 import { Admin, AdminSchema } from './schemas/admin.schema';
+import { AdminRole, AdminRoleSchema } from './schemas/admin-role.schema';
+import { AdminActivityLog, AdminActivityLogSchema } from './schemas/admin-activity-log.schema';
+
+// Import other module schemas
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema';
-import { CallSession, CallSessionSchema } from '../calls/schemas/call-session.schema';
+import { Order, OrderSchema } from '../orders/schemas/orders.schema';
+import { WalletTransaction, WalletTransactionSchema } from '../payments/schemas/wallet-transaction.schema';
+import { PayoutRequest, PayoutRequestSchema } from '../payments/schemas/payout-request.schema';
+
+// Controllers
+import { AdminAuthController } from './controllers/admin-auth.controller';
+import { AdminUsersController } from './controllers/admin-users.controller';
+import { AdminAstrologersController } from './controllers/admin-astrologers.controller';
+import { AdminOrdersController } from './controllers/admin-orders.controller';
+import { AdminPaymentsController } from './controllers/admin-payments.controller';
+import { AdminAnalyticsController } from './controllers/admin-analytics.controller';
+
+// Services
+import { AdminAuthService } from './services/admin-auth.service';
+import { AdminUsersService } from './services/admin-users.service';
+import { AdminAstrologersService } from './services/admin-astrologers.service';
+import { AdminOrdersService } from './services/admin-orders.service';
+import { AdminPaymentsService } from './services/admin-payments.service';
+import { AdminAnalyticsService } from './services/admin-analytics.service';
+import { AdminActivityLogService } from './services/admin-activity-log.service';
+
+// Import other modules
+import { NotificationsModule } from '../notifications/notifications.module';
+import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
   imports: [
+    ConfigModule,
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_SECRET'),
+        signOptions: {
+          expiresIn: configService.get<string>('JWT_EXPIRES_IN') || '7d',
+        },
+      }),
+      inject: [ConfigService],
+    }),
     MongooseModule.forFeature([
       { name: Admin.name, schema: AdminSchema },
+      { name: AdminRole.name, schema: AdminRoleSchema },
+      { name: AdminActivityLog.name, schema: AdminActivityLogSchema },
       { name: User.name, schema: UserSchema },
       { name: Astrologer.name, schema: AstrologerSchema },
-      { name: CallSession.name, schema: CallSessionSchema },
+      { name: Order.name, schema: OrderSchema },
+      { name: WalletTransaction.name, schema: WalletTransactionSchema },
+      { name: PayoutRequest.name, schema: PayoutRequestSchema },
     ]),
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'your-jwt-secret',
-      signOptions: { expiresIn: '24h' },
-    }),
+    NotificationsModule,
+    PaymentsModule,
   ],
   controllers: [
     AdminAuthController,
-    AdminDashboardController,
     AdminUsersController,
     AdminAstrologersController,
-    AdminManagementController,
+    AdminOrdersController,
     AdminPaymentsController,
+    AdminAnalyticsController,
   ],
   providers: [
     AdminAuthService,
-    AdminAnalyticsService,
     AdminUsersService,
     AdminAstrologersService,
-    AdminManagementService,
+    AdminOrdersService,
     AdminPaymentsService,
-    AdminAuthGuard,
-    PermissionsGuard,
-    RolesGuard,
+    AdminAnalyticsService,
+    AdminActivityLogService,
   ],
-  exports: [AdminAnalyticsService, AdminAuthService],
+  exports: [AdminAuthService, AdminActivityLogService],
 })
 export class AdminModule {}

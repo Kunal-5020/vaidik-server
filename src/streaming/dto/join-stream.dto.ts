@@ -1,11 +1,7 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean } from 'class-validator';
+import { IsString, IsNotEmpty } from 'class-validator';
 
 export class JoinStreamDto {
-  @IsString()
-  @IsNotEmpty()
+  @IsString({ message: 'Stream ID must be a string' })
+  @IsNotEmpty({ message: 'Stream ID is required' })
   streamId: string;
-
-  @IsOptional()
-  @IsBoolean()
-  asViewer?: boolean; // true for viewer, false for host
 }

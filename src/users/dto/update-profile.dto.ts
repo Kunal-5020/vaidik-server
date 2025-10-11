@@ -1,57 +1,72 @@
-import { IsOptional, IsString, IsEnum, IsDateString, Length, Matches } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsEnum,
+  IsDateString,
+  MinLength,
+  MaxLength,
+  Matches,
+} from 'class-validator';
 
 export class UpdateProfileDto {
   @IsOptional()
   @IsString({ message: 'Name must be a string' })
-  @Length(2, 50, { message: 'Name must be between 2 and 50 characters' })
+  @MinLength(2, { message: 'Name must be at least 2 characters' })
+  @MaxLength(100, { message: 'Name cannot exceed 100 characters' })
   name?: string;
 
   @IsOptional()
-  @IsEnum(['male', 'female', 'other'], { message: 'Gender must be male, female, or other' })
+  @IsEnum(['male', 'female', 'other'], { message: 'Invalid gender' })
   gender?: string;
 
   @IsOptional()
-  @IsDateString({}, { message: 'Date of birth must be a valid date' })
+  @IsDateString({}, { message: 'Invalid date format' })
   dateOfBirth?: string;
 
   @IsOptional()
-  @IsString({ message: 'Time of birth must be a string' })
-  @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, { 
-    message: 'Time of birth must be in HH:MM format' 
-  })
+  @IsString()
+  @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, { message: 'Time should be in HH:MM format' })
   timeOfBirth?: string;
 
   @IsOptional()
-  @IsString({ message: 'Place of birth must be a string' })
-  @Length(2, 100, { message: 'Place of birth must be between 2 and 100 characters' })
+  @IsString()
+  @MaxLength(200)
   placeOfBirth?: string;
 
   @IsOptional()
-  @IsString({ message: 'Current address must be a string' })
-  @Length(5, 200, { message: 'Current address must be between 5 and 200 characters' })
+  @IsString()
+  @MaxLength(300)
   currentAddress?: string;
 
   @IsOptional()
-  @IsString({ message: 'City must be a string' })
-  @Length(2, 50, { message: 'City must be between 2 and 50 characters' })
+  @IsString()
+  @MaxLength(100)
   city?: string;
 
   @IsOptional()
-  @IsString({ message: 'State must be a string' })
-  @Length(2, 50, { message: 'State must be between 2 and 50 characters' })
+  @IsString()
+  @MaxLength(100)
   state?: string;
 
   @IsOptional()
-  @IsString({ message: 'Country must be a string' })
-  @Length(2, 50, { message: 'Country must be between 2 and 50 characters' })
+  @IsString()
+  @MaxLength(100)
   country?: string;
 
   @IsOptional()
-  @IsString({ message: 'Pincode must be a string' })
-  @Matches(/^[1-9][0-9]{5}$/, { message: 'Pincode must be a valid 6-digit Indian pincode' })
+  @IsString()
+  @Matches(/^[1-9][0-9]{5}$/, { message: 'Invalid pincode format' })
   pincode?: string;
 
   @IsOptional()
-  @IsString({ message: 'Profile image must be a string' })
+  @IsString()
   profileImage?: string;
+
+  @IsOptional()
+  @IsString()
+  profileImageS3Key?: string;
+
+  @IsOptional()
+  @IsEnum(['local', 's3'])
+  profileImageStorageType?: string;
 }

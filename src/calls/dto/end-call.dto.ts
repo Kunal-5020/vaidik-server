@@ -1,15 +1,12 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, MaxLength } from 'class-validator';
 
 export class EndCallDto {
-  @IsString()
-  @IsNotEmpty()
-  callId: string;
-
-  @IsOptional()
-  @IsEnum(['completed', 'network_error', 'user_ended', 'astrologer_ended'])
-  endReason?: string;
+  @IsString({ message: 'Session ID must be a string' })
+  @IsNotEmpty({ message: 'Session ID is required' })
+  sessionId: string;
 
   @IsOptional()
   @IsString()
-  feedback?: string;
+  @MaxLength(500, { message: 'Reason cannot exceed 500 characters' })
+  reason?: string;
 }

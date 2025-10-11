@@ -1,42 +1,30 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { StreamingService } from './streaming.service';
-import { StreamingController } from './streaming.controller';
-import { StreamingGateway } from './streaming.gateway';
-import { StreamManagementService } from './services/stream-management.service';
+import { ConfigModule } from '@nestjs/config';
+import { StreamController } from './controllers/stream.controller';
+import { AstrologerStreamController } from './controllers/astrologer-stream.controller';
+import { StreamGateway } from './gateways/streaming.gateway';
+import { StreamSessionService } from './services/stream-session.service';
+import { StreamAgoraService } from './services/stream-agora.service';
 import { StreamAnalyticsService } from './services/stream-analytics.service';
-
-// Schemas
-import { LiveStream, LiveStreamSchema } from './schemas/live-stream.schema';
+import { StreamSession, StreamSessionSchema } from './schemas/stream-session.schema';
 import { StreamViewer, StreamViewerSchema } from './schemas/stream-viewer.schema';
-import { User, UserSchema } from '../users/schemas/user.schema';
-import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema';
-
-// Import other modules
-import { CallsModule } from '../calls/calls.module'; // For Agora service
-import { FirebaseModule } from '../firebase/firebase.module'; // For notifications
 
 @Module({
   imports: [
+    ConfigModule,
     MongooseModule.forFeature([
-      { name: LiveStream.name, schema: LiveStreamSchema },
+      { name: StreamSession.name, schema: StreamSessionSchema },
       { name: StreamViewer.name, schema: StreamViewerSchema },
-      { name: User.name, schema: UserSchema },
-      { name: Astrologer.name, schema: AstrologerSchema },
     ]),
-    CallsModule, // For AgoraService
-    FirebaseModule, // For push notifications
   ],
-  controllers: [StreamingController],
+  controllers: [StreamController, AstrologerStreamController],
   providers: [
-    StreamingService,
-    StreamingGateway,
-    StreamManagementService,
+    StreamGateway,
+    StreamSessionService,
+    StreamAgoraService,
     StreamAnalyticsService,
   ],
-  exports: [
-    StreamingService,
-    StreamManagementService,
-  ],
+  exports: [StreamSessionService, StreamAgoraService],
 })
 export class StreamingModule {}

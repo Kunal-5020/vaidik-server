@@ -1,51 +1,41 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsNumber, IsEnum, IsArray, IsDateString, Min, Max, Length } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsDateString,
+  IsUrl,
+  MinLength,
+  MaxLength,
+  Min
+} from 'class-validator';
 
 export class CreateStreamDto {
-  @IsString()
-  @IsNotEmpty()
-  @Length(5, 100, { message: 'Title must be between 5 and 100 characters' })
+  @IsString({ message: 'Title must be a string' })
+  @IsNotEmpty({ message: 'Title is required' })
+  @MinLength(5, { message: 'Title must be at least 5 characters' })
+  @MaxLength(200, { message: 'Title cannot exceed 200 characters' })
   title: string;
 
   @IsOptional()
-  @IsString()
-  @Length(10, 500, { message: 'Description must be between 10 and 500 characters' })
+  @IsString({ message: 'Description must be a string' })
+  @MaxLength(1000, { message: 'Description cannot exceed 1000 characters' })
   description?: string;
 
-  @IsDateString()
-  scheduledAt: string;
+  @IsEnum(['free', 'paid'], { message: 'Stream type must be free or paid' })
+  streamType: 'free' | 'paid';
 
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  tags?: string[];
-
-  @IsOptional()
-  @IsEnum(['general', 'astrology', 'tarot', 'numerology', 'palmistry'])
-  category?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  isPaid?: boolean;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Max(1000)
+  @IsNumber({}, { message: 'Entry fee must be a number' })
+  @Min(0, { message: 'Entry fee cannot be negative' })
   entryFee?: number;
 
   @IsOptional()
-  @IsBoolean()
-  allowChat?: boolean;
+  @IsDateString({}, { message: 'Invalid scheduled date format' })
+  scheduledAt?: string;
 
   @IsOptional()
-  @IsBoolean()
-  allowTips?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  allowQuestions?: boolean;
-
-  @IsOptional()
-  @IsString()
+  @IsUrl({}, { message: 'Thumbnail must be a valid URL' })
   thumbnailUrl?: string;
 }

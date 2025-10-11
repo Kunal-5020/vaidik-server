@@ -39,6 +39,7 @@
     "agora-access-token": "^2.0.4",
     "agora-rtc-sdk-ng": "^4.24.0",
     "axios": "^1.12.2",
+    "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
     "cache-manager": "^7.2.0",
     "cache-manager-redis-store": "^3.0.1",

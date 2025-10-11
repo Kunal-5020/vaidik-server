@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Astrologer, AstrologerDocument } from '../schemas/astrologer.schema';
-import { AstrologerSearchDto } from '../dto/astrologer-search.dto';
+import { AstrologerSearchDto } from '../../schemas/astrologer-search.dto';
 
 export interface SearchResult {
   astrologers: AstrologerDocument[];

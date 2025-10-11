@@ -1,49 +1,54 @@
-// src/payments/schemas/wallet-transaction.schema.ts
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
 export type WalletTransactionDocument = WalletTransaction & Document;
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, collection: 'wallet_transactions' })
 export class WalletTransaction {
-  @Prop({ required: true, unique: true })
-  transactionId: string;
+  @Prop({ required: true, unique: true, index: true })
+  transactionId: string; // "TXN_20251002_ABC123"
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
   userId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Astrologer' })
-  astrologerId?: Types.ObjectId;
-
-  @Prop({ required: true, enum: ['credit', 'debit'] })
-  type: 'credit' | 'debit';
-
-  @Prop({ required: true })
-  amount: number; // Amount in rupees
+  @Prop({ 
+    required: true,
+    enum: ['recharge', 'deduction', 'refund', 'bonus'],
+    index: true
+  })
+  type: string;
 
   @Prop({ required: true })
-  balanceAfter: number; // Wallet balance after transaction
-
-  @Prop({ required: true, enum: [
-    'wallet_recharge', 'call_payment', 'chat_payment', 'stream_tip', 
-    'refund', 'commission', 'bonus', 'withdrawal'
-  ] })
-  purpose: string;
-
-  @Prop({ required: true, enum: ['pending', 'completed', 'failed', 'cancelled'], default: 'completed' })
-  status: string;
+  amount: number;
 
   @Prop({ required: true })
+  balanceBefore: number;
+
+  @Prop({ required: true })
+  balanceAfter: number;
+
+  @Prop({ required: true, maxlength: 500 })
   description: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'PaymentOrder' })
-  paymentOrderId?: Types.ObjectId;
+  @Prop()
+  orderId?: string; // Reference to Order (if applicable)
 
-  @Prop() // Reference to call/chat session
-  sessionId?: string;
+  @Prop()
+  paymentGateway?: string; // 'razorpay', 'phonepe', 'paytm', etc.
 
-  @Prop({ type: Object })
-  metadata?: any;
+  @Prop()
+  paymentId?: string; // Payment gateway transaction ID
+
+  @Prop({ 
+    required: true,
+    enum: ['pending', 'completed', 'failed', 'cancelled'],
+    default: 'pending',
+    index: true
+  })
+  status: string;
+
+  @Prop()
+  failureReason?: string;
 
   @Prop({ default: Date.now })
   createdAt: Date;
@@ -52,7 +57,10 @@ export class WalletTransaction {
 export const WalletTransactionSchema = SchemaFactory.createForClass(WalletTransaction);
 
 // Indexes
-WalletTransactionSchema.index({ userId: 1, createdAt: -1 });
-WalletTransactionSchema.index({ astrologerId: 1, createdAt: -1 });
 WalletTransactionSchema.index({ transactionId: 1 }, { unique: true });
-WalletTransactionSchema.index({ purpose: 1, status: 1 });
+WalletTransactionSchema.index({ userId: 1, createdAt: -1 });
+WalletTransactionSchema.index({ userId: 1, type: 1 });
+WalletTransactionSchema.index({ userId: 1, status: 1 });
+WalletTransactionSchema.index({ paymentId: 1 }, { sparse: true });
+WalletTransactionSchema.index({ orderId: 1 }, { sparse: true });
+WalletTransactionSchema.index({ createdAt: -1 });

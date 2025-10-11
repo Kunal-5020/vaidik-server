@@ -253,50 +253,85 @@ async verifyTruecaller(@Body(ValidationPipe) truecallerVerifyDto: TruecallerVeri
   }
 }
 
-// Get TrueCaller config for frontend
+// src/auth/auth.controller.ts - Replace these two methods
+
+/**
+ * Get Truecaller configuration for frontend
+ * Public endpoint - no authentication required
+ * Frontend can use this to check if Truecaller is enabled
+ */
 @Get('truecaller/config')
 async getTruecallerConfig() {
   try {
+    this.logger.log('🔍 CONTROLLER: TrueCaller config request received');
+
     const config = this.truecallerService.getTruecallerConfig();
-    
+
     this.logger.log('✅ CONTROLLER: TrueCaller config retrieved', {
       isEnabled: config.isEnabled,
-      environment: config.environment,
-      flowType: config.flowType
+      flowType: config.flowType,
+      dataFieldsCount: config.dataFields?.length,
     });
-    
+
     return {
       success: true,
-      data: config
+      data: config,
     };
   } catch (error) {
     this.logger.error('❌ CONTROLLER: Get TrueCaller config failed', {
-      error: error.message
+      error: error.message,
+      stack: error.stack?.substring(0, 200),
     });
-    throw error;
+
+    // Don't expose internal errors to frontend
+    return {
+      success: false,
+      message: 'Failed to retrieve Truecaller configuration',
+      data: {
+        isEnabled: false,
+        flowType: 'oauth',
+        dataFields: [],
+      },
+    };
   }
 }
 
-// Test TrueCaller configuration
+/**
+ * Test Truecaller configuration
+ * Useful for debugging and health checks
+ * Public endpoint - no authentication required
+ */
 @Get('truecaller/test')
 async testTruecallerConfig() {
   try {
     this.logger.log('🧪 CONTROLLER: TrueCaller test request received');
-    
+
     const result = await this.truecallerService.testConfiguration();
-    
+
     this.logger.log('🧪 CONTROLLER: TrueCaller test completed', {
       success: result.success,
       message: result.message,
-      hasClientId: !!result.config.clientId
+      isEnabled: result.config?.isEnabled,
     });
-    
+
     return result;
   } catch (error) {
     this.logger.error('❌ CONTROLLER: TrueCaller test failed', {
-      error: error.message
+      error: error.message,
+      stack: error.stack?.substring(0, 200),
     });
-    throw error;
+
+    return {
+      success: false,
+      message: `Test failed: ${error.message}`,
+      config: {
+        isEnabled: false,
+        flowType: 'oauth',
+        dataFields: [],
+        hasClientId: false,
+      },
+    };
   }
 }
+
 }

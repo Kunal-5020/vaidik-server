@@ -3,6 +3,7 @@ ignoredBuiltDependencies:
 
 onlyBuiltDependencies:
   - '@firebase/util'
+  - bcrypt
   - protobufjs
   - sharp
   - unrs-resolver

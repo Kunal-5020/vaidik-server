@@ -1,222 +1,274 @@
-// src/admin/services/admin-astrologers.service.ts (Fixed - Remove missing imports)
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
-import { CallSession, CallSessionDocument } from '../../calls/schemas/call-session.schema';
-
-export interface GetAstrologersQuery {
-  page: number;
-  limit: number;
-  search?: string;
-  status?: string;
-  specialization?: string;
-}
-
-export interface AstrologerSummary {
-  id: string;
-  name: string;
-  phone: string;
-  email: string;
-  status: string;
-  specializations: string[];
-  experience: number;
-  rating: number;
-  totalRatings: number;
-  isOnline: boolean;
-  isAvailable: boolean;
-  totalEarnings: number;
-  sessionsCount: number;
-  reviewsCount: number;
-  joinedAt: Date;
-}
+import { Astrologer, AstrologerDocument, AstrologerOnboardingStatus } from '../../astrologers/schemas/astrologer.schema';
+import { NotificationService } from '../../notifications/services/notification.service';
+import { AdminActivityLogService } from './admin-activity-log.service';
 
 @Injectable()
 export class AdminAstrologersService {
   constructor(
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
-    @InjectModel(CallSession.name) private callModel: Model<CallSessionDocument>,
+    private notificationService: NotificationService,
+    private activityLogService: AdminActivityLogService,
   ) {}
 
-  async getAstrologers(query: GetAstrologersQuery) {
-    const { page, limit, search, status, specialization } = query;
+  async getAllAstrologers(
+    page: number = 1,
+    limit: number = 50,
+    filters?: { status?: string; onboardingStatus?: string; search?: string }
+  ): Promise<any> {
     const skip = (page - 1) * limit;
+    const query: any = {};
 
-    // Build filter
-    const filter: any = {};
-    
-    if (search) {
-      filter.$or = [
-        { 'profile.name': { $regex: search, $options: 'i' } },
-        { 'profile.email': { $regex: search, $options: 'i' } },
-        { phone: { $regex: search, $options: 'i' } },
+    if (filters?.status) query.accountStatus = filters.status;
+    if (filters?.onboardingStatus) query['onboarding.status'] = filters.onboardingStatus;
+    if (filters?.search) {
+      query.$or = [
+        { name: { $regex: filters.search, $options: 'i' } },
+        { phoneNumber: { $regex: filters.search, $options: 'i' } },
+        { email: { $regex: filters.search, $options: 'i' } },
       ];
-    }
-
-    if (status) {
-      filter.status = status;
-    }
-
-    if (specialization) {
-      filter['profile.specializations'] = { $in: [specialization] };
     }
 
     const [astrologers, total] = await Promise.all([
       this.astrologerModel
-        .find(filter)
-        .select('profile phone status ratings experience wallet createdAt isOnline isAvailable')
+        .find(query)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      this.astrologerModel.countDocuments(filter),
+      this.astrologerModel.countDocuments(query),
     ]);
 
-    // Get additional data for each astrologer
-    const astrologerSummaries: AstrologerSummary[] = await Promise.all(
-      astrologers.map(async (astrologer) => {
-        const sessionsCount = await this.getSessionsCount(astrologer._id.toString());
+    return {
+      success: true,
+      data: {
+        astrologers,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
+      },
+    };
+  }
 
-        return {
-          id: astrologer._id.toString(),
-          name: (astrologer as any).profile?.name || 'Unknown', // Fix: Type assertion
-          phone: (astrologer as any).phone || '',
-          email: (astrologer as any).profile?.email || '',
-          status: (astrologer as any).status || 'pending',
-          specializations: (astrologer as any).profile?.specializations || [],
-          experience: (astrologer as any).experience || 0,
-          rating: (astrologer as any).ratings?.average || 0,
-          totalRatings: (astrologer as any).ratings?.total || 0,
-          isOnline: (astrologer as any).isOnline || false,
-          isAvailable: (astrologer as any).isAvailable || false,
-          totalEarnings: 0, // Will implement when wallet transaction schema is available
-          sessionsCount,
-          reviewsCount: 0, // Will implement when review schema is available
-          joinedAt: astrologer.createdAt || new Date(),
-        };
-      })
+  async getPendingAstrologers(page: number = 1, limit: number = 50): Promise<any> {
+    const skip = (page - 1) * limit;
+
+    const [astrologers, total] = await Promise.all([
+      this.astrologerModel
+        .find({ 'onboarding.status': AstrologerOnboardingStatus.WAITLIST })
+        .sort({ createdAt: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.astrologerModel.countDocuments({ 'onboarding.status': AstrologerOnboardingStatus.WAITLIST }),
+    ]);
+
+    return {
+      success: true,
+      data: {
+        astrologers,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
+      },
+    };
+  }
+
+  async getAstrologerDetails(astrologerId: string): Promise<any> {
+    const astrologer = await this.astrologerModel.findById(astrologerId).lean();
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer not found');
+    }
+
+    return {
+      success: true,
+      data: astrologer,
+    };
+  }
+
+  async approveAstrologer(astrologerId: string, adminId: string, adminNotes?: string): Promise<any> {
+    const astrologer = await this.astrologerModel.findById(astrologerId);
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer not found');
+    }
+
+    astrologer.onboarding.status = AstrologerOnboardingStatus.APPROVED;
+    astrologer.onboarding.approval = {
+  approvedAt: new Date(),
+  approvedBy: adminId as any, // ✅ Add adminId
+  adminNotes: adminNotes || '',
+  canLogin: true, // ✅ Add canLogin
+};
+
+    astrologer.accountStatus = 'active';
+
+    await astrologer.save();
+
+    // Send notification
+    await this.notificationService.sendNotification({
+      recipientId: astrologerId,
+      recipientModel: 'Astrologer',
+      type: 'astrologer_approved',
+      title: 'Application Approved! 🎉',
+      message: 'Congratulations! Your astrologer application has been approved. You can now start taking consultations.',
+      priority: 'high',
+    });
+
+    // Log activity
+    await this.activityLogService.log({
+      adminId,
+      action: 'astrologer.approved',
+      module: 'astrologers',
+      targetId: astrologerId,
+      targetType: 'Astrologer',
+      status: 'success',
+      details: {
+        astrologerName: astrologer.name,
+        adminNotes,
+      },
+    });
+
+    return {
+      success: true,
+      message: 'Astrologer approved successfully',
+      data: astrologer,
+    };
+  }
+
+  async rejectAstrologer(astrologerId: string, adminId: string, reason: string): Promise<any> {
+    const astrologer = await this.astrologerModel.findById(astrologerId);
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer not found');
+    }
+
+    astrologer.onboarding.status = AstrologerOnboardingStatus.REJECTED;
+    astrologer.accountStatus = 'inactive';
+
+    await astrologer.save();
+
+    // Send notification
+    await this.notificationService.sendNotification({
+      recipientId: astrologerId,
+      recipientModel: 'Astrologer',
+      type: 'astrologer_approved',
+      title: 'Application Update',
+      message: `Your application has been reviewed. Reason: ${reason}`,
+      priority: 'high',
+    });
+
+    // Log activity
+    await this.activityLogService.log({
+      adminId,
+      action: 'astrologer.rejected',
+      module: 'astrologers',
+      targetId: astrologerId,
+      targetType: 'Astrologer',
+      status: 'success',
+      details: {
+        astrologerName: astrologer.name,
+        reason,
+      },
+    });
+
+    return {
+      success: true,
+      message: 'Astrologer application rejected',
+    };
+  }
+
+  async updateAstrologerStatus(astrologerId: string, adminId: string, status: string): Promise<any> {
+    const astrologer = await this.astrologerModel.findByIdAndUpdate(
+      astrologerId,
+      { $set: { accountStatus: status } },
+      { new: true }
     );
 
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer not found');
+    }
+
+    // Log activity
+    await this.activityLogService.log({
+      adminId,
+      action: 'astrologer.status_updated',
+      module: 'astrologers',
+      targetId: astrologerId,
+      targetType: 'Astrologer',
+      status: 'success',
+      details: {
+        newStatus: status,
+      },
+    });
+
     return {
-      astrologers: astrologerSummaries,
-      pagination: {
-        page,
-        limit,
+      success: true,
+      message: `Astrologer status updated to ${status}`,
+      data: astrologer,
+    };
+  }
+
+  async updatePricing(astrologerId: string, adminId: string, pricingData: any): Promise<any> {
+  const astrologer = await this.astrologerModel.findById(astrologerId);
+  if (!astrologer) {
+    throw new NotFoundException('Astrologer not found');
+  }
+
+  // ✅ Fix pricing field names to match schema
+  if (pricingData.chatRatePerMinute !== undefined) {
+    astrologer.pricing.chat = pricingData.chatRatePerMinute;
+  }
+  if (pricingData.callRatePerMinute !== undefined) {
+    astrologer.pricing.call = pricingData.callRatePerMinute;
+  }
+  if (pricingData.videoCallRatePerMinute !== undefined) {
+    astrologer.pricing.videoCall = pricingData.videoCallRatePerMinute;
+  }
+
+  await astrologer.save();
+
+  await this.activityLogService.log({
+    adminId,
+    action: 'astrologer.pricing_updated',
+    module: 'astrologers',
+    targetId: astrologerId,
+    targetType: 'Astrologer',
+    status: 'success',
+    details: pricingData,
+  });
+
+  return {
+    success: true,
+    message: 'Pricing updated successfully',
+    data: astrologer.pricing,
+  };
+}
+
+  async getAstrologerStats(): Promise<any> {
+    const [total, active, pending, approved, rejected] = await Promise.all([
+      this.astrologerModel.countDocuments(),
+      this.astrologerModel.countDocuments({ accountStatus: 'active' }),
+      this.astrologerModel.countDocuments({ 'onboarding.status': AstrologerOnboardingStatus.WAITLIST }),
+      this.astrologerModel.countDocuments({ 'onboarding.status': AstrologerOnboardingStatus.APPROVED }),
+      this.astrologerModel.countDocuments({ 'onboarding.status': AstrologerOnboardingStatus.REJECTED }),
+    ]);
+
+    return {
+      success: true,
+      data: {
         total,
-        pages: Math.ceil(total / limit),
+        active,
+        pending,
+        approved,
+        rejected,
       },
     };
-  }
-
-  async getAstrologer(astrologerId: string) {
-    const astrologer = await this.astrologerModel
-      .findById(astrologerId)
-      .lean();
-
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
-
-    // Get detailed statistics
-    const sessionsCount = await this.getSessionsCount(astrologerId);
-
-    return {
-      astrologer: {
-        id: astrologer._id,
-        profile: (astrologer as any).profile,
-        phone: (astrologer as any).phone,
-        status: (astrologer as any).status,
-        experience: (astrologer as any).experience,
-        languages: (astrologer as any).languages,
-        specializations: (astrologer as any).profile?.specializations,
-        rating: (astrologer as any).ratings?.average || 0,
-        totalRatings: (astrologer as any).ratings?.total || 0,
-        isOnline: (astrologer as any).isOnline,
-        isAvailable: (astrologer as any).isAvailable,
-        pricing: (astrologer as any).pricing,
-        availability: (astrologer as any).availability,
-        documents: (astrologer as any).documents,
-        joinedAt: astrologer.createdAt,
-      },
-      statistics: {
-        totalEarnings: 0,
-        sessionsCount,
-        reviewsCount: 0,
-        averageSessionDuration: 0,
-        monthlyEarnings: [],
-      },
-      recentActivity: {
-        sessions: [],
-        reviews: [],
-      },
-    };
-  }
-
-  async approveAstrologer(astrologerId: string, adminId: string) {
-    const astrologer = await this.astrologerModel.findById(astrologerId);
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
-
-    if ((astrologer as any).status === 'approved') {
-      throw new BadRequestException('Astrologer is already approved');
-    }
-
-    await this.astrologerModel.findByIdAndUpdate(astrologerId, {
-      status: 'approved',
-      approvedAt: new Date(),
-      approvedBy: adminId,
-    });
-
-    return { message: 'Astrologer approved successfully' };
-  }
-
-  async rejectAstrologer(astrologerId: string, reason: string, adminId: string) {
-    const astrologer = await this.astrologerModel.findById(astrologerId);
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
-
-    await this.astrologerModel.findByIdAndUpdate(astrologerId, {
-      status: 'rejected',
-      rejectionReason: reason,
-      rejectedAt: new Date(),
-      rejectedBy: adminId,
-    });
-
-    return { message: 'Astrologer rejected successfully' };
-  }
-
-  async suspendAstrologer(astrologerId: string, reason: string, adminId: string) {
-    const astrologer = await this.astrologerModel.findById(astrologerId);
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
-
-    await this.astrologerModel.findByIdAndUpdate(astrologerId, {
-      status: 'suspended',
-      suspensionReason: reason,
-      suspendedAt: new Date(),
-      suspendedBy: adminId,
-      isAvailable: false,
-    });
-
-    return { message: 'Astrologer suspended successfully' };
-  }
-
-  async getAstrologerEarnings(astrologerId: string, startDate?: Date, endDate?: Date) {
-    // Return mock data for now - implement when transaction schema is available
-    return {
-      summary: {
-        total: 0,
-        byPurpose: {},
-      },
-      transactions: [],
-    };
-  }
-
-  // Private helper methods
-  private async getSessionsCount(astrologerId: string): Promise<number> {
-    return this.callModel.countDocuments({ astrologerId, status: 'completed' });
   }
 }

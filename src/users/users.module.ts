@@ -1,30 +1,19 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { MulterModule } from '@nestjs/platform-express';
-
-import { UsersService } from './users.service';
-import { UsersController } from './users.controller';
-import { AwsS3Service } from './services/aws-s3.service';
-import { ProfileCompletionService } from './services/profile-completion.service';
+import { UsersController } from './controllers/users.controller';
+import { DeviceTokenController } from './controllers/device-token.controller';
+import { UsersService } from './services/users.service';
+import { DeviceTokenService } from './services/device-token.service';
 import { User, UserSchema } from './schemas/user.schema';
-import { multerConfig } from '../common/static-files.config';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
-      { name: User.name, schema: UserSchema }
+      { name: User.name, schema: UserSchema },
     ]),
-    MulterModule.register(multerConfig),
   ],
-  controllers: [UsersController],
-  providers: [
-    UsersService,
-    AwsS3Service, 
-    ProfileCompletionService,
-  ],
-  exports: [
-    UsersService,
-    MongooseModule,
-  ],
+  controllers: [UsersController, DeviceTokenController],
+  providers: [UsersService, DeviceTokenService],
+  exports: [UsersService, DeviceTokenService],
 })
 export class UsersModule {}

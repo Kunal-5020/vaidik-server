@@ -1,32 +1,21 @@
-import { IsString, IsNotEmpty, IsOptional, IsIn, IsNumber } from 'class-validator';
+import { IsString, IsNotEmpty, IsEnum, IsOptional, MaxLength } from 'class-validator';
 
 export class SendMessageDto {
-  @IsString()
-  @IsNotEmpty()
+  @IsString({ message: 'Session ID must be a string' })
+  @IsNotEmpty({ message: 'Session ID is required' })
   sessionId: string;
 
-  @IsString()
-  @IsNotEmpty()
-  senderId: string;
+  @IsEnum(['text', 'image', 'audio', 'video', 'document'], {
+    message: 'Invalid message type'
+  })
+  type: string;
 
-  @IsString()
-  @IsIn(['user', 'astrologer'])
-  role: 'user' | 'astrologer';
-
-  @IsString()
-  @IsNotEmpty()
+  @IsString({ message: 'Content must be a string' })
+  @IsNotEmpty({ message: 'Content is required' })
+  @MaxLength(5000, { message: 'Content cannot exceed 5000 characters' })
   content: string;
 
   @IsOptional()
   @IsString()
-  @IsIn(['text', 'image', 'audio']) // Added 'audio' type
-  type?: 'text' | 'image' | 'audio';
-
-  @IsOptional()
-  @IsString()
-  mediaUrl?: string;
-
-  @IsOptional()
-  @IsNumber()
-  duration?: number; // For audio messages
+  fileUrl?: string;
 }

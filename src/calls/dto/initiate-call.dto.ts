@@ -1,17 +1,10 @@
-import { IsString, IsNotEmpty, IsEnum, IsNumber, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsMongoId, IsEnum } from 'class-validator';
 
 export class InitiateCallDto {
-  @IsString()
-  @IsNotEmpty()
+  @IsMongoId({ message: 'Invalid astrologer ID' })
+  @IsNotEmpty({ message: 'Astrologer ID is required' })
   astrologerId: string;
 
-  @IsEnum(['audio', 'video'])
+  @IsEnum(['audio', 'video'], { message: 'Call type must be audio or video' })
   callType: 'audio' | 'video';
-
-  @IsNumber()
-  ratePerMinute: number;
-
-  @IsOptional()
-  @IsString()
-  message?: string; // Optional message when initiating call
 }

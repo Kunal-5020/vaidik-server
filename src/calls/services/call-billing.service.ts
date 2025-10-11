@@ -1,134 +1,144 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { CallSession, CallSessionDocument } from '../schemas/call-session.schema';
-import { User, UserDocument } from '../../users/schemas/user.schema';
-import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
+import { WalletService } from '../../payments/services/wallet.service';
+import { EarningsService } from '../../astrologers/services/earnings.service';
 
 @Injectable()
 export class CallBillingService {
-  private readonly logger = new Logger(CallBillingService.name);
-
   constructor(
-    @InjectModel(CallSession.name) private callSessionModel: Model<CallSessionDocument>,
-    @InjectModel(User.name) private userModel: Model<UserDocument>,
-    @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
+    @InjectModel(CallSession.name) private sessionModel: Model<CallSessionDocument>,
+    private walletService: WalletService,
+    private earningsService: EarningsService,
   ) {}
 
-  // Calculate call billing based on duration
-  calculateBilling(durationSeconds: number, ratePerMinute: number): {
-    duration: number;
-    chargeableMinutes: number;
-    totalAmount: number;
-  } {
-    // Minimum 1 minute billing
-    const chargeableMinutes = Math.max(1, Math.ceil(durationSeconds / 60));
-    const totalAmount = chargeableMinutes * ratePerMinute;
+  // Calculate billing amount
+  calculateBilling(durationSeconds: number, ratePerMinute: number, commissionRate: number = 20): any {
+    // Round up to nearest minute for billing
+    const billedMinutes = Math.ceil(durationSeconds / 60);
+    const totalAmount = billedMinutes * ratePerMinute;
+    const platformCommission = (totalAmount * commissionRate) / 100;
+    const astrologerEarning = totalAmount - platformCommission;
 
     return {
-      duration: durationSeconds,
-      chargeableMinutes,
-      totalAmount
-    };
-  }
-
-  // Process real-time billing during call (every minute)
-  async processRealTimeBilling(callId: string): Promise<boolean> {
-    try {
-      const callSession = await this.callSessionModel.findOne({ callId });
-      
-      if (!callSession || callSession.status !== 'connected') {
-        return false;
-      }
-
-      const user = await this.userModel.findById(callSession.userId);
-      
-      if (!user || user.wallet.balance < callSession.ratePerMinute) {
-        // Insufficient balance - end call
-        await this.endCallDueToInsufficientBalance(callSession);
-        return false;
-      }
-
-      // Deduct per minute amount
-      user.wallet.balance -= callSession.ratePerMinute;
-      user.wallet.totalSpent += callSession.ratePerMinute;
-      
-      // Add transaction
-      user.walletTransactions.push({
-        transactionId: `call_${callId}_${Date.now()}`,
-        type: 'deduction',
-        amount: -callSession.ratePerMinute,
-        description: `Per-minute billing for ongoing call`,
-        orderId: callId,
-        balanceAfter: user.wallet.balance,
-        createdAt: new Date()
-      } as any);
-
-      await user.save();
-
-      // Update call session total amount
-      callSession.totalAmount += callSession.ratePerMinute;
-      await callSession.save();
-
-      this.logger.log(`💰 Real-time billing: ₹${callSession.ratePerMinute} deducted for call ${callId}`);
-      return true;
-
-    } catch (error) {
-      this.logger.error(`❌ Real-time billing failed for call ${callId}: ${error.message}`);
-      return false;
-    }
-  }
-
-  // End call due to insufficient balance
-  private async endCallDueToInsufficientBalance(callSession: CallSessionDocument): Promise<void> {
-    callSession.status = 'ended';
-    callSession.endedAt = new Date();
-    callSession.endReason = 'insufficient_balance';
-    
-    if (callSession.startedAt) {
-      const durationMs = callSession.endedAt.getTime() - callSession.startedAt.getTime();
-      callSession.duration = Math.floor(durationMs / 1000);
-    }
-
-    await callSession.save();
-    
-    this.logger.log(`💸 Call ${callSession.callId} ended due to insufficient balance`);
-  }
-
-  // Get billing summary for a period
-  async getBillingSummary(
-    userId: string, 
-    startDate: Date, 
-    endDate: Date
-  ): Promise<{
-    totalCalls: number;
-    totalMinutes: number;
-    totalAmount: number;
-    averageCallDuration: number;
-    callBreakdown: { audio: number; video: number };
-  }> {
-    const calls = await this.callSessionModel.find({
-      $or: [{ userId }, { astrologerId: userId }],
-      createdAt: { $gte: startDate, $lte: endDate },
-      status: 'ended'
-    });
-
-    const totalCalls = calls.length;
-    const totalMinutes = calls.reduce((sum, call) => sum + Math.ceil((call.duration || 0) / 60), 0);
-    const totalAmount = calls.reduce((sum, call) => sum + (call.totalAmount || 0), 0);
-    const averageCallDuration = totalCalls > 0 ? Math.floor(calls.reduce((sum, call) => sum + (call.duration || 0), 0) / totalCalls) : 0;
-
-    const callBreakdown = {
-      audio: calls.filter(call => call.callType === 'audio').length,
-      video: calls.filter(call => call.callType === 'video').length
-    };
-
-    return {
-      totalCalls,
-      totalMinutes,
+      billedDuration: billedMinutes * 60, // Convert back to seconds
+      billedMinutes,
       totalAmount,
-      averageCallDuration,
-      callBreakdown
+      platformCommission,
+      astrologerEarning
+    };
+  }
+
+  // Process call billing after call ends
+  async processCallBilling(sessionId: string): Promise<any> {
+    const session = await this.sessionModel.findOne({ sessionId });
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    if (session.isPaid) {
+      return { success: false, message: 'Call already billed' };
+    }
+
+    // Calculate billing
+    const billing = this.calculateBilling(
+      session.duration,
+      session.ratePerMinute,
+      20 // 20% platform commission
+    );
+
+    // Update session with billing details
+    session.billedDuration = billing.billedDuration;
+    session.totalAmount = billing.totalAmount;
+    session.platformCommission = billing.platformCommission;
+    session.astrologerEarning = billing.astrologerEarning;
+    session.isPaid = true;
+    session.paidAt = new Date();
+
+    await session.save();
+
+    // Deduct from user wallet
+    try {
+      await this.walletService.deductFromWallet(
+        session.userId.toString(),
+        billing.totalAmount,
+        session.orderId,
+        `Call session: ${sessionId}`
+      );
+
+      // Credit astrologer earnings
+      await this.earningsService.updateEarnings(
+        session.astrologerId.toString(),
+        billing.astrologerEarning,
+        'call'
+      );
+
+      return {
+        success: true,
+        message: 'Billing processed successfully',
+        billing: {
+          billedMinutes: billing.billedMinutes,
+          totalAmount: billing.totalAmount,
+          platformCommission: billing.platformCommission,
+          astrologerEarning: billing.astrologerEarning
+        }
+      };
+    } catch (error: any) {
+      // Rollback billing status if payment fails
+      session.isPaid = false;
+      session.paidAt = undefined;
+      await session.save();
+
+      throw new Error(`Billing failed: ${error.message}`);
+    }
+  }
+
+  // Get billing summary for session
+  async getBillingSummary(sessionId: string): Promise<any> {
+    const session = await this.sessionModel
+      .findOne({ sessionId })
+      .select('duration billedDuration totalAmount platformCommission astrologerEarning isPaid paidAt')
+      .lean();
+
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    return {
+      success: true,
+      data: {
+        duration: session.duration,
+        billedDuration: session.billedDuration,
+        billedMinutes: Math.ceil(session.duration / 60),
+        totalAmount: session.totalAmount,
+        platformCommission: session.platformCommission,
+        astrologerEarning: session.astrologerEarning,
+        isPaid: session.isPaid,
+        paidAt: session.paidAt
+      }
+    };
+  }
+
+  // Real-time billing calculation (for showing to user during call)
+  async calculateRealTimeBilling(sessionId: string): Promise<any> {
+    const session = await this.sessionModel.findOne({ sessionId });
+    if (!session || !session.startTime) {
+      throw new Error('Session not active');
+    }
+
+    const now = new Date();
+    const durationSeconds = Math.floor((now.getTime() - session.startTime.getTime()) / 1000);
+
+    const billing = this.calculateBilling(durationSeconds, session.ratePerMinute, 20);
+
+    return {
+      success: true,
+      data: {
+        currentDuration: durationSeconds,
+        billedMinutes: billing.billedMinutes,
+        estimatedAmount: billing.totalAmount
+      }
     };
   }
 }

@@ -21,43 +21,30 @@ export class User {
   })
   phoneNumber: string;
 
-  // Add to User schema in src/users/schemas/user.schema.ts
-  @Prop({ 
-    required: false,
-    default: '91' // Default to India
-  })
-  countryCode?: string;
+  @Prop({ required: true })
+  countryCode: string;
 
-
-  @Prop({ 
-    required: true, 
-    unique: true, 
-  })
+  @Prop({ required: true })
   phoneHash: string;
 
-  @Prop({ 
-    required: true,
-    default: false 
-  })
+  @Prop({ required: true })
   isPhoneVerified: boolean;
 
-  // === BASIC PROFILE (AstroTalk Style) ===
-  @Prop({ 
-    required: false,
-    trim: true,
-    maxlength: 100
+  @Prop({
+    required: true,
+    enum: ['truecaller', 'otp'],
+    default: 'otp'
   })
+  registrationMethod: 'truecaller' | 'otp';
+
+  // === BASIC PROFILE ===
+  @Prop({ required: false, trim: true, maxlength: 100 })
   name?: string;
 
-  @Prop({ 
-    required: false,
-    enum: ['male', 'female', 'other'],
-  })
+  @Prop({ required: false, enum: ['male', 'female', 'other'] })
   gender?: string;
 
-  @Prop({ 
-    required: false 
-  })
+  @Prop({ required: false })
   dateOfBirth?: Date;
 
   @Prop({ 
@@ -71,39 +58,19 @@ export class User {
   })
   timeOfBirth?: string;
 
-  @Prop({ 
-    required: false,
-    trim: true,
-    maxlength: 200
-  })
+  @Prop({ required: false, trim: true, maxlength: 200 })
   placeOfBirth?: string;
 
-  @Prop({ 
-    required: false,
-    trim: true,
-    maxlength: 300
-  })
+  @Prop({ required: false, trim: true, maxlength: 300 })
   currentAddress?: string;
 
-  @Prop({ 
-    required: false,
-    trim: true,
-    maxlength: 100
-  })
+  @Prop({ required: false, trim: true, maxlength: 100 })
   city?: string;
 
-  @Prop({ 
-    required: false,
-    trim: true,
-    maxlength: 100
-  })
+  @Prop({ required: false, trim: true, maxlength: 100 })
   state?: string;
 
-  @Prop({ 
-    required: false,
-    trim: true,
-    maxlength: 100
-  })
+  @Prop({ required: false, trim: true, maxlength: 100 })
   country?: string;
 
   @Prop({ 
@@ -117,19 +84,19 @@ export class User {
   })
   pincode?: string;
 
-  @Prop({ 
-    required: false,
-    default: 'default'
-  })
-  profileImage?: string;
+  @Prop({ required: false, default: 'default' })
+  profileImage: string;
+
+  @Prop({ required: false, default: false })
+  isProfileComplete: boolean;
 
   @Prop({ required: false })
-  profileImageS3Key?: string; // Store S3 key for deletion
+  profileImageS3Key?: string;
 
   @Prop({ required: false, enum: ['local', 's3'], default: 'local' })
   profileImageStorageType?: string;
 
-  // === APP LANGUAGE (AstroTalk has this) ===
+  // === APP LANGUAGE ===
   @Prop({ 
     required: false,
     enum: ['en', 'hi', 'ta', 'te', 'bn', 'mr', 'gu', 'kn', 'ml', 'pa', 'ur'],
@@ -137,23 +104,20 @@ export class User {
   })
   appLanguage: string;
 
-  // === NOTIFICATION SETTINGS (Simple like AstroTalk) ===
+  // === NOTIFICATION SETTINGS ===
   @Prop({ 
     type: {
-      liveEvents: { type: Boolean, default: false },
-      normal: { type: Boolean, default: false }
+      liveEvents: { type: Boolean, default: true },
+      normal: { type: Boolean, default: true }
     },
-    default: () => ({
-      liveEvents: true,
-      normal: true
-    })
+    default: () => ({ liveEvents: true, normal: true })
   })
   notifications: {
     liveEvents: boolean;
     normal: boolean;
   };
 
-  // === PRIVACY SETTINGS (AstroTalk Clone) ===
+  // === PRIVACY SETTINGS ===
   @Prop({ 
     type: {
       nameVisibleInReviews: { type: Boolean, default: false },
@@ -165,7 +129,7 @@ export class User {
       }
     },
     default: () => ({
-      nameVisibleInReviews: true,
+      nameVisibleInReviews: false,
       restrictions: {
         astrologerChatAccessAfterEnd: true,
         downloadSharedImages: true,
@@ -184,14 +148,14 @@ export class User {
     };
   };
 
-  // === WALLET SYSTEM (Exactly like AstroTalk) ===
+  // === WALLET SYSTEM (Aggregated Stats Only) ===
   @Prop({ 
     type: {
       balance: { type: Number, default: 0, min: 0 },
       totalRecharged: { type: Number, default: 0 },
       totalSpent: { type: Number, default: 0 },
-      lastRechargeAt: { type: Date },
-      lastTransactionAt: { type: Date }
+      lastRechargeAt: { type: Date, default: null },
+      lastTransactionAt: { type: Date, default: null }
     },
     default: () => ({
       balance: 0,
@@ -207,157 +171,14 @@ export class User {
     lastTransactionAt?: Date;
   };
 
-  // === CHAT/CALL ORDERS (AstroTalk's main feature) ===
-  @Prop({ 
-    type: [{
-      orderId: { type: String, required: true },
-      type: { 
-        type: String, 
-        enum: ['chat', 'call'], // AstroTalk mainly has these 2
-        required: true 
-      },
-      astrologerId: { type: Types.ObjectId, ref: 'Astrologer', required: true },
-      astrologerName: { type: String, required: true },
-      duration: { type: Number, default: 0 }, // in minutes
-      ratePerMinute: { type: Number, required: true },
-      totalAmount: { type: Number, required: true },
-      status: { 
-        type: String, 
-        enum: ['pending', 'ongoing', 'completed', 'cancelled'], 
-        default: 'pending' 
-      },
-      startTime: { type: Date },
-      endTime: { type: Date },
-      chatId: { type: String }, // Chat session ID
-      rating: { type: Number, min: 1, max: 5 },
-      review: { type: String, maxlength: 500 },
-      createdAt: { type: Date, default: Date.now }
-    }],
-    default: []
-  })
-  orders: {
-    orderId: string;
-    type: string;
-    astrologerId: Types.ObjectId;
-    astrologerName: string;
-    duration: number;
-    ratePerMinute: number;
-    totalAmount: number;
-    status: string;
-    startTime?: Date;
-    endTime?: Date;
-    chatId?: string;
-    rating?: number;
-    review?: string;
-    createdAt: Date;
-  }[];
-
-  // === WALLET TRANSACTIONS (AstroTalk Style) ===
-  @Prop({ 
-    type: [{
-      transactionId: { type: String, required: true },
-      type: { 
-        type: String, 
-        enum: ['recharge', 'deduction', 'refund'], 
-        required: true 
-      },
-      amount: { type: Number, required: true },
-      description: { type: String, required: true }, // "Chat with Astrologer for 2 mins"
-      orderId: { type: String }, // Links to orders
-      balanceAfter: { type: Number, required: true },
-      createdAt: { type: Date, default: Date.now }
-    }],
-    default: []
-  })
-  walletTransactions: {
-    transactionId: string;
-    type: string;
-    amount: number;
-    description: string;
-    orderId?: string;
-    balanceAfter: number;
-    createdAt: Date;
-  }[];
-
-  // === REMEDIES (AstroTalk has this) ===
-  @Prop({ 
-    type: [{
-      remedyId: { type: String, required: true },
-      orderId: { type: String, required: true },
-      astrologerId: { type: Types.ObjectId, ref: 'Astrologer', required: true },
-      astrologerName: { type: String, required: true },
-      title: { type: String, required: true, maxlength: 200 },
-      description: { type: String, required: true, maxlength: 1000 },
-      type: { 
-        type: String, 
-        enum: ['gemstone', 'mantra', 'puja', 'donation', 'yantra', 'other'] 
-      },
-      status: { 
-        type: String, 
-        enum: ['suggested', 'accepted', 'rejected'], 
-        default: 'suggested' 
-      },
-      createdAt: { type: Date, default: Date.now }
-    }],
-    default: []
-  })
-  remedies: {
-    remedyId: string;
-    orderId: string;
-    astrologerId: Types.ObjectId;
-    astrologerName: string;
-    title: string;
-    description: string;
-    type: string;
-    status: string;
-    createdAt: Date;
-  }[];
-
-  // === REPORTS (Birth Chart, Kundli) ===
-  @Prop({ 
-    type: [{
-      reportId: { type: String, required: true },
-      orderId: { type: String, required: true },
-      astrologerId: { type: Types.ObjectId, ref: 'Astrologer', required: true },
-      type: { 
-        type: String, 
-        enum: ['kundli', 'yearly_prediction', 'compatibility'], 
-        required: true 
-      },
-      title: { type: String, required: true },
-      content: { type: String }, // Report content
-      filePath: { type: String }, // PDF path
-      status: { 
-        type: String, 
-        enum: ['pending', 'completed'], 
-        default: 'pending' 
-      },
-      createdAt: { type: Date, default: Date.now },
-      deliveredAt: { type: Date }
-    }],
-    default: []
-  })
-  reports: {
-    reportId: string;
-    orderId: string;
-    astrologerId: Types.ObjectId;
-    type: string;
-    title: string;
-    content?: string;
-    filePath?: string;
-    status: string;
-    createdAt: Date;
-    deliveredAt?: Date;
-  }[];
-
-  // === FAVORITES (AstroTalk has this) ===
+  // === FAVORITES (Small array - acceptable) ===
   @Prop({ 
     type: [{ type: Types.ObjectId, ref: 'Astrologer' }],
     default: []
   })
   favoriteAstrologers: Types.ObjectId[];
 
-  // === BASIC STATS (AstroTalk tracks this) ===
+  // === BASIC STATS (Aggregated only) ===
   @Prop({ 
     type: {
       totalSessions: { type: Number, default: 0 },
@@ -387,41 +208,63 @@ export class User {
   })
   status: string;
 
-  @Prop({ 
-    required: false 
-  })
+  @Prop({ required: false })
   lastLoginAt?: Date;
 
-  @Prop({ 
-    required: false 
-  })
+  @Prop({ required: false })
   lastActiveAt?: Date;
 
-  // === DEVICE INFO (For notifications) ===
+  // === DEVICE INFO ===
   @Prop({ type: [String], default: [] })
   deviceTokens: string[];
 
-  @Prop({ 
-    required: false 
-  })
+  @Prop({ required: false })
   lastIPAddress?: string;
 
-  createdAt?: Date;
-  updatedAt?: Date;
+  @Prop()
+fcmToken?: string; // Firebase Cloud Messaging token for push notifications
+
+@Prop()
+fcmTokenUpdatedAt?: Date;
+
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
 
-// === INDEXES (AstroTalk Clone Optimized) ===
-UserSchema.index({ phoneNumber: 1 });
+// === INDEXES ===
+UserSchema.index({ phoneNumber: 1, status: 1, createdAt: -1 });
 UserSchema.index({ phoneHash: 1 });
 UserSchema.index({ status: 1 });
 UserSchema.index({ createdAt: -1 });
-UserSchema.index({ 'orders.status': 1 });
-UserSchema.index({ 'orders.astrologerId': 1 });
-UserSchema.index({ favoriteAstrologers: 1 });
 
-// === VIRTUAL FIELDS ===
+// === VIRTUAL FIELDS (Query from separate collections) ===
+UserSchema.virtual('orders', {
+  ref: 'Order',
+  localField: '_id',
+  foreignField: 'userId'
+});
+
+UserSchema.virtual('transactions', {
+  ref: 'WalletTransaction',
+  localField: '_id',
+  foreignField: 'userId'
+});
+
+UserSchema.virtual('remedies', {
+  ref: 'Remedy',
+  localField: '_id',
+  foreignField: 'userId'
+});
+
+UserSchema.virtual('reports', {
+  ref: 'Report',
+  localField: '_id',
+  foreignField: 'userId'
+});
+
+// === VIRTUAL COMPUTED FIELD ===
 UserSchema.virtual('totalWalletBalance').get(function() {
   return this.wallet.balance;
 });

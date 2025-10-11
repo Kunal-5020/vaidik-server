@@ -90,7 +90,7 @@ export class JwtAuthService {
   }
 
   // Refresh access token using refresh token
-  refreshAccessToken(refreshToken: string): { accessToken: string; expiresIn: number } {
+  refreshAccessToken(refreshToken: string): { accessToken: string; refreshToken: string; expiresIn: number } {
     try {
       const payload = this.verifyRefreshToken(refreshToken);
       
@@ -104,8 +104,15 @@ export class JwtAuthService {
         payload.phoneHash
       );
 
+      const newRefreshToken = this.generateRefreshToken(
+        new Types.ObjectId(payload.userId),
+        payload.phoneNumber,
+        payload.phoneHash
+      );
+
       return {
         accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
         expiresIn: 15 * 60,
       };
 

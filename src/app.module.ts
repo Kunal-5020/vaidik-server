@@ -22,6 +22,10 @@ import { CallsModule } from './calls/calls.module';
 import { StreamingModule } from './streaming/streaming.module';
 import { AdminModule } from './admin/admin.module';
 import { PaymentsModule } from './payments/payments.module';
+import { OrdersModule } from './orders/orders.module';
+import { RemediesModule } from './remedies/remedies.module';
+import { ReportsModule } from './reports/reports.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -85,6 +89,10 @@ import { PaymentsModule } from './payments/payments.module';
     StreamingModule,
     AdminModule,
     PaymentsModule,
+    OrdersModule,
+    RemediesModule,
+    ReportsModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [

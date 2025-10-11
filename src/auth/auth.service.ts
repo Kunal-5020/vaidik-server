@@ -19,6 +19,87 @@ import { TruecallerVerifyDto } from './dto/truecaller-verify.dto';
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly countryCurrencyMap: { [key: string]: string } = {
+    // Major countries
+    '91': 'INR',    // India
+    '1': 'USD',     // United States & Canada
+    '44': 'GBP',    // United Kingdom
+    '61': 'AUD',    // Australia
+    '64': 'NZD',    // New Zealand
+    
+    // European countries
+    '33': 'EUR',    // France
+    '34': 'EUR',    // Spain
+    '39': 'EUR',    // Italy
+    '49': 'EUR',    // Germany
+    '31': 'EUR',    // Netherlands
+    '32': 'EUR',    // Belgium
+    '43': 'EUR',    // Austria
+    '358': 'EUR',   // Finland
+    '351': 'EUR',   // Portugal
+    '353': 'EUR',   // Ireland
+    '30': 'EUR',    // Greece
+    
+    // Non-Euro European countries
+    '41': 'CHF',    // Switzerland
+    '46': 'SEK',    // Sweden
+    '47': 'NOK',    // Norway
+    '45': 'DKK',    // Denmark
+    '48': 'PLN',    // Poland
+    '420': 'CZK',   // Czech Republic
+    '36': 'HUF',    // Hungary
+    '40': 'RON',    // Romania
+    
+    // Asian countries
+    '86': 'CNY',    // China
+    '81': 'JPY',    // Japan
+    '82': 'KRW',    // South Korea
+    '66': 'THB',    // Thailand
+    '84': 'VND',    // Vietnam
+    '63': 'PHP',    // Philippines
+    '62': 'IDR',    // Indonesia
+    '60': 'MYR',    // Malaysia
+    '65': 'SGD',    // Singapore
+    '852': 'HKD',   // Hong Kong
+    '886': 'TWD',   // Taiwan
+    '92': 'PKR',    // Pakistan
+    '880': 'BDT',   // Bangladesh
+    '94': 'LKR',    // Sri Lanka
+    '977': 'NPR',   // Nepal
+    '95': 'MMK',    // Myanmar
+    
+    // Middle East
+    '971': 'AED',   // UAE
+    '966': 'SAR',   // Saudi Arabia
+    '974': 'QAR',   // Qatar
+    '965': 'KWD',   // Kuwait
+    '968': 'OMR',   // Oman
+    '973': 'BHD',   // Bahrain
+    '972': 'ILS',   // Israel
+    '90': 'TRY',    // Turkey
+    '20': 'EGP',    // Egypt
+    
+    // African countries
+    '27': 'ZAR',    // South Africa
+    '234': 'NGN',   // Nigeria
+    '254': 'KES',   // Kenya
+    '233': 'GHS',   // Ghana
+    '255': 'TZS',   // Tanzania
+    '256': 'UGX',   // Uganda
+    
+    // South American countries
+    '55': 'BRL',    // Brazil
+    '54': 'ARS',    // Argentina
+    '52': 'MXN',    // Mexico
+    '56': 'CLP',    // Chile
+    '57': 'COP',    // Colombia
+    '51': 'PEN',    // Peru
+    '58': 'VES',    // Venezuela
+    
+    // Other countries
+    '7': 'RUB',     // Russia
+    '380': 'UAH',   // Ukraine
+  };
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
@@ -28,6 +109,19 @@ export class AuthService {
     private configService: ConfigService,
     private cacheService: SimpleCacheService,
   ) {}
+
+  // ✅ ADDED: Helper method to get currency from country code
+  private getCurrencyFromCountryCode(countryCode: string): string {
+    const currency = this.countryCurrencyMap[countryCode];
+    
+    if (!currency) {
+      this.logger.warn(`⚠️ Unknown country code: ${countryCode}, defaulting to INR`);
+      return 'INR'; // Default fallback
+    }
+    
+    this.logger.log(`✅ Currency mapped: ${countryCode} → ${currency}`);
+    return currency;
+  }
 
   async sendOtp(phoneNumber: string, countryCode: string) {
     try {
@@ -110,9 +204,13 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
     const phoneHash = this.otpService.hashPhoneNumber(phoneNumber, countryCode);
     const fullPhoneNumber = `+${countryCode}${phoneNumber}`;
 
+    const currency = this.getCurrencyFromCountryCode(countryCode);
+
     this.logger.log('✅ AUTH SERVICE: Phone processing completed', {
       originalPhone: phoneNumber,
       fullPhoneNumber,
+      countryCode,
+      currency,
       phoneHashLength: phoneHash.length,
       phoneHashPreview: phoneHash.substring(0, 8) + '...'
     });
@@ -157,24 +255,11 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
           status: 'active',
           appLanguage: 'en',
           registrationMethod: 'otp',
-          notifications: {
-            liveEvents: true,
-            normal: true
-          },
-          privacy: {
-            nameVisibleInReviews: true,
-            restrictions: {
-              astrologerChatAccessAfterEnd: true,
-              downloadSharedImages: true,
-              restrictChatScreenshots: true,
-              accessCallRecording: true
-            }
-          },
           wallet: {
             balance: 0,
             totalRecharged: 0,
             totalSpent: 0,
-            currency: 'INR'
+            currency: currency,
           },
           stats: {
             totalSessions: 0,
@@ -193,7 +278,8 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
         await user.save();
         this.logger.log('✅ AUTH SERVICE: New user created successfully', {
           userId: user._id.toString(),
-          phoneNumber: user.phoneNumber
+          phoneNumber: user.phoneNumber,
+          currency: user.wallet.currency,
         });
         isNewUser = true;
       } catch (userCreateError) {
@@ -306,6 +392,7 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
           countryCode: user.countryCode,
           name: user.name,
           profileImage: user.profileImage,
+          isProfileComplete: user.isProfileComplete,
           wallet: user.wallet,
           stats: user.stats,
           isPhoneVerified: user.isPhoneVerified,
@@ -379,35 +466,55 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
 
   async verifyTruecaller(truecallerVerifyDto: TruecallerVerifyDto) {
   try {
-    this.logger.log('🔍 Truecaller verification (phone + name only)');
+    this.logger.log('🔍 Truecaller verification started');
 
+    // Verify with Truecaller and get user profile
+    this.logger.log('📤 Calling TruecallerService to verify and fetch profile...');
+    
     const verification = await this.truecallerService.verifyOAuthCode(
       truecallerVerifyDto.authorizationCode,
       truecallerVerifyDto.codeVerifier
     );
 
     if (!verification.success || !verification.userProfile) {
-      throw new BadRequestException(verification.message || 'Verification failed');
+      this.logger.error('❌ Truecaller verification failed');
+      throw new BadRequestException(
+        verification.message || 'Truecaller verification failed'
+      );
     }
 
+    this.logger.log('✅ Truecaller verification successful');
+
+    // Extract user profile from backend response
     const { phoneNumber, countryCode, firstName, lastName } = verification.userProfile;
     const phoneHash = this.generatePhoneHash(phoneNumber);
     const fullName = `${firstName || ''} ${lastName || ''}`.trim() || 'User';
 
-    // Find or create user
-    let user = await this.userModel.findOne({ 
-      $or: [{ phoneNumber }, { phoneHash }]
+    const currency = this.getCurrencyFromCountryCode(countryCode);
+
+    this.logger.log('📊 User profile data:', {
+      phoneNumber,
+      name: fullName,
+      countryCode,
+      currency,
     });
-    
+
+    // Find or create user
+    this.logger.log('🔍 Looking for existing user...');
+
+    let user = await this.userModel.findOne({
+      $or: [{ phoneNumber }, { phoneHash }],
+    });
+
     let isNewUser = false;
 
     if (!user) {
-      this.logger.log('📤 Creating new user (phone + name)...');
-      
+      this.logger.log('📤 Creating new user with Truecaller data...');
+
       user = new this.userModel({
         phoneNumber,
         phoneHash,
-        countryCode: countryCode || '91',
+        countryCode: countryCode,
         name: fullName,
         isPhoneVerified: true,
         registrationMethod: 'truecaller',
@@ -415,7 +522,7 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
         appLanguage: 'en',
         notifications: {
           liveEvents: true,
-          normal: true
+          normal: true,
         },
         privacy: {
           nameVisibleInReviews: true,
@@ -423,52 +530,76 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
             astrologerChatAccessAfterEnd: true,
             downloadSharedImages: true,
             restrictChatScreenshots: true,
-            accessCallRecording: true
-          }
+            accessCallRecording: true,
+          },
         },
         wallet: {
           balance: 0,
-          currency: 'INR',
+          currency: currency,
           totalSpent: 0,
-          totalRecharged: 0
+          totalRecharged: 0,
         },
         stats: {
           totalSessions: 0,
           totalMinutesSpent: 0,
           totalAmount: 0,
-          totalRatings: 0
+          totalRatings: 0,
         },
         orders: [],
         walletTransactions: [],
         remedies: [],
         reports: [],
-        favoriteAstrologers: []
+        favoriteAstrologers: [],
       });
-      
+
       await user.save();
       isNewUser = true;
-      this.logger.log('✅ New user created');
+
+      this.logger.log('✅ New user created:', {
+        userId: (user._id as Types.ObjectId).toString(),
+        name: fullName,
+        phoneNumber,
+        currency: currency,
+      });
     } else {
       this.logger.log('📤 Updating existing user...');
+
       user.isPhoneVerified = true;
       user.lastLoginAt = new Date();
-      if (!user.name) user.name = fullName;
+
+      if (!user.name || user.name === 'User') {
+        user.name = fullName;
+        this.logger.log('✅ Updated user name to:', fullName);
+      }
+
       await user.save();
-      this.logger.log('✅ User updated');
+
+      this.logger.log('✅ Existing user updated:', {
+        userId: (user._id as Types.ObjectId).toString(),
+        name: user.name,
+      });
     }
 
     // Generate tokens
+    this.logger.log('🔐 Generating JWT tokens...');
     const tokens = this.jwtAuthService.generateTokenPair(
       user._id as Types.ObjectId,
       user.phoneNumber,
       phoneHash
     );
 
+    // Store refresh token
     await this.cacheService.set(
       `refresh_token_${(user._id as Types.ObjectId).toString()}`,
-      tokens.refreshToken, 
+      tokens.refreshToken,
       7 * 24 * 60 * 60
     );
+
+    this.logger.log('✅ Truecaller authentication successful', {
+      userId: (user._id as Types.ObjectId).toString(),
+      isNewUser,
+      userName: user.name,
+    });
 
     return {
       success: true,
@@ -476,13 +607,18 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
       data: {
         user: this.sanitizeUser(user),
         tokens,
-        isNewUser
-      }
+        isNewUser,
+      },
     };
-
   } catch (error) {
-    this.logger.error(`❌ Truecaller error: ${error.message}`);
-    throw new BadRequestException('Truecaller login failed. Please use OTP.');
+    this.logger.error('❌ Truecaller authentication failed:', {
+      message: error.message,
+      stack: error.stack?.substring(0, 300),
+    });
+
+    throw new BadRequestException(
+      error.message || 'Truecaller login failed. Please use OTP login.'
+    );
   }
 }
 
@@ -557,6 +693,7 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
       phoneNumber: userObj.phoneNumber,
       countryCode: userObj.countryCode,
       name: userObj.name,
+      isProfileComplete: userObj.isProfileComplete,
       profileImage: userObj.profileImage,
       wallet: userObj.wallet,
       stats: userObj.stats,

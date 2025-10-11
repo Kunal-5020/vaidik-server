@@ -1,26 +1,67 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
-@Schema({ timestamps: true })
+export type ChatSessionDocument = ChatSession & Document;
+
+@Schema({ timestamps: true, collection: 'chat_sessions' })
 export class ChatSession {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ required: true, unique: true, index: true })
+  sessionId: string; // "CHAT_20251002_ABC123"
+
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
   userId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Astrologer', required: true })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'Astrologer', index: true })
   astrologerId: Types.ObjectId;
 
-  @Prop({ required: true, default: 'chat' })
-  sessionType: string;
+  @Prop({ required: true })
+  orderId: string; // Reference to Order
 
-  @Prop({ default: 'active', enum: ['active', 'ended', 'abandoned'] })
+  @Prop({ 
+    required: true,
+    enum: ['waiting', 'active', 'ended', 'cancelled'],
+    default: 'waiting',
+    index: true
+  })
   status: string;
 
-  @Prop({ default: Date.now })
-  startedAt: Date;
+  @Prop()
+  startTime?: Date;
 
   @Prop()
-  endedAt?: Date;
+  endTime?: Date;
+
+  @Prop({ default: 0 })
+  duration: number; // in seconds
+
+  @Prop({ required: true })
+  ratePerMinute: number;
+
+  @Prop({ default: 0 })
+  totalAmount: number;
+
+  @Prop({ default: 0 })
+  messageCount: number;
+
+  @Prop()
+  lastMessageAt?: Date;
+
+  @Prop()
+  endedBy?: string; // 'user' | 'astrologer' | 'system'
+
+  @Prop()
+  endReason?: string;
+
+  @Prop({ default: Date.now })
+  createdAt: Date;
 }
 
-export type ChatSessionDocument = ChatSession & Document;
 export const ChatSessionSchema = SchemaFactory.createForClass(ChatSession);
+
+// Indexes
+ChatSessionSchema.index({ sessionId: 1 }, { unique: true });
+ChatSessionSchema.index({ userId: 1, createdAt: -1 });
+ChatSessionSchema.index({ astrologerId: 1, createdAt: -1 });
+ChatSessionSchema.index({ orderId: 1 });
+ChatSessionSchema.index({ status: 1 });
+ChatSessionSchema.index({ createdAt: -1 });

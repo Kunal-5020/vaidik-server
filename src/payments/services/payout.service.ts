@@ -1,0 +1,160 @@
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { PayoutRequest, PayoutRequestDocument } from '../schemas/payout-request.schema';
+import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
+import { RequestPayoutDto } from '../dto/request-payout.dto';
+
+@Injectable()
+export class PayoutService {
+  constructor(
+    @InjectModel(PayoutRequest.name) 
+    private payoutModel: Model<PayoutRequestDocument>,
+    @InjectModel(Astrologer.name) 
+    private astrologerModel: Model<AstrologerDocument>,
+  ) {}
+
+  // ===== REQUEST PAYOUT =====
+
+  async requestPayout(
+    astrologerId: string,
+    requestDto: RequestPayoutDto
+  ): Promise<any> {
+    const astrologer = await this.astrologerModel.findById(astrologerId);
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer not found');
+    }
+
+    // Check if enough balance
+    if (astrologer.earnings.withdrawableAmount < requestDto.amount) {
+      throw new BadRequestException('Insufficient withdrawable balance');
+    }
+
+    // Check minimum payout amount (e.g., ₹500)
+    if (requestDto.amount < 500) {
+      throw new BadRequestException('Minimum payout amount is ₹500');
+    }
+
+    // Check for pending payout requests
+    const pendingPayout = await this.payoutModel.findOne({
+      astrologerId,
+      status: { $in: ['pending', 'approved', 'processing'] }
+    });
+
+    if (pendingPayout) {
+      throw new BadRequestException('You already have a pending payout request');
+    }
+
+    const payoutId = `PAYOUT_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
+
+    const payout = new this.payoutModel({
+      payoutId,
+      astrologerId,
+      amount: requestDto.amount,
+      status: 'pending',
+      bankDetails: requestDto.bankDetails,
+      createdAt: new Date()
+    });
+
+    await payout.save();
+
+    return {
+      success: true,
+      message: 'Payout request submitted successfully',
+      data: {
+        payoutId: payout.payoutId,
+        amount: payout.amount,
+        status: payout.status
+      }
+    };
+  }
+
+  // ===== GET PAYOUT REQUESTS =====
+
+  async getAstrologerPayouts(
+    astrologerId: string,
+    page: number = 1,
+    limit: number = 20,
+    status?: string
+  ): Promise<any> {
+    const skip = (page - 1) * limit;
+    const query: any = { astrologerId };
+
+    if (status) query.status = status;
+
+    const [payouts, total] = await Promise.all([
+      this.payoutModel
+        .find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.payoutModel.countDocuments(query)
+    ]);
+
+    return {
+      success: true,
+      data: {
+        payouts,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      }
+    };
+  }
+
+  async getPayoutDetails(payoutId: string, astrologerId: string): Promise<any> {
+    const payout = await this.payoutModel
+      .findOne({ payoutId, astrologerId })
+      .lean();
+
+    if (!payout) {
+      throw new NotFoundException('Payout request not found');
+    }
+
+    return {
+      success: true,
+      data: payout
+    };
+  }
+
+  // ===== STATISTICS =====
+
+  async getPayoutStats(astrologerId: string): Promise<any> {
+    const astrologer = await this.astrologerModel
+      .findById(astrologerId)
+      .select('earnings')
+      .lean();
+
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer not found');
+    }
+
+    const [totalPayouts, completedPayouts, pendingAmount] = await Promise.all([
+      this.payoutModel.countDocuments({ astrologerId }),
+      this.payoutModel.aggregate([
+        { $match: { astrologerId: astrologerId, status: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      this.payoutModel.aggregate([
+        { $match: { astrologerId: astrologerId, status: { $in: ['pending', 'approved', 'processing'] } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ])
+    ]);
+
+    return {
+      success: true,
+      data: {
+        totalEarned: astrologer.earnings.totalEarned,
+        withdrawableAmount: astrologer.earnings.withdrawableAmount,
+        totalWithdrawn: completedPayouts[0]?.total || 0,
+        pendingWithdrawal: pendingAmount[0]?.total || 0,
+        totalPayoutRequests: totalPayouts,
+        platformCommission: astrologer.earnings.platformCommission
+      }
+    };
+  }
+}

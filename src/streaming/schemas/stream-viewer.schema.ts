@@ -1,19 +1,15 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
-@Schema({ timestamps: true })
+export type StreamViewerDocument = StreamViewer & Document;
+
+@Schema({ timestamps: true, collection: 'stream_viewers' })
 export class StreamViewer {
-  @Prop({ required: true })
+  @Prop({ required: true, index: true })
   streamId: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
   userId: Types.ObjectId;
-
-  @Prop({ required: true })
-  userName: string;
-
-  @Prop()
-  profileImage?: string;
 
   @Prop({ default: Date.now })
   joinedAt: Date;
@@ -22,40 +18,30 @@ export class StreamViewer {
   leftAt?: Date;
 
   @Prop({ default: 0 })
-  watchDuration: number; // in seconds
+  watchTime: number; // in seconds
 
   @Prop({ default: 0 })
-  messagesCount: number;
+  giftsGiven: number;
 
   @Prop({ default: 0 })
-  tipsGiven: number;
+  totalSpent: number;
 
   @Prop({ default: false })
-  isActive: boolean;
+  hasLiked: boolean;
+
+  @Prop({ default: 0 })
+  commentsCount: number;
+
+  @Prop({ default: true })
+  isActive: boolean; // Currently watching
 
   @Prop()
-  lastActivity?: Date;
-
-  @Prop({
-    type: {
-      country: String,
-      city: String,
-      device: String,
-      platform: String
-    }
-  })
-  metadata?: {
-    country?: string;
-    city?: string;
-    device?: string;
-    platform?: string;
-  };
+  agoraUid?: number; // Viewer's Agora UID
 }
 
-export type StreamViewerDocument = StreamViewer & Document;
 export const StreamViewerSchema = SchemaFactory.createForClass(StreamViewer);
 
-// Indexes for viewers
-StreamViewerSchema.index({ streamId: 1, userId: 1 });
+// Indexes
+StreamViewerSchema.index({ streamId: 1, userId: 1 }, { unique: true });
 StreamViewerSchema.index({ streamId: 1, isActive: 1 });
 StreamViewerSchema.index({ userId: 1, joinedAt: -1 });

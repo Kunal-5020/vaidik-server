@@ -1,38 +1,15 @@
-import { 
-  IsOptional, 
-  IsEnum, 
-  IsArray,
-  ValidateNested,
-  IsString,
-  IsBoolean
-} from 'class-validator';
-import { Type } from 'class-transformer';
-
-class WorkingHoursDto {
-  @IsEnum(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'])
-  day: string;
-
-  @IsString()
-  startTime: string; // HH:MM format
-
-  @IsString()
-  endTime: string; // HH:MM format
-
-  @IsOptional()
-  @IsBoolean()
-  isAvailable?: boolean;
-}
+import { IsBoolean, IsOptional, IsDateString } from 'class-validator';
 
 export class UpdateAvailabilityDto {
   @IsOptional()
-  @IsEnum(['online', 'offline', 'busy'], {
-    message: 'Status must be online, offline, or busy'
-  })
-  status?: string;
+  @IsBoolean({ message: 'isOnline must be a boolean' })
+  isOnline?: boolean;
 
   @IsOptional()
-  @IsArray({ message: 'Working hours must be an array' })
-  @ValidateNested({ each: true })
-  @Type(() => WorkingHoursDto)
-  workingHours?: WorkingHoursDto[];
+  @IsBoolean({ message: 'isAvailable must be a boolean' })
+  isAvailable?: boolean;
+
+  @IsOptional()
+  @IsDateString({}, { message: 'busyUntil must be a valid date' })
+  busyUntil?: string;
 }

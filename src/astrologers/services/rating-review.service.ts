@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Astrologer, AstrologerDocument } from '../schemas/astrologer.schema';
 import { User, UserDocument } from '../../users/schemas/user.schema';
+import { Order, OrderDocument } from '../../orders/schemas/orders.schema';
 
 export interface ReviewData {
   userId: string;
@@ -25,6 +26,7 @@ export class RatingReviewService {
   constructor(
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(Order.name) private orderModel: Model<OrderDocument>, // ✅ Use Order collection
   ) {}
 
   async addReview(reviewData: ReviewData): Promise<ReviewResult> {
@@ -33,6 +35,27 @@ export class RatingReviewService {
     // Validate rating
     if (rating < 1 || rating > 5) {
       throw new BadRequestException('Rating must be between 1 and 5');
+    }
+
+    // ✅ Find the order from Order collection
+    const order = await this.orderModel.findOne({ orderId, userId });
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    // Check if order belongs to this astrologer
+    if (order.astrologerId.toString() !== astrologerId) {
+      throw new BadRequestException('Order does not belong to this astrologer');
+    }
+
+    // Check if order is completed
+    if (order.status !== 'completed') {
+      throw new BadRequestException('Can only review completed sessions');
+    }
+
+    // Check if already reviewed
+    if (order.reviewSubmitted || order.rating) {
+      throw new BadRequestException('This session has already been reviewed');
     }
 
     // Find the astrologer
@@ -47,60 +70,29 @@ export class RatingReviewService {
       throw new NotFoundException('User not found');
     }
 
-    // Check if user has already reviewed this order
-    const existingOrderIndex = user.orders.findIndex(order => order.orderId === orderId);
-    if (existingOrderIndex === -1) {
-      throw new BadRequestException('Order not found for this user');
-    }
-
-    const existingOrder = user.orders[existingOrderIndex];
-    
-    // Check if order belongs to this astrologer
-    if (existingOrder.astrologerId.toString() !== astrologerId) {
-      throw new BadRequestException('Order does not belong to this astrologer');
-    }
-
-    // Check if order is completed
-    if (existingOrder.status !== 'completed') {
-      throw new BadRequestException('Can only review completed sessions');
-    }
-
-    // Check if already reviewed
-    if (existingOrder.rating && existingOrder.rating > 0) {
-      throw new BadRequestException('This session has already been reviewed');
-    }
-
     try {
-      // Update user's order with rating and review
-      user.orders[existingOrderIndex].rating = rating;
-      user.orders[existingOrderIndex].review = review || '';
-      user.stats.totalRatings += 1;
-      await user.save();
+      // ✅ Update order with rating and review
+      order.rating = rating;
+      order.review = review || '';
+      order.reviewSubmitted = true;
+      await order.save();
 
-      // Update astrologer's ratings
-      const currentRating = astrologer.stats.rating || 0;
-      const currentTotal = astrologer.stats.totalRatings || 0;
+      // ✅ Update astrologer's ratings (using ratings object, not stats.rating)
+      const currentAverage = astrologer.ratings.average || 0;
+      const currentTotal = astrologer.ratings.total || 0;
       
       // Calculate new average rating
       const newTotalRatings = currentTotal + 1;
-      const newAverageRating = ((currentRating * currentTotal) + rating) / newTotalRatings;
+      const newAverageRating = ((currentAverage * currentTotal) + rating) / newTotalRatings;
 
-      // Update astrologer stats
-      astrologer.stats.rating = Math.round(newAverageRating * 10) / 10; // Round to 1 decimal
-      astrologer.stats.totalRatings = newTotalRatings;
+      // Update rating breakdown
+      astrologer.ratings.breakdown[rating as 1 | 2 | 3 | 4 | 5] += 1;
+      astrologer.ratings.average = Math.round(newAverageRating * 10) / 10;
+      astrologer.ratings.total = newTotalRatings;
 
-      // Add to recent activity
-      if (astrologer.recentOrders && astrologer.recentOrders.length >= 10) {
-        astrologer.recentOrders = astrologer.recentOrders.slice(0, 9); // Keep only 9 most recent
-      }
-
-      astrologer.recentOrders.unshift({
-        orderId: existingOrder.orderId,
-        userId: user._id as import('mongoose').Types.ObjectId,
-        type: serviceType,
-        duration: existingOrder.duration,
-        amount: existingOrder.totalAmount,
-        completedAt: existingOrder.endTime || new Date()
+      // ✅ Update user stats
+      await this.userModel.findByIdAndUpdate(userId, {
+        $inc: { 'stats.totalRatings': 1 }
       });
 
       await astrologer.save();
@@ -110,8 +102,8 @@ export class RatingReviewService {
       return {
         success: true,
         message: 'Review submitted successfully',
-        newRating: astrologer.stats.rating,
-        totalReviews: astrologer.stats.totalRatings
+        newRating: astrologer.ratings.average,
+        totalReviews: astrologer.ratings.total
       };
 
     } catch (error) {
@@ -125,80 +117,43 @@ export class RatingReviewService {
     page: number = 1, 
     limit: number = 10
   ): Promise<any> {
-    // Get all users who have reviewed this astrologer
     const skip = (page - 1) * limit;
 
-    const reviews = await this.userModel.aggregate([
-      {
-        $match: {
-          'orders': {
-            $elemMatch: {
-              astrologerId: astrologerId,
-              rating: { $exists: true, $gte: 1 },
-              status: 'completed'
-            }
-          }
-        }
-      },
-      {
-        $project: {
-          name: 1,
-          profileImage: 1,
-          orders: {
-            $filter: {
-              input: '$orders',
-              as: 'order',
-              cond: {
-                $and: [
-                  { $eq: ['$$order.astrologerId', astrologerId] },
-                  { $gte: ['$$order.rating', 1] },
-                  { $eq: ['$$order.status', 'completed'] }
-                ]
-              }
-            }
-          }
-        }
-      },
-      {
-        $unwind: '$orders'
-      },
-      {
-        $project: {
-          userName: '$name',
-          userProfileImage: '$profileImage',
-          rating: '$orders.rating',
-          review: '$orders.review',
-          serviceType: '$orders.type',
-          duration: '$orders.duration',
-          reviewDate: '$orders.endTime',
-          orderId: '$orders.orderId'
-        }
-      },
-      {
-        $sort: { reviewDate: -1 }
-      },
-      {
-        $skip: skip
-      },
-      {
-        $limit: limit
-      }
+    // ✅ Query from Order collection
+    const [reviews, totalReviews] = await Promise.all([
+      this.orderModel
+        .find({
+          astrologerId,
+          reviewSubmitted: true,
+          rating: { $gte: 1 }
+        })
+        .populate('userId', 'name profileImage')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.orderModel.countDocuments({
+        astrologerId,
+        reviewSubmitted: true,
+        rating: { $gte: 1 }
+      })
     ]);
 
-    const totalReviews = await this.userModel.countDocuments({
-      'orders': {
-        $elemMatch: {
-          astrologerId: astrologerId,
-          rating: { $exists: true, $gte: 1 },
-          status: 'completed'
-        }
-      }
-    });
+    const formattedReviews = reviews.map(order => ({
+      userName: (order.userId as any)?.name || 'Anonymous',
+      userProfileImage: (order.userId as any)?.profileImage || 'default',
+      rating: order.rating,
+      review: order.review,
+      serviceType: order.type,
+      duration: order.duration,
+      reviewDate: order.endTime,
+      orderId: order.orderId
+    }));
 
     const totalPages = Math.ceil(totalReviews / limit);
 
     return {
-      reviews,
+      reviews: formattedReviews,
       pagination: {
         currentPage: page,
         totalPages,
@@ -215,32 +170,18 @@ export class RatingReviewService {
       throw new NotFoundException('Astrologer not found');
     }
 
-    // Get rating distribution
-    const ratingDistribution = await this.userModel.aggregate([
+    // ✅ Get rating distribution from Order collection
+    const ratingDistribution = await this.orderModel.aggregate([
       {
         $match: {
-          'orders': {
-            $elemMatch: {
-              astrologerId: astrologerId,
-              rating: { $exists: true, $gte: 1 },
-              status: 'completed'
-            }
-          }
-        }
-      },
-      {
-        $unwind: '$orders'
-      },
-      {
-        $match: {
-          'orders.astrologerId': astrologerId,
-          'orders.rating': { $gte: 1 },
-          'orders.status': 'completed'
+          astrologerId: astrologerId,
+          reviewSubmitted: true,
+          rating: { $gte: 1 }
         }
       },
       {
         $group: {
-          _id: '$orders.rating',
+          _id: '$rating',
           count: { $sum: 1 }
         }
       },
@@ -250,12 +191,14 @@ export class RatingReviewService {
     ]);
 
     return {
-      averageRating: astrologer.stats.rating,
-      totalReviews: astrologer.stats.totalRatings,
+      averageRating: astrologer.ratings.average,
+      totalReviews: astrologer.ratings.total,
       ratingDistribution,
+      ratingBreakdown: astrologer.ratings.breakdown,
       stats: {
         totalOrders: astrologer.stats.totalOrders,
         totalMinutes: astrologer.stats.totalMinutes,
+        totalEarnings: astrologer.stats.totalEarnings,
         repeatCustomers: astrologer.stats.repeatCustomers
       }
     };

@@ -1,5 +1,4 @@
 // src/auth/services/truecaller.service.ts
-
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
@@ -13,97 +12,146 @@ export interface TruecallerUserProfile {
 
 export interface TruecallerVerifyResponse {
   success: boolean;
-  phoneNumber?: string;
   userProfile?: TruecallerUserProfile;
   message?: string;
-  isVerified?: boolean;
 }
 
 @Injectable()
 export class TruecallerService {
   private readonly logger = new Logger(TruecallerService.name);
   private readonly clientId: string;
-  private readonly environment: string;
   private readonly tokenEndpoint: string;
-  private readonly profileEndpoint: string;
+  private readonly userInfoEndpoint: string;
+
+  // ✅ Comprehensive country code mapping
+  private readonly countryCodeMap: { [key: string]: string } = {
+    // Major countries
+    IN: '91',   // India
+    US: '1',    // United States
+    CA: '1',    // Canada
+    GB: '44',   // United Kingdom
+    AU: '61',   // Australia
+    NZ: '64',   // New Zealand
+    
+    // European countries
+    DE: '49',   // Germany
+    FR: '33',   // France
+    IT: '39',   // Italy
+    ES: '34',   // Spain
+    NL: '31',   // Netherlands
+    BE: '32',   // Belgium
+    CH: '41',   // Switzerland
+    AT: '43',   // Austria
+    SE: '46',   // Sweden
+    NO: '47',   // Norway
+    DK: '45',   // Denmark
+    FI: '358',  // Finland
+    PL: '48',   // Poland
+    
+    // Asian countries
+    CN: '86',   // China
+    JP: '81',   // Japan
+    KR: '82',   // South Korea
+    TH: '66',   // Thailand
+    VN: '84',   // Vietnam
+    PH: '63',   // Philippines
+    ID: '62',   // Indonesia
+    MY: '60',   // Malaysia
+    SG: '65',   // Singapore
+    PK: '92',   // Pakistan
+    BD: '880',  // Bangladesh
+    LK: '94',   // Sri Lanka
+    NP: '977',  // Nepal
+    
+    // Middle East
+    AE: '971',  // UAE
+    SA: '966',  // Saudi Arabia
+    QA: '974',  // Qatar
+    KW: '965',  // Kuwait
+    OM: '968',  // Oman
+    BH: '973',  // Bahrain
+    IL: '972',  // Israel
+    TR: '90',   // Turkey
+    
+    // African countries
+    ZA: '27',   // South Africa
+    NG: '234',  // Nigeria
+    KE: '254',  // Kenya
+    EG: '20',   // Egypt
+    
+    // South American countries
+    BR: '55',   // Brazil
+    AR: '54',   // Argentina
+    MX: '52',   // Mexico
+    CL: '56',   // Chile
+    CO: '57',   // Colombia
+  };
 
   constructor(private configService: ConfigService) {
-    this.clientId = this.configService.get<string>('TRUECALLER_CLIENT_ID') ?? '7lbyxiqe02bk6j67r_lfmhr14z8ctda3tjfldbx6ud4';
-    this.environment = this.configService.get<string>('TRUECALLER_ENVIRONMENT') || 'production';
-    
+    this.clientId =
+      this.configService.get<string>('TRUECALLER_CLIENT_ID') ??
+      'roh4kmkkmy2bvkuq_5pa2rx72ouwa88cwtrbogsqc0g';
+
     this.tokenEndpoint = 'https://oauth-account-noneu.truecaller.com/v1/token';
-    this.profileEndpoint = 'https://profile4-noneu.truecaller.com/v1/default';
-    
-    this.logger.log(`✅ Truecaller initialized (${this.environment}) - Phone + Name only`);
+    this.userInfoEndpoint = 'https://oauth-account-noneu.truecaller.com/v1/userinfo';
+
+    this.logger.log('✅ TruecallerService initialized');
   }
 
   async verifyOAuthCode(
     authorizationCode: string,
     codeVerifier: string
   ): Promise<TruecallerVerifyResponse> {
-    
     if (!this.clientId) {
-      throw new BadRequestException('Truecaller service not configured');
+      this.logger.error('❌ Truecaller client ID not configured');
+      return {
+        success: false,
+        message: 'Truecaller client ID not configured',
+      };
     }
 
     try {
-      this.logger.log('🔄 Step 1: Exchanging authorization code for access token...');
-      
-      const tokenResponse = await this.exchangeCodeForToken(authorizationCode, codeVerifier);
-      
+      this.logger.log('🔐 Step 1: Exchanging authorization code for access token...');
+
+      const tokenResponse = await this.exchangeCodeForToken(
+        authorizationCode,
+        codeVerifier
+      );
+
       this.logger.log('✅ Step 1 completed: Access token received');
-      this.logger.log('🔄 Step 2: Fetching user profile (phone + name only)...');
-      
-      // Try to get profile, fallback to mock in development
-      let userProfile: TruecallerUserProfile;
-      
-      try {
-        userProfile = await this.getUserProfile(tokenResponse.access_token);
-      } catch (profileError) {
-        this.logger.warn('⚠️ Profile fetch failed', {
-          error: profileError.message,
-          status: profileError.response?.status
-        });
-        
-        // Development fallback
-        if (process.env.NODE_ENV === 'development' || this.environment === 'development') {
-          this.logger.warn('🧪 Using mock profile (phone + name only)');
-          
-          userProfile = {
-            phoneNumber: '+919876543210',
-            countryCode: '91',
-            firstName: 'Test',
-            lastName: 'User'
-          };
-        } else {
-          throw profileError;
-        }
-      }
-      
-      this.logger.log('✅ Step 2 completed: Profile received', {
+
+      this.logger.log('📤 Step 2: Fetching user info from /userinfo endpoint...');
+
+      const userProfile = await this.getUserInfo(tokenResponse.access_token);
+
+      this.logger.log('✅ Step 2 completed: User info received', {
         phoneNumber: userProfile.phoneNumber,
-        name: `${userProfile.firstName || ''} ${userProfile.lastName || ''}`.trim()
+        name: `${userProfile.firstName} ${userProfile.lastName}`.trim(),
       });
 
       return {
         success: true,
-        phoneNumber: userProfile.phoneNumber,
         userProfile,
-        isVerified: true,
-        message: 'Phone verified via Truecaller'
+        message: 'Truecaller verification successful',
       };
-
     } catch (error) {
-      this.logger.error(`❌ Truecaller verification failed: ${error.message}`);
-      
+      this.logger.error('❌ Truecaller verification failed:', {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data,
+      });
+
       return {
         success: false,
-        message: `Verification failed: ${error.message}`
+        message: `Verification failed: ${error.message}`,
       };
     }
   }
 
-  private async exchangeCodeForToken(authorizationCode: string, codeVerifier: string) {
+  private async exchangeCodeForToken(
+    authorizationCode: string,
+    codeVerifier: string
+  ) {
     try {
       const params = new URLSearchParams();
       params.append('grant_type', 'authorization_code');
@@ -111,63 +159,155 @@ export class TruecallerService {
       params.append('code', authorizationCode);
       params.append('code_verifier', codeVerifier);
 
+      this.logger.log('📤 Sending token exchange request...');
+
       const response = await axios.post(this.tokenEndpoint, params, {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        timeout: 10000
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        timeout: 10000,
       });
 
+      this.logger.log('✅ Token exchange successful');
       return response.data;
     } catch (error) {
-      this.logger.error('❌ Token exchange failed:', error.response?.data);
-      throw new BadRequestException('Token exchange failed');
+      this.logger.error('❌ Token exchange failed:', {
+        status: error.response?.status,
+        message: error.response?.data?.error || error.message,
+        details: error.response?.data,
+      });
+
+      throw new BadRequestException(
+        error.response?.data?.error_description ||
+          'Invalid authorization code. Please try again.'
+      );
     }
   }
 
-  private async getUserProfile(accessToken: string): Promise<TruecallerUserProfile> {
+  /**
+   * Fetch user info from Truecaller /userinfo endpoint
+   * Example response:
+   * {
+   *   "phone_number": "918287805020",
+   *   "phone_number_country_code": "IN",
+   *   "given_name": "Kunal",
+   *   "family_name": "Bhadana"
+   * }
+   */
+  private async getUserInfo(accessToken: string): Promise<TruecallerUserProfile> {
     try {
-      const response = await axios.get(this.profileEndpoint, {
-        headers: { 'Authorization': `Bearer ${accessToken}` },
-        timeout: 10000
+      this.logger.log('📤 Fetching user info from /userinfo endpoint...');
+
+      const response = await axios.get(this.userInfoEndpoint, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        timeout: 10000,
       });
 
-      const profile = response.data;
+      const userInfo = response.data;
+      this.logger.log('📥 Raw userinfo response:', userInfo);
 
-      // Extract phone and name only
-      const phoneNumber = profile.phoneNumber || profile.phone_number;
-      const firstName = profile.firstName || profile.first_name || profile.name;
-      const lastName = profile.lastName || profile.last_name || '';
-      
+      // Extract data
+      const phoneNumber = userInfo.phone_number || userInfo.phoneNumber;
+      const isoCountryCode = userInfo.phone_number_country_code || userInfo.countryCode; // "IN"
+      const firstName = userInfo.given_name || userInfo.firstName || 'User';
+      const lastName = userInfo.family_name || userInfo.lastName || '';
+
       if (!phoneNumber) {
-        throw new BadRequestException('No phone number in response');
+        this.logger.error('❌ No phone number in userinfo response:', userInfo);
+        throw new BadRequestException('Phone number not found in Truecaller response');
       }
 
-      const formattedPhone = this.formatPhoneNumber(phoneNumber, profile.countryCode);
+      // Convert ISO country code to numeric code
+      const numericCountryCode = this.convertCountryCode(isoCountryCode);
+
+      // Format phone number
+      const formattedPhone = this.formatPhoneNumber(phoneNumber, numericCountryCode);
+
+      this.logger.log('✅ User info parsed successfully:', {
+        rawPhone: phoneNumber,
+        isoCountryCode: isoCountryCode,
+        numericCountryCode: numericCountryCode,
+        formattedPhone: formattedPhone,
+        firstName,
+        lastName,
+      });
 
       return {
         phoneNumber: formattedPhone,
-        countryCode: profile.countryCode || '91',
+        countryCode: numericCountryCode,
         firstName: firstName || 'User',
-        lastName: lastName
+        lastName: lastName || '',
       };
-
     } catch (error) {
-      this.logger.error('❌ Profile fetch error:', {
+      this.logger.error('❌ UserInfo fetch failed:', {
         status: error.response?.status,
-        message: error.message
+        statusText: error.response?.statusText,
+        message: error.message,
+        data: error.response?.data,
       });
-      throw error;
+
+      if (error.response?.status === 401) {
+        throw new BadRequestException('Invalid or expired access token');
+      } else if (error.response?.status === 404) {
+        throw new BadRequestException('User profile not found');
+      } else if (error.response?.status === 422) {
+        throw new BadRequestException('OpenID scope missing in initial request');
+      }
+
+      throw new BadRequestException(
+        'Failed to fetch user info from Truecaller. Please try again.'
+      );
     }
   }
 
-  private formatPhoneNumber(phoneNumber: string, countryCode?: string): string {
-    let formatted = phoneNumber.replace(/[^\d+]/g, '');
-    
-    if (!formatted.startsWith('+')) {
-      const code = countryCode || '91';
-      formatted = `+${code}${formatted}`;
+  /**
+   * Convert ISO country code (IN, US, etc.) to numeric code (91, 1, etc.)
+   */
+  private convertCountryCode(isoCode: string): string {
+    if (!isoCode) {
+      this.logger.warn('⚠️ No country code provided, defaulting to India (91)');
+      return '91';
     }
-    
-    return formatted;
+
+    const upperCode = isoCode.toUpperCase();
+    const numericCode = this.countryCodeMap[upperCode];
+
+    if (!numericCode) {
+      this.logger.warn(`⚠️ Unknown country code: ${upperCode}, defaulting to India (91)`);
+      return '91';
+    }
+
+    this.logger.log(`✅ Converted country code: ${upperCode} → ${numericCode}`);
+    return numericCode;
+  }
+
+  /**
+   * Format phone number with country code
+   * Input: "918287805020" (already has country code)
+   * Output: "+918287805020"
+   */
+  private formatPhoneNumber(phoneNumber: string, countryCode: string): string {
+    // Remove all non-digit characters
+    let cleaned = phoneNumber.replace(/[^\d]/g, '');
+
+    this.logger.log('📊 Formatting phone:', {
+      original: phoneNumber,
+      cleaned: cleaned,
+      countryCode: countryCode,
+    });
+
+    // Check if phone already starts with country code
+    if (cleaned.startsWith(countryCode)) {
+      // Phone already has country code, just add +
+      this.logger.log('✅ Phone already has country code');
+      return `+${cleaned}`;
+    } else {
+      // Add country code
+      this.logger.log('✅ Adding country code to phone');
+      return `+${countryCode}${cleaned}`;
+    }
   }
 
   isTruecallerEnabled(): boolean {
@@ -178,21 +318,26 @@ export class TruecallerService {
     return {
       clientId: this.clientId,
       isEnabled: this.isTruecallerEnabled(),
-      environment: this.environment,
       flowType: 'oauth',
-      dataFields: ['phoneNumber', 'name'] // Only these fields
+      dataFields: ['phoneNumber', 'firstName', 'lastName', 'countryCode'],
+      note: 'Uses OAuth /userinfo endpoint with country code mapping',
     };
   }
 
   async testConfiguration() {
     const config = this.getTruecallerConfig();
-    
+
     return {
       success: this.isTruecallerEnabled(),
-      message: this.isTruecallerEnabled() 
-        ? 'Truecaller ready (phone + name only)'
-        : 'Truecaller not configured',
-      config
+      message: this.isTruecallerEnabled()
+        ? 'Truecaller is configured and ready'
+        : 'Truecaller client ID not configured',
+      config: {
+        isEnabled: config.isEnabled,
+        flowType: config.flowType,
+        hasClientId: !!this.clientId,
+        note: 'Uses standard OAuth /userinfo endpoint with ISO to numeric country code conversion',
+      },
     };
   }
 }
