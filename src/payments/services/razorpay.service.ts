@@ -12,8 +12,8 @@ export class RazorpayService extends PaymentGatewayService {
     super();
     // ✅ Fix: Provide default values or use non-null assertion
     this.razorpay = new Razorpay({
-      key_id: this.configService.get<string>('RAZORPAY_KEY_ID') || '',
-      key_secret: this.configService.get<string>('RAZORPAY_KEY_SECRET') || '',
+      key_id: this.configService.get<string>('RAZORPAY_KEY_ID') || 'rzp_test_pgNwN5gpPzbjfq',
+      key_secret: this.configService.get<string>('RAZORPAY_KEY_SECRET') || 'FZL5DUSe4qspQ7TUDCmP3Ua9',
     });
   }
 

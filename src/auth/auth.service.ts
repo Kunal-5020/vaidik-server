@@ -163,7 +163,6 @@ export class AuthService {
     }
   }
 
-  // src/auth/auth.service.ts (Replace verifyOtp method with enhanced logging)
 async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<{
   success: boolean;
   message: string;
@@ -585,7 +584,7 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
     const tokens = this.jwtAuthService.generateTokenPair(
       user._id as Types.ObjectId,
       user.phoneNumber,
-      phoneHash
+      user.phoneHash
     );
 
     // Store refresh token

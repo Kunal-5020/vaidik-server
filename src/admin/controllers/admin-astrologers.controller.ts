@@ -85,4 +85,14 @@ export class AdminAstrologersController {
   ) {
     return this.adminAstrologersService.updatePricing(astrologerId, admin._id, pricingData);
   }
+
+  @Patch(':astrologerId/bio')
+  @RequirePermissions(Permissions.ASTROLOGERS_APPROVE) // Reusing existing permission
+  async updateBio(
+    @Param('astrologerId') astrologerId: string,
+    @CurrentAdmin() admin: any,
+    @Body('bio') bio: string
+  ) {
+    return this.adminAstrologersService.updateBio(astrologerId, admin._id, bio);
+  }
 }

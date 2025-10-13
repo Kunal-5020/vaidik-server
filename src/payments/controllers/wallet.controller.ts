@@ -82,4 +82,5 @@ export class WalletController {
   async getWalletStats(@Req() req: AuthenticatedRequest) {
     return this.walletService.getWalletStats(req.user._id);
   }
+  
 }

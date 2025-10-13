@@ -1,3 +1,4 @@
+// src/admin/controllers/admin-auth.controller.ts
 import { Controller, Post, Get, Body, Req, UseGuards, ValidationPipe } from '@nestjs/common';
 import { AdminAuthService } from '../services/admin-auth.service';
 import { AdminAuthGuard } from '../guards/admin-auth.guard';
@@ -9,16 +10,19 @@ import { RequirePermissions } from '../decorators/permissions.decorator';
 import { PermissionsGuard } from '../guards/permissions.guard';
 import { Permissions } from '../constants/permissions';
 
+import { IpExtractorUtil } from '../../common/utils/ip-extractor.util';
+
 @Controller('admin/auth')
 export class AdminAuthController {
   constructor(private adminAuthService: AdminAuthService) {}
+
 
   @Post('login')
   async login(
     @Body(ValidationPipe) loginDto: AdminLoginDto,
     @Req() req: any
   ) {
-    const ipAddress = req.ip;
+    const ipAddress = IpExtractorUtil.getClientIp(req);
     const userAgent = req.headers['user-agent'];
     
     return this.adminAuthService.login(

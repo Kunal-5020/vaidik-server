@@ -271,4 +271,36 @@ export class AdminAstrologersService {
       },
     };
   }
+
+  async updateBio(astrologerId: string, adminId: string, bio: string): Promise<any> {
+    const astrologer = await this.astrologerModel.findById(astrologerId);
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer not found');
+    }
+
+    const oldBio = astrologer.bio;
+    astrologer.bio = bio;
+    await astrologer.save();
+
+    // Log activity
+    await this.activityLogService.log({
+      adminId,
+      action: 'astrologer.bio_updated',
+      module: 'astrologers',
+      targetId: astrologerId,
+      targetType: 'Astrologer',
+      status: 'success',
+      changes: {
+        before: { bio: oldBio },
+        after: { bio: bio },
+      },
+    });
+
+    return {
+      success: true,
+      message: 'Bio updated successfully',
+      data: { bio: astrologer.bio },
+    };
+  }
+
 }

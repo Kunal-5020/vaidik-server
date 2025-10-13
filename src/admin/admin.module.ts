@@ -36,6 +36,9 @@ import { AdminActivityLogService } from './services/admin-activity-log.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PaymentsModule } from '../payments/payments.module';
 
+import { AdminManagementController } from './controllers/admin-management.controller';
+import { AdminActivityLogsController } from './controllers/admin-activity-logs.controller';
+
 @Module({
   imports: [
     ConfigModule,
@@ -69,6 +72,8 @@ import { PaymentsModule } from '../payments/payments.module';
     AdminOrdersController,
     AdminPaymentsController,
     AdminAnalyticsController,
+    AdminManagementController,
+    AdminActivityLogsController,
   ],
   providers: [
     AdminAuthService,
