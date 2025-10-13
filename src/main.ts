@@ -20,7 +20,7 @@ async function bootstrap() {
     origin: [
       configService.get<string>('CLIENT_URL') || 'http://localhost:3000',
       'http://localhost:3000',
-      'http://localhost:3001',
+      'http://localhost:3001','https://vaidik-admin.netlify.app'
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
