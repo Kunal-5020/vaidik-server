@@ -36,7 +36,7 @@ export class JwtAuthService {
 
     return this.nestJwtService.sign(payload, {
       secret: this.configService.get('JWT_SECRET'),
-      expiresIn: '15m',
+      expiresIn: '1d',
     });
   }
 
@@ -63,7 +63,7 @@ export class JwtAuthService {
     return {
       accessToken,
       refreshToken,
-      expiresIn: 15 * 60, // 15 minutes in seconds
+      expiresIn: 60 * 60 * 24, // 15 minutes in seconds
     };
   }
 
@@ -113,7 +113,7 @@ export class JwtAuthService {
       return {
         accessToken: newAccessToken,
         refreshToken: newRefreshToken,
-        expiresIn: 15 * 60,
+        expiresIn: 60 * 60 * 24,
       };
 
     } catch (error) {
