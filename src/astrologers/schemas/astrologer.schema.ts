@@ -3,43 +3,76 @@ import { Document, Types } from 'mongoose';
 
 export type AstrologerDocument = Astrologer & Document;
 
-export enum AstrologerOnboardingStatus {
-  WAITLIST = 'waitlist',
-  SHORTLISTED = 'shortlisted',
-  INTERVIEW_ROUND_1 = 'interview_round_1',
-  INTERVIEW_ROUND_2 = 'interview_round_2',
-  INTERVIEW_ROUND_3 = 'interview_round_3',
-  INTERVIEW_ROUND_4 = 'interview_round_4',
-  APPROVED = 'approved',
-  REJECTED = 'rejected',
-  SUSPENDED = 'suspended'
-}
-
 @Schema({ timestamps: true })
 export class Astrologer {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  // Reference to Registration (for tracking)
+  @Prop({ type: Types.ObjectId, ref: 'Registration', required: true })
+  registrationId: Types.ObjectId;
+
+  // Reference to User (for authentication)
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true, unique: true })
   userId: Types.ObjectId;
 
+  // Basic Info (copied from registration)
   @Prop({ required: true })
   name: string;
 
-  @Prop({ required: true })
+  @Prop({ required: true, unique: true })
   phoneNumber: string;
 
-  @Prop()
-  email?: string;
+  @Prop({ required: true, unique: true })
+  email: string;
 
-  @Prop()
-  dateOfBirth?: Date;
+  @Prop({ required: true })
+  dateOfBirth: Date;
 
-  @Prop({ enum: ['male', 'female', 'other'] })
-  gender?: string;
+  @Prop({ enum: ['male', 'female', 'other'], required: true })
+  gender: string;
 
   @Prop({ maxlength: 1000 })
   bio: string;
 
   @Prop()
   profilePicture?: string;
+
+  // Profile completion status
+  @Prop({
+    type: {
+      isComplete: { type: Boolean, default: false },
+      completedAt: Date,
+      steps: {
+        basicInfo: { type: Boolean, default: true }, // Already filled from registration
+        expertise: { type: Boolean, default: true }, // Already filled from registration
+        pricing: { type: Boolean, default: false },
+        gallery: { type: Boolean, default: false },
+        introAudio: { type: Boolean, default: false },
+        availability: { type: Boolean, default: false }
+      }
+    },
+    default: () => ({
+      isComplete: false,
+      steps: {
+        basicInfo: true,
+        expertise: true,
+        pricing: false,
+        gallery: false,
+        introAudio: false,
+        availability: false
+      }
+    })
+  })
+  profileCompletion: {
+    isComplete: boolean;
+    completedAt?: Date;
+    steps: {
+      basicInfo: boolean;
+      expertise: boolean;
+      pricing: boolean;
+      gallery: boolean;
+      introAudio: boolean;
+      availability: boolean;
+    };
+  };
 
   // ✅ Photo Gallery (AWS S3)
   @Prop({
@@ -84,7 +117,7 @@ export class Astrologer {
     isApproved: boolean;
   };
 
-  @Prop({ required: true })
+  @Prop({ required: true, default: 0 })
   experienceYears: number;
 
   @Prop({ type: [String], required: true })
@@ -95,8 +128,8 @@ export class Astrologer {
 
   @Prop({
     type: {
-      chat: { type: Number, required: true },
-      call: { type: Number, required: true },
+      chat: { type: Number, required: true, default: 0 },
+      call: { type: Number, required: true, default: 0 },
       videoCall: { type: Number, default: 0 }
     },
     required: true
@@ -107,120 +140,7 @@ export class Astrologer {
     videoCall: number;
   };
 
-  // ✅ Enhanced Onboarding Flow
-  @Prop({
-    type: {
-      status: { 
-        type: String, 
-        enum: Object.values(AstrologerOnboardingStatus),
-        default: AstrologerOnboardingStatus.WAITLIST 
-      },
-      ticketNumber: String,
-      
-      waitlist: {
-        joinedAt: Date,
-        position: Number,
-        estimatedWaitTime: String
-      },
-      
-      shortlist: {
-        shortlistedAt: Date,
-        shortlistedBy: { type: Types.ObjectId, ref: 'Admin' },
-        notes: String
-      },
-      
-      interviews: {
-        round1: {
-          status: { type: String, enum: ['pending', 'scheduled', 'completed', 'failed'], default: 'pending' },
-          type: { type: String, default: 'profile_review' },
-          scheduledAt: Date,
-          completedAt: Date,
-          conductedBy: { type: Types.ObjectId, ref: 'Admin' },
-          notes: String,
-          rating: Number,
-          documents: [{
-            type: { type: String },
-            url: String,
-            verified: Boolean
-          }]
-        },
-        round2: {
-          status: { type: String, enum: ['pending', 'scheduled', 'completed', 'failed'], default: 'pending' },
-          type: { type: String, default: 'audio_call' },
-          scheduledAt: Date,
-          completedAt: Date,
-          callDuration: Number,
-          conductedBy: { type: Types.ObjectId, ref: 'Admin' },
-          callSessionId: String,
-          notes: String,
-          rating: Number
-        },
-        round3: {
-          status: { type: String, enum: ['pending', 'scheduled', 'completed', 'failed'], default: 'pending' },
-          type: { type: String, default: 'video_call' },
-          scheduledAt: Date,
-          completedAt: Date,
-          callDuration: Number,
-          conductedBy: { type: Types.ObjectId, ref: 'Admin' },
-          callSessionId: String,
-          notes: String,
-          rating: Number
-        },
-        round4: {
-          status: { type: String, enum: ['pending', 'scheduled', 'completed', 'failed'], default: 'pending' },
-          type: { type: String, default: 'final_verification' },
-          scheduledAt: Date,
-          completedAt: Date,
-          verifiedBy: { type: Types.ObjectId, ref: 'Admin' },
-          finalNotes: String,
-          approved: Boolean
-        }
-      },
-      
-      approval: {
-        approvedAt: Date,
-        approvedBy: { type: Types.ObjectId, ref: 'Admin' },
-        adminNotes: String,
-        canLogin: { type: Boolean, default: false }
-      }
-    },
-    default: () => ({
-      status: AstrologerOnboardingStatus.WAITLIST,
-      interviews: {
-        round1: { status: 'pending', type: 'profile_review' },
-        round2: { status: 'pending', type: 'audio_call' },
-        round3: { status: 'pending', type: 'video_call' },
-        round4: { status: 'pending', type: 'final_verification' }
-      }
-    })
-  })
-  onboarding: {
-    status: AstrologerOnboardingStatus;
-    ticketNumber?: string;
-    waitlist?: {
-      joinedAt: Date;
-      position: number;
-      estimatedWaitTime: string;
-    };
-    shortlist?: {
-      shortlistedAt: Date;
-      shortlistedBy: Types.ObjectId;
-      notes: string;
-    };
-    interviews: {
-      round1: any;
-      round2: any;
-      round3: any;
-      round4: any;
-    };
-    approval?: {
-      approvedAt: Date;
-      approvedBy: Types.ObjectId;
-      adminNotes?: string; 
-      canLogin: boolean;
-    };
-  };
-
+  // Ratings
   @Prop({
     type: {
       average: { type: Number, default: 0 },
@@ -251,6 +171,7 @@ export class Astrologer {
     };
   };
 
+  // Stats
   @Prop({
     type: {
       totalEarnings: { type: Number, default: 0 },
@@ -278,6 +199,7 @@ export class Astrologer {
     repeatCustomers: number;
   };
 
+  // Earnings
   @Prop({
     type: {
       totalEarned: { type: Number, default: 0 },
@@ -296,10 +218,13 @@ export class Astrologer {
     withdrawableAmount: number;
   };
 
+  // Availability & Live Status
   @Prop({
     type: {
       isOnline: { type: Boolean, default: false },
       isAvailable: { type: Boolean, default: false },
+      isLive: { type: Boolean, default: false }, // ✅ NEW: Live streaming status
+      liveStreamId: String, // ✅ NEW: Current live stream session ID
       busyUntil: Date,
       lastActive: Date,
       workingHours: [{
@@ -317,12 +242,15 @@ export class Astrologer {
     default: () => ({
       isOnline: false,
       isAvailable: false,
+      isLive: false,
       workingHours: []
     })
   })
   availability: {
     isOnline: boolean;
     isAvailable: boolean;
+    isLive: boolean;
+    liveStreamId?: string;
     busyUntil?: Date;
     lastActive?: Date;
     workingHours: {
@@ -344,6 +272,9 @@ export class Astrologer {
   @Prop({ default: true })
   isCallEnabled: boolean;
 
+  @Prop({ default: true }) // ✅ NEW
+  isLiveStreamEnabled: boolean;
+
   @Prop()
   suspensionReason?: string;
 
@@ -353,29 +284,27 @@ export class Astrologer {
   @Prop()
   suspendedBy?: Types.ObjectId;
 
+  @Prop()
+  fcmToken?: string;
+
+  @Prop()
+  fcmTokenUpdatedAt?: Date;
+
   @Prop({ default: Date.now })
   createdAt: Date;
 
   @Prop({ default: Date.now })
   updatedAt: Date;
-
-  @Prop()
-fcmToken?: string; // Firebase Cloud Messaging token for push notifications
-
-@Prop()
-fcmTokenUpdatedAt?: Date;
-
-
 }
 
 export const AstrologerSchema = SchemaFactory.createForClass(Astrologer);
 
 // Indexes
 AstrologerSchema.index({ userId: 1 }, { unique: true });
+AstrologerSchema.index({ registrationId: 1 });
 AstrologerSchema.index({ phoneNumber: 1 }, { unique: true });
-AstrologerSchema.index({ 'onboarding.status': 1 });
 AstrologerSchema.index({ accountStatus: 1, 'availability.isOnline': 1 });
+AstrologerSchema.index({ 'availability.isLive': 1 }); // ✅ NEW: For finding live astrologers
 AstrologerSchema.index({ specializations: 1 });
 AstrologerSchema.index({ 'ratings.average': -1 });
-AstrologerSchema.index({ 'onboarding.ticketNumber': 1 }, { sparse: true });
 AstrologerSchema.index({ createdAt: -1 });

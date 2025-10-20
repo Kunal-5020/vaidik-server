@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Astrologer, AstrologerDocument, AstrologerOnboardingStatus } from '../schemas/astrologer.schema';
+import { Astrologer, AstrologerDocument } from '../schemas/astrologer.schema';
 import { UpdateAstrologerProfileDto } from '../dto/update-astrologer-profile.dto';
 
 @Injectable()
@@ -12,7 +12,9 @@ export class AstrologersService {
 
   // ===== PUBLIC METHODS (For Users) =====
 
-  // Get all approved astrologers (public listing)
+  /**
+   * Get all approved astrologers (public listing)
+   */
   async getApprovedAstrologers(
     page: number = 1,
     limit: number = 20,
@@ -26,8 +28,8 @@ export class AstrologersService {
   ): Promise<any> {
     const skip = (page - 1) * limit;
     const query: any = {
-      'onboarding.status': AstrologerOnboardingStatus.APPROVED,
-      accountStatus: 'active'
+      accountStatus: 'active',
+      'profileCompletion.isComplete': true
     };
 
     // Apply filters
@@ -49,7 +51,7 @@ export class AstrologersService {
     }
 
     // Sorting
-    let sort: any = { 'ratings.average': -1 }; // Default: by rating
+    let sort: any = { 'ratings.average': -1 };
     if (filters?.sortBy === 'experience') {
       sort = { experienceYears: -1 };
     } else if (filters?.sortBy === 'price') {
@@ -81,15 +83,17 @@ export class AstrologersService {
     };
   }
 
-  // Get single astrologer details (public)
+  /**
+   * Get single astrologer details (public)
+   */
   async getAstrologerDetails(astrologerId: string): Promise<any> {
     const astrologer = await this.astrologerModel
       .findOne({
         _id: astrologerId,
-        'onboarding.status': AstrologerOnboardingStatus.APPROVED,
-        accountStatus: 'active'
+        accountStatus: 'active',
+        'profileCompletion.isComplete': true
       })
-      .select('-onboarding -phoneHash')
+      .select('-phoneNumber -email')
       .lean();
 
     if (!astrologer) {
@@ -102,13 +106,36 @@ export class AstrologersService {
     };
   }
 
+  /**
+   * Get all live astrologers (for users to watch)
+   */
+  async getLiveAstrologers(): Promise<any> {
+    const liveAstrologers = await this.astrologerModel
+      .find({
+        'availability.isLive': true,
+        accountStatus: 'active',
+        'profileCompletion.isComplete': true
+      })
+      .select('name profilePicture specializations ratings availability.liveStreamId')
+      .sort({ 'ratings.average': -1 })
+      .lean();
+
+    return {
+      success: true,
+      count: liveAstrologers.length,
+      data: liveAstrologers
+    };
+  }
+
   // ===== ASTROLOGER PROFILE MANAGEMENT =====
 
-  // Get own profile (astrologer viewing their own profile)
+  /**
+   * Get own profile (astrologer viewing their own profile)
+   */
   async getOwnProfile(astrologerId: string): Promise<any> {
     const astrologer = await this.astrologerModel
       .findById(astrologerId)
-      .select('-phoneHash')
+      .populate('registrationId', 'ticketNumber status')
       .lean();
 
     if (!astrologer) {
@@ -121,7 +148,9 @@ export class AstrologersService {
     };
   }
 
-  // Update profile (minor changes only, major changes need request)
+  /**
+   * Update profile (minor changes allowed directly)
+   */
   async updateProfile(
     astrologerId: string,
     updateDto: UpdateAstrologerProfileDto
@@ -132,9 +161,8 @@ export class AstrologersService {
       throw new NotFoundException('Astrologer not found');
     }
 
-    // Only allow approved astrologers to update
-    if (astrologer.onboarding.status !== AstrologerOnboardingStatus.APPROVED) {
-      throw new BadRequestException('Only approved astrologers can update their profile');
+    if (astrologer.accountStatus !== 'active') {
+      throw new BadRequestException('Your account is not active. Contact support.');
     }
 
     const updateFields: any = {};
@@ -158,7 +186,7 @@ export class AstrologersService {
       astrologerId,
       { $set: updateFields },
       { new: true }
-    ).select('-phoneHash');
+    );
 
     if (!updatedAstrologer) {
       throw new NotFoundException('Astrologer not found after update');
@@ -173,7 +201,9 @@ export class AstrologersService {
 
   // ===== GALLERY MANAGEMENT =====
 
-  // Add photo to gallery
+  /**
+   * Add photo to gallery
+   */
   async addGalleryPhoto(
     astrologerId: string,
     photoUrl: string,
@@ -185,7 +215,6 @@ export class AstrologersService {
       throw new NotFoundException('Astrologer not found');
     }
 
-    // Check max photos limit
     if (astrologer.gallery.photos.length >= astrologer.gallery.maxPhotos) {
       throw new BadRequestException(`Maximum ${astrologer.gallery.maxPhotos} photos allowed`);
     }
@@ -195,7 +224,7 @@ export class AstrologersService {
       key: s3Key,
       uploadedAt: new Date(),
       order: astrologer.gallery.photos.length,
-      isApproved: false // Needs admin approval
+      isApproved: false
     });
 
     await astrologer.save();
@@ -210,7 +239,9 @@ export class AstrologersService {
     };
   }
 
-  // Remove photo from gallery
+  /**
+   * Remove photo from gallery
+   */
   async removeGalleryPhoto(astrologerId: string, s3Key: string): Promise<any> {
     const astrologer = await this.astrologerModel.findById(astrologerId);
 
@@ -232,7 +263,9 @@ export class AstrologersService {
 
   // ===== INTRO AUDIO MANAGEMENT =====
 
-  // Upload intro audio
+  /**
+   * Upload intro audio
+   */
   async uploadIntroAudio(
     astrologerId: string,
     audioUrl: string,
@@ -250,7 +283,7 @@ export class AstrologersService {
       key: s3Key,
       duration,
       uploadedAt: new Date(),
-      isApproved: false // Needs admin approval
+      isApproved: false
     };
 
     await astrologer.save();
@@ -262,7 +295,9 @@ export class AstrologersService {
     };
   }
 
-  // Delete intro audio
+  /**
+   * Delete intro audio
+   */
   async deleteIntroAudio(astrologerId: string): Promise<any> {
     await this.astrologerModel.findByIdAndUpdate(astrologerId, {
       $unset: { introAudio: '' }
@@ -276,24 +311,24 @@ export class AstrologersService {
 
   // ===== INTERNAL METHODS =====
 
-  // Get astrologer by user ID
+  /**
+   * Get astrologer by user ID
+   */
   async getAstrologerByUserId(userId: string): Promise<AstrologerDocument | null> {
     return this.astrologerModel.findOne({ userId }).exec();
   }
 
-  // Check if astrologer is approved and can login
+  /**
+   * Check if astrologer can login (account active)
+   */
   async canLogin(astrologerId: string): Promise<boolean> {
     const astrologer = await this.astrologerModel
       .findById(astrologerId)
-      .select('onboarding.status onboarding.approval.canLogin accountStatus')
+      .select('accountStatus')
       .lean();
 
     if (!astrologer) return false;
 
-    return (
-      astrologer.onboarding.status === AstrologerOnboardingStatus.APPROVED &&
-      astrologer.onboarding.approval?.canLogin === true &&
-      astrologer.accountStatus === 'active'
-    );
+    return astrologer.accountStatus === 'active';
   }
 }

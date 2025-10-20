@@ -7,7 +7,6 @@ import { ProfileChangeRequest, ProfileChangeRequestSchema } from './schemas/prof
 
 // Services
 import { AstrologersService } from './services/astrologers.service';
-import { OnboardingService } from './services/onboarding.service';
 import { AvailabilityService } from './services/availability.service';
 import { ProfileChangeService } from './services/profile-change.service';
 import { EarningsService } from './services/earnings.service';
@@ -15,7 +14,6 @@ import { EarningsService } from './services/earnings.service';
 // Controllers
 import { AstrologersController } from './controllers/astrologers.controller';
 import { AstrologerProfileController } from './controllers/astrologer-profile.controller';
-import { AstrologerOnboardingController } from './controllers/astrologer-onboarding.controller';
 
 @Module({
   imports: [
@@ -27,18 +25,15 @@ import { AstrologerOnboardingController } from './controllers/astrologer-onboard
   controllers: [
     AstrologersController,
     AstrologerProfileController,
-    AstrologerOnboardingController,
   ],
   providers: [
     AstrologersService,
-    OnboardingService,
     AvailabilityService,
     ProfileChangeService,
     EarningsService,
   ],
   exports: [
     AstrologersService,
-    OnboardingService,
     AvailabilityService,
     EarningsService,
   ],

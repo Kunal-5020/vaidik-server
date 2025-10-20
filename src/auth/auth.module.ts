@@ -16,9 +16,13 @@ import { SimpleCacheService } from './services/cache/cache.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { OptionalAuthGuard } from './guards/optional-auth.guard';
+import { AstrologerAuthService } from './services/astrologer-auth.service';
+import { AstrologerAuthController } from './controllers/astrologer-auth.controller';
 
 // Import User schema
 import { User, UserSchema } from '../users/schemas/user.schema';
+import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema';
+
 
 @Module({
   imports: [
@@ -43,12 +47,16 @@ import { User, UserSchema } from '../users/schemas/user.schema';
     }),
 
     MongooseModule.forFeature([
-      { name: User.name, schema: UserSchema }
+      { name: User.name, schema: UserSchema },
+      { name: Astrologer.name, schema: AstrologerSchema }
     ]),
   ],
-  controllers: [AuthController],
+  controllers: [
+    AuthController,
+    AstrologerAuthController],
   providers: [
     AuthService,
+    AstrologerAuthService,
     OtpService,
     JwtAuthService,
     OtpStorageService,
@@ -63,6 +71,7 @@ import { User, UserSchema } from '../users/schemas/user.schema';
     JwtAuthService,
     JwtAuthGuard,
     OptionalAuthGuard,
+    OtpService,
     SimpleCacheService, // Export for use in other modules
     PassportModule,
   ],

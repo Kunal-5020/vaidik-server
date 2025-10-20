@@ -40,12 +40,20 @@ export class AstrologerProfileController {
 
   // ===== PROFILE MANAGEMENT =====
 
+  /**
+   * Get my profile
+   * GET /astrologer/profile
+   */
   @Get()
   async getOwnProfile(@Req() req: AuthenticatedRequest) {
     const astrologerId = req.user.astrologerId || req.user._id;
     return this.astrologersService.getOwnProfile(astrologerId);
   }
 
+  /**
+   * Update profile (minor changes)
+   * PATCH /astrologer/profile
+   */
   @Patch()
   async updateProfile(
     @Req() req: AuthenticatedRequest,
@@ -57,6 +65,10 @@ export class AstrologerProfileController {
 
   // ===== GALLERY MANAGEMENT =====
 
+  /**
+   * Add photo to gallery
+   * POST /astrologer/profile/gallery
+   */
   @Post('gallery')
   async addGalleryPhoto(
     @Req() req: AuthenticatedRequest,
@@ -70,18 +82,26 @@ export class AstrologerProfileController {
     );
   }
 
+  /**
+   * Remove photo from gallery
+   * DELETE /astrologer/profile/gallery
+   */
   @Delete('gallery')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   async removeGalleryPhoto(
     @Req() req: AuthenticatedRequest,
     @Body(ValidationPipe) removeDto: RemoveGalleryPhotoDto
   ) {
     const astrologerId = req.user.astrologerId || req.user._id;
-    await this.astrologersService.removeGalleryPhoto(astrologerId, removeDto.s3Key);
+    return this.astrologersService.removeGalleryPhoto(astrologerId, removeDto.s3Key);
   }
 
   // ===== INTRO AUDIO MANAGEMENT =====
 
+  /**
+   * Upload intro audio
+   * POST /astrologer/profile/intro-audio
+   */
   @Post('intro-audio')
   async uploadIntroAudio(
     @Req() req: AuthenticatedRequest,
@@ -96,21 +116,33 @@ export class AstrologerProfileController {
     );
   }
 
+  /**
+   * Delete intro audio
+   * DELETE /astrologer/profile/intro-audio
+   */
   @Delete('intro-audio')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   async deleteIntroAudio(@Req() req: AuthenticatedRequest) {
     const astrologerId = req.user.astrologerId || req.user._id;
-    await this.astrologersService.deleteIntroAudio(astrologerId);
+    return this.astrologersService.deleteIntroAudio(astrologerId);
   }
 
   // ===== AVAILABILITY MANAGEMENT =====
 
+  /**
+   * Get availability/working hours
+   * GET /astrologer/profile/availability
+   */
   @Get('availability')
   async getAvailability(@Req() req: AuthenticatedRequest) {
     const astrologerId = req.user.astrologerId || req.user._id;
     return this.availabilityService.getWorkingHours(astrologerId);
   }
 
+  /**
+   * Update working hours
+   * PATCH /astrologer/profile/working-hours
+   */
   @Patch('working-hours')
   async updateWorkingHours(
     @Req() req: AuthenticatedRequest,
@@ -120,6 +152,10 @@ export class AstrologerProfileController {
     return this.availabilityService.updateWorkingHours(astrologerId, updateDto);
   }
 
+  /**
+   * Update availability status
+   * PATCH /astrologer/profile/availability
+   */
   @Patch('availability')
   async updateAvailability(
     @Req() req: AuthenticatedRequest,
@@ -131,6 +167,10 @@ export class AstrologerProfileController {
 
   // ===== PROFILE CHANGE REQUESTS =====
 
+  /**
+   * Request profile change (for major changes)
+   * POST /astrologer/profile/change-request
+   */
   @Post('change-request')
   async requestProfileChange(
     @Req() req: AuthenticatedRequest,
@@ -140,6 +180,10 @@ export class AstrologerProfileController {
     return this.profileChangeService.requestChange(astrologerId, requestDto);
   }
 
+  /**
+   * Get my change requests
+   * GET /astrologer/profile/change-requests
+   */
   @Get('change-requests')
   async getMyChangeRequests(@Req() req: AuthenticatedRequest) {
     const astrologerId = req.user.astrologerId || req.user._id;
@@ -148,6 +192,10 @@ export class AstrologerProfileController {
 
   // ===== EARNINGS =====
 
+  /**
+   * Get earnings summary
+   * GET /astrologer/profile/earnings
+   */
   @Get('earnings')
   async getEarnings(@Req() req: AuthenticatedRequest) {
     const astrologerId = req.user.astrologerId || req.user._id;

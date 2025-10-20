@@ -14,10 +14,12 @@ import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.
 import { Order, OrderSchema } from '../orders/schemas/orders.schema';
 import { WalletTransaction, WalletTransactionSchema } from '../payments/schemas/wallet-transaction.schema';
 import { PayoutRequest, PayoutRequestSchema } from '../payments/schemas/payout-request.schema';
+import { Registration, RegistrationSchema } from '../registration/schemas/registration.schema';
 
 // Controllers
 import { AdminAuthController } from './controllers/admin-auth.controller';
 import { AdminUsersController } from './controllers/admin-users.controller';
+import { AdminRegistrationController } from './controllers/admin-registration.service';
 import { AdminAstrologersController } from './controllers/admin-astrologers.controller';
 import { AdminOrdersController } from './controllers/admin-orders.controller';
 import { AdminPaymentsController } from './controllers/admin-payments.controller';
@@ -31,6 +33,7 @@ import { AdminOrdersService } from './services/admin-orders.service';
 import { AdminPaymentsService } from './services/admin-payments.service';
 import { AdminAnalyticsService } from './services/admin-analytics.service';
 import { AdminActivityLogService } from './services/admin-activity-log.service';
+import { AdminRegistrationService } from './services/admin-registration.service';
 
 // Import other modules
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -53,6 +56,7 @@ import { AdminActivityLogsController } from './controllers/admin-activity-logs.c
       inject: [ConfigService],
     }),
     MongooseModule.forFeature([
+      { name: Registration.name, schema: RegistrationSchema },
       { name: Admin.name, schema: AdminSchema },
       { name: AdminRole.name, schema: AdminRoleSchema },
       { name: AdminActivityLog.name, schema: AdminActivityLogSchema },
@@ -74,6 +78,7 @@ import { AdminActivityLogsController } from './controllers/admin-activity-logs.c
     AdminAnalyticsController,
     AdminManagementController,
     AdminActivityLogsController,
+    AdminRegistrationController 
   ],
   providers: [
     AdminAuthService,
@@ -83,6 +88,7 @@ import { AdminActivityLogsController } from './controllers/admin-activity-logs.c
     AdminPaymentsService,
     AdminAnalyticsService,
     AdminActivityLogService,
+    AdminRegistrationService
   ],
   exports: [AdminAuthService, AdminActivityLogService],
 })

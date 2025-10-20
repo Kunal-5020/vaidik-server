@@ -77,4 +77,100 @@ export class StreamAnalyticsService {
       }
     };
   }
+
+  // Add these methods at the end of the StreamAnalyticsService class
+
+/**
+ * Get global stream statistics
+ */
+async getGlobalStreamStats(): Promise<any> {
+  const [
+    totalStreams,
+    liveStreams,
+    scheduledStreams,
+    totalRevenue,
+    totalViews,
+    totalCalls
+  ] = await Promise.all([
+    this.streamModel.countDocuments({ status: 'ended' }),
+    this.streamModel.countDocuments({ status: 'live' }),
+    this.streamModel.countDocuments({ status: 'scheduled' }),
+    this.streamModel.aggregate([
+      { $match: { status: 'ended' } },
+      { $group: { _id: null, total: { $sum: '$totalRevenue' } } }
+    ]),
+    this.streamModel.aggregate([
+      { $match: { status: 'ended' } },
+      { $group: { _id: null, total: { $sum: '$totalViews' } } }
+    ]),
+    this.streamModel.aggregate([
+      { $match: { status: 'ended' } },
+      { $group: { _id: null, total: { $sum: '$totalCalls' } } }
+    ])
+  ]);
+
+  return {
+    success: true,
+    data: {
+      totalStreams,
+      liveStreams,
+      scheduledStreams,
+      totalRevenue: totalRevenue[0]?.total || 0,
+      totalViews: totalViews[0]?.total || 0,
+      totalCalls: totalCalls[0]?.total || 0
+    }
+  };
+}
+
+/**
+ * Get top performing streams
+ */
+async getTopStreams(limit: number = 10): Promise<any> {
+  const streams = await this.streamModel
+    .find({ status: 'ended' })
+    .populate('hostId', 'name profilePicture')
+    .sort({ totalRevenue: -1 })
+    .limit(limit)
+    .lean();
+
+  return {
+    success: true,
+    data: streams
+  };
+}
+
+/**
+ * Get top earning astrologers from streams
+ */
+async getTopStreamEarners(limit: number = 10): Promise<any> {
+  const topEarners = await this.streamModel.aggregate([
+    { $match: { status: 'ended' } },
+    {
+      $group: {
+        _id: '$hostId',
+        totalRevenue: { $sum: '$totalRevenue' },
+        totalStreams: { $sum: 1 },
+        totalViews: { $sum: '$totalViews' },
+        totalCalls: { $sum: '$totalCalls' }
+      }
+    },
+    { $sort: { totalRevenue: -1 } },
+    { $limit: limit },
+    {
+      $lookup: {
+        from: 'astrologers',
+        localField: '_id',
+        foreignField: '_id',
+        as: 'astrologer'
+      }
+    },
+    { $unwind: '$astrologer' }
+  ]);
+
+  return {
+    success: true,
+    data: topEarners
+  };
+}
+
 }

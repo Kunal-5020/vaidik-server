@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Astrologer, AstrologerDocument, AstrologerOnboardingStatus } from '../../astrologers/schemas/astrologer.schema';
+import { Astrologer, AstrologerDocument } from '../../schemas/astrologer.schema'; // ✅ Fixed import path
 import { NotificationService } from '../../notifications/services/notification.service';
 import { AdminActivityLogService } from './admin-activity-log.service';
 
@@ -16,13 +16,12 @@ export class AdminAstrologersService {
   async getAllAstrologers(
     page: number = 1,
     limit: number = 50,
-    filters?: { status?: string; onboardingStatus?: string; search?: string }
+    filters?: { status?: string; search?: string }
   ): Promise<any> {
     const skip = (page - 1) * limit;
     const query: any = {};
 
     if (filters?.status) query.accountStatus = filters.status;
-    if (filters?.onboardingStatus) query['onboarding.status'] = filters.onboardingStatus;
     if (filters?.search) {
       query.$or = [
         { name: { $regex: filters.search, $options: 'i' } },
@@ -58,14 +57,21 @@ export class AdminAstrologersService {
   async getPendingAstrologers(page: number = 1, limit: number = 50): Promise<any> {
     const skip = (page - 1) * limit;
 
+    // ✅ Changed: Filter by profile completion instead of onboarding status
     const [astrologers, total] = await Promise.all([
       this.astrologerModel
-        .find({ 'onboarding.status': AstrologerOnboardingStatus.WAITLIST })
+        .find({ 
+          'profileCompletion.isComplete': false,
+          accountStatus: 'active'
+        })
         .sort({ createdAt: 1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      this.astrologerModel.countDocuments({ 'onboarding.status': AstrologerOnboardingStatus.WAITLIST }),
+      this.astrologerModel.countDocuments({ 
+        'profileCompletion.isComplete': false,
+        accountStatus: 'active'
+      }),
     ]);
 
     return {
@@ -83,7 +89,11 @@ export class AdminAstrologersService {
   }
 
   async getAstrologerDetails(astrologerId: string): Promise<any> {
-    const astrologer = await this.astrologerModel.findById(astrologerId).lean();
+    const astrologer = await this.astrologerModel
+      .findById(astrologerId)
+      .populate('registrationId')
+      .lean();
+      
     if (!astrologer) {
       throw new NotFoundException('Astrologer not found');
     }
@@ -94,95 +104,9 @@ export class AdminAstrologersService {
     };
   }
 
-  async approveAstrologer(astrologerId: string, adminId: string, adminNotes?: string): Promise<any> {
-    const astrologer = await this.astrologerModel.findById(astrologerId);
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
+  // ✅ REMOVED: approveAstrologer method (now handled by AdminRegistrationService)
 
-    astrologer.onboarding.status = AstrologerOnboardingStatus.APPROVED;
-    astrologer.onboarding.approval = {
-  approvedAt: new Date(),
-  approvedBy: adminId as any, // ✅ Add adminId
-  adminNotes: adminNotes || '',
-  canLogin: true, // ✅ Add canLogin
-};
-
-    astrologer.accountStatus = 'active';
-
-    await astrologer.save();
-
-    // Send notification
-    await this.notificationService.sendNotification({
-      recipientId: astrologerId,
-      recipientModel: 'Astrologer',
-      type: 'astrologer_approved',
-      title: 'Application Approved! 🎉',
-      message: 'Congratulations! Your astrologer application has been approved. You can now start taking consultations.',
-      priority: 'high',
-    });
-
-    // Log activity
-    await this.activityLogService.log({
-      adminId,
-      action: 'astrologer.approved',
-      module: 'astrologers',
-      targetId: astrologerId,
-      targetType: 'Astrologer',
-      status: 'success',
-      details: {
-        astrologerName: astrologer.name,
-        adminNotes,
-      },
-    });
-
-    return {
-      success: true,
-      message: 'Astrologer approved successfully',
-      data: astrologer,
-    };
-  }
-
-  async rejectAstrologer(astrologerId: string, adminId: string, reason: string): Promise<any> {
-    const astrologer = await this.astrologerModel.findById(astrologerId);
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
-
-    astrologer.onboarding.status = AstrologerOnboardingStatus.REJECTED;
-    astrologer.accountStatus = 'inactive';
-
-    await astrologer.save();
-
-    // Send notification
-    await this.notificationService.sendNotification({
-      recipientId: astrologerId,
-      recipientModel: 'Astrologer',
-      type: 'astrologer_approved',
-      title: 'Application Update',
-      message: `Your application has been reviewed. Reason: ${reason}`,
-      priority: 'high',
-    });
-
-    // Log activity
-    await this.activityLogService.log({
-      adminId,
-      action: 'astrologer.rejected',
-      module: 'astrologers',
-      targetId: astrologerId,
-      targetType: 'Astrologer',
-      status: 'success',
-      details: {
-        astrologerName: astrologer.name,
-        reason,
-      },
-    });
-
-    return {
-      success: true,
-      message: 'Astrologer application rejected',
-    };
-  }
+  // ✅ REMOVED: rejectAstrologer method (now handled by AdminRegistrationService)
 
   async updateAstrologerStatus(astrologerId: string, adminId: string, status: string): Promise<any> {
     const astrologer = await this.astrologerModel.findByIdAndUpdate(
@@ -216,48 +140,52 @@ export class AdminAstrologersService {
   }
 
   async updatePricing(astrologerId: string, adminId: string, pricingData: any): Promise<any> {
-  const astrologer = await this.astrologerModel.findById(astrologerId);
-  if (!astrologer) {
-    throw new NotFoundException('Astrologer not found');
-  }
+    const astrologer = await this.astrologerModel.findById(astrologerId);
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer not found');
+    }
 
-  // ✅ Fix pricing field names to match schema
-  if (pricingData.chatRatePerMinute !== undefined) {
-    astrologer.pricing.chat = pricingData.chatRatePerMinute;
-  }
-  if (pricingData.callRatePerMinute !== undefined) {
-    astrologer.pricing.call = pricingData.callRatePerMinute;
-  }
-  if (pricingData.videoCallRatePerMinute !== undefined) {
-    astrologer.pricing.videoCall = pricingData.videoCallRatePerMinute;
-  }
+    // Update pricing
+    if (pricingData.chatRatePerMinute !== undefined) {
+      astrologer.pricing.chat = pricingData.chatRatePerMinute;
+    }
+    if (pricingData.callRatePerMinute !== undefined) {
+      astrologer.pricing.call = pricingData.callRatePerMinute;
+    }
+    if (pricingData.videoCallRatePerMinute !== undefined) {
+      astrologer.pricing.videoCall = pricingData.videoCallRatePerMinute;
+    }
 
-  await astrologer.save();
+    await astrologer.save();
 
-  await this.activityLogService.log({
-    adminId,
-    action: 'astrologer.pricing_updated',
-    module: 'astrologers',
-    targetId: astrologerId,
-    targetType: 'Astrologer',
-    status: 'success',
-    details: pricingData,
-  });
+    await this.activityLogService.log({
+      adminId,
+      action: 'astrologer.pricing_updated',
+      module: 'astrologers',
+      targetId: astrologerId,
+      targetType: 'Astrologer',
+      status: 'success',
+      details: pricingData,
+    });
 
-  return {
-    success: true,
-    message: 'Pricing updated successfully',
-    data: astrologer.pricing,
-  };
-}
+    return {
+      success: true,
+      message: 'Pricing updated successfully',
+      data: astrologer.pricing,
+    };
+  }
 
   async getAstrologerStats(): Promise<any> {
-    const [total, active, pending, approved, rejected] = await Promise.all([
+    const [total, active, pending, completed] = await Promise.all([
       this.astrologerModel.countDocuments(),
       this.astrologerModel.countDocuments({ accountStatus: 'active' }),
-      this.astrologerModel.countDocuments({ 'onboarding.status': AstrologerOnboardingStatus.WAITLIST }),
-      this.astrologerModel.countDocuments({ 'onboarding.status': AstrologerOnboardingStatus.APPROVED }),
-      this.astrologerModel.countDocuments({ 'onboarding.status': AstrologerOnboardingStatus.REJECTED }),
+      this.astrologerModel.countDocuments({ 
+        'profileCompletion.isComplete': false,
+        accountStatus: 'active'
+      }),
+      this.astrologerModel.countDocuments({ 
+        'profileCompletion.isComplete': true
+      }),
     ]);
 
     return {
@@ -265,9 +193,8 @@ export class AdminAstrologersService {
       data: {
         total,
         active,
-        pending,
-        approved,
-        rejected,
+        pendingProfileCompletion: pending,
+        profileCompleted: completed,
       },
     };
   }
@@ -302,5 +229,4 @@ export class AdminAstrologersService {
       data: { bio: astrologer.bio },
     };
   }
-
 }

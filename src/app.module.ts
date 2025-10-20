@@ -26,6 +26,8 @@ import { OrdersModule } from './orders/orders.module';
 import { RemediesModule } from './remedies/remedies.module';
 import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { RegistrationModule } from './registration/registration.module';
+import { UploadModule } from './upload/upload.module';
 
 @Module({
   imports: [
@@ -93,6 +95,8 @@ import { NotificationsModule } from './notifications/notifications.module';
     RemediesModule,
     ReportsModule,
     NotificationsModule,
+    RegistrationModule,
+    UploadModule
   ],
   controllers: [AppController],
   providers: [

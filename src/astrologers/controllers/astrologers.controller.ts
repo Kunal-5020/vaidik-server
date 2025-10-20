@@ -3,9 +3,7 @@ import {
   Get,
   Param,
   Query,
-  ValidationPipe,
-  ParseIntPipe,
-  DefaultValuePipe
+  ValidationPipe
 } from '@nestjs/common';
 import { AstrologersService } from '../services/astrologers.service';
 import { SearchAstrologersDto } from '../dto/search-astrologers.dto';
@@ -14,7 +12,10 @@ import { SearchAstrologersDto } from '../dto/search-astrologers.dto';
 export class AstrologersController {
   constructor(private astrologersService: AstrologersService) {}
 
-  // Get all approved astrologers (public listing)
+  /**
+   * Get all approved astrologers (public listing)
+   * GET /astrologers
+   */
   @Get()
   async getAstrologers(
     @Query(ValidationPipe) searchDto: SearchAstrologersDto
@@ -32,7 +33,19 @@ export class AstrologersController {
     );
   }
 
-  // Get single astrologer details
+  /**
+   * Get all live astrologers (for users to watch)
+   * GET /astrologers/live
+   */
+  @Get('live')
+  async getLiveAstrologers() {
+    return this.astrologersService.getLiveAstrologers();
+  }
+
+  /**
+   * Get single astrologer details (public)
+   * GET /astrologers/:astrologerId
+   */
   @Get(':astrologerId')
   async getAstrologerDetails(@Param('astrologerId') astrologerId: string) {
     return this.astrologersService.getAstrologerDetails(astrologerId);

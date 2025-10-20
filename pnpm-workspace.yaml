@@ -3,6 +3,8 @@ ignoredBuiltDependencies:
 
 onlyBuiltDependencies:
   - '@firebase/util'
+  - '@scarf/scarf'
+  - aws-sdk
   - bcrypt
   - protobufjs
   - sharp
