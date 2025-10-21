@@ -1,20 +1,26 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { StreamSession, StreamSessionDocument } from '../schemas/stream-session.schema';
 import { StreamViewer, StreamViewerDocument } from '../schemas/stream-viewer.schema';
 import { CallTransaction, CallTransactionDocument } from '../schemas/call-transaction.schema';
+import { User, UserDocument } from '../../users/schemas/user.schema';
 import { StreamAgoraService } from './stream-agora.service';
 import { UpdateCallSettingsDto } from '../dto/update-call-settings.dto';
 import { UpdateStreamDto } from '../dto/update-stream.dto';
+import { StreamGateway } from '../gateways/streaming.gateway';
 
 @Injectable()
 export class StreamSessionService {
+   private readonly logger = new Logger(StreamSessionService.name);
+
   constructor(
     @InjectModel(StreamSession.name) private streamModel: Model<StreamSessionDocument>,
     @InjectModel(StreamViewer.name) private viewerModel: Model<StreamViewerDocument>,
     @InjectModel(CallTransaction.name) private callTransactionModel: Model<CallTransactionDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
     private streamAgoraService: StreamAgoraService,
+    @Inject(forwardRef(() => StreamGateway)) private streamGateway: StreamGateway,
   ) {}
 
   // ==================== STREAM MANAGEMENT ====================
@@ -50,7 +56,7 @@ export class StreamSessionService {
       status: 'scheduled',
       agoraChannelName: channelName,
       agoraToken: token,
-      agoraHostUid: hostUid,
+      hostAgoraUid: hostUid,        // ✅ CHANGED from agoraHostUid
       currentState: 'idle',
       isMicEnabled: true,
       isCameraEnabled: true,
@@ -75,11 +81,12 @@ export class StreamSessionService {
         streamId: stream.streamId,
         channelName: stream.agoraChannelName,
         token: stream.agoraToken,
-        uid: stream.agoraHostUid,
+        uid: stream.hostAgoraUid,      // ✅ CHANGED from agoraHostUid
         appId: this.streamAgoraService.getAppId()
       }
     };
   }
+
 
   /**
    * Get streams by host
@@ -118,26 +125,47 @@ export class StreamSessionService {
    * Start stream (go live)
    */
   async startStream(streamId: string, hostId: string): Promise<any> {
-    const stream = await this.streamModel.findOne({ streamId, hostId });
-    if (!stream) {
-      throw new NotFoundException('Stream not found');
-    }
+  const stream = await this.streamModel.findOne({ streamId, hostId });
+  
+  if (!stream) {
+    throw new NotFoundException('Stream not found');
+  }
 
-    if (stream.status !== 'scheduled') {
-      throw new BadRequestException('Stream already started or ended');
-    }
-
-    stream.status = 'live';
-    stream.currentState = 'streaming';
-    stream.startedAt = new Date();
-    await stream.save();
-
+  // ✅ IF ALREADY LIVE - Return success (idempotent)
+  if (stream.status === 'live') {
+    this.logger.warn(`⚠️ Stream ${streamId} is already live`);
     return {
       success: true,
-      message: 'Stream is now live',
-      data: stream
+      message: 'Stream is already live',
+      data: stream,
     };
   }
+
+  // ✅ IF ENDED - Cannot restart
+  if (stream.status === 'ended') {
+    throw new BadRequestException('Stream has already ended and cannot be restarted');
+  }
+
+  // ✅ IF CANCELLED - Cannot start
+  if (stream.status === 'cancelled') {
+    throw new BadRequestException('Stream has been cancelled');
+  }
+
+  // ✅ START STREAM (only if scheduled)
+  stream.status = 'live';
+  stream.currentState = 'streaming';
+  stream.startedAt = new Date();
+  await stream.save();
+
+  this.logger.log(`✅ Stream ${streamId} started successfully`);
+
+  return {
+    success: true,
+    message: 'Stream is now live',
+    data: stream,
+  };
+}
+
 
   /**
    * End stream
@@ -328,8 +356,8 @@ export class StreamSessionService {
     };
   }
 
-  /**
-   * Request call
+/**
+   * Request call - UPDATED VERSION
    */
   async requestCall(
     streamId: string,
@@ -354,6 +382,27 @@ export class StreamSessionService {
       throw new BadRequestException('Private calls are not allowed');
     }
 
+    // Get user details
+    const user: any = await this.userModel
+      .findById(userId)
+      .select('name profileImage profilePicture wallet')
+      .lean();
+    
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Check wallet balance
+    const callPrice = callType === 'video' 
+      ? stream.callSettings.videoCallPrice 
+      : stream.callSettings.voiceCallPrice;
+
+    if (!user.wallet || user.wallet.balance < callPrice) {
+      throw new BadRequestException(
+        `Insufficient balance. Minimum ₹${callPrice} required for ${callType} call. You have ₹${user.wallet?.balance || 0}`
+      );
+    }
+
     // Check if user already in waitlist
     const existingRequest = stream.callWaitlist.find(
       req => req.userId.toString() === userId && req.status === 'waiting'
@@ -363,21 +412,13 @@ export class StreamSessionService {
       throw new BadRequestException('You already have a pending call request');
     }
 
-    // Get user details
-    const viewer = await this.viewerModel.findOne({ streamId, userId }).populate('userId', 'name profileImage');
-    if (!viewer) {
-      throw new BadRequestException('You must join the stream first');
-    }
-
-    const user: any = viewer.userId;
-
     // Add to waitlist
     const position = stream.callWaitlist.filter(req => req.status === 'waiting').length + 1;
 
     stream.callWaitlist.push({
       userId: new Types.ObjectId(userId),
-      userName: user.name,
-      userAvatar: user.profileImage,
+      userName: user.name || 'Anonymous',
+      userAvatar: user.profileImage || user.profilePicture || null,
       callType,
       callMode,
       requestedAt: new Date(),
@@ -387,16 +428,38 @@ export class StreamSessionService {
 
     await stream.save();
 
+    this.logger.log(`📞 Call requested: ${user.name || 'Anonymous'} (${callType}) - Position ${position}`);
+
+    // ✅ EMIT SOCKET EVENT TO HOST
+    try {
+      this.streamGateway.notifyCallRequest(streamId, {
+        userId,
+        userName: user.name || 'Anonymous',
+        userAvatar: user.profileImage || user.profilePicture || null,
+        callType,
+        callMode,
+        position,
+      });
+      this.logger.log(`✅ Socket event emitted for call request`);
+    } catch (error) {
+      this.logger.error('❌ Failed to emit socket event:', error);
+      // Don't fail the request if socket emission fails
+    }
+
     return {
       success: true,
       message: 'Call request sent successfully',
       data: {
         position,
         waitingCount: stream.callWaitlist.filter(req => req.status === 'waiting').length,
-        estimatedWaitTime: position * 600 // 10 minutes per call
+        estimatedWaitTime: position * 600,
+        callType,
+        pricePerMinute: callPrice,
       }
     };
   }
+
+
 
   /**
    * Cancel call request
@@ -671,74 +734,90 @@ export class StreamSessionService {
    * Join stream (viewer)
    */
   async joinStream(streamId: string, userId: string): Promise<any> {
-    const stream = await this.streamModel.findOne({ streamId });
-    if (!stream) {
-      throw new NotFoundException('Stream not found');
-    }
-
-    if (stream.status !== 'live') {
-      throw new BadRequestException('Stream is not live');
-    }
-
-    // Generate viewer token
-    const viewerUid = this.streamAgoraService.generateUid();
-    const viewerToken = this.streamAgoraService.generateViewerToken(
-      stream.agoraChannelName!,
-      viewerUid
-    );
-
-    // Create or update viewer record
-    let viewer = await this.viewerModel.findOne({ streamId, userId });
-    if (!viewer) {
-      viewer = new this.viewerModel({
-        streamId,
-        userId,
-        joinedAt: new Date(),
-        isActive: true,
-        agoraUid: viewerUid
-      });
-      
-      stream.totalViews += 1;
-    } else {
-      viewer.isActive = true;
-      viewer.joinedAt = new Date();
-      viewer.agoraUid = viewerUid;
-    }
-
-    await viewer.save();
-
-    // Update viewer count
-    const activeViewers = await this.viewerModel.countDocuments({ streamId, isActive: true });
-    stream.viewerCount = activeViewers;
-    if (activeViewers > stream.peakViewers) {
-      stream.peakViewers = activeViewers;
-    }
-
-    await stream.save();
-
-    return {
-      success: true,
-      data: {
-        streamId: stream.streamId,
-        channelName: stream.agoraChannelName,
-        token: viewerToken,
-        uid: viewerUid,
-        appId: this.streamAgoraService.getAppId(),
-        streamInfo: {
-          title: stream.title,
-          description: stream.description,
-          currentState: stream.currentState,
-          viewerCount: stream.viewerCount,
-          isMicEnabled: stream.isMicEnabled,
-          isCameraEnabled: stream.isCameraEnabled,
-          allowComments: stream.allowComments,
-          allowGifts: stream.allowGifts,
-          callSettings: stream.callSettings,
-          currentCall: stream.currentCall
-        }
-      }
-    };
+  const stream = await this.streamModel
+    .findOne({ streamId })
+    .populate('hostId', 'name profilePicture') // ✅ Populate host info
+    .lean();
+    
+  if (!stream) {
+    throw new NotFoundException('Stream not found');
   }
+
+  if (stream.status !== 'live') {
+    throw new BadRequestException('Stream is not live');
+  }
+
+  // Generate viewer token
+  const viewerUid = this.streamAgoraService.generateUid();
+  const viewerToken = this.streamAgoraService.generateViewerToken(
+    stream.agoraChannelName!,
+    viewerUid
+  );
+
+  // Create or update viewer record
+  let viewer = await this.viewerModel.findOne({ streamId, userId });
+  if (!viewer) {
+    viewer = new this.viewerModel({
+      streamId,
+      userId,
+      joinedAt: new Date(),
+      isActive: true,
+      agoraUid: viewerUid
+    });
+    
+    // ✅ Update stream document (not the lean query result)
+    await this.streamModel.findOneAndUpdate(
+      { streamId },
+      { $inc: { totalViews: 1 } }
+    );
+  } else {
+    viewer.isActive = true;
+    viewer.joinedAt = new Date();
+    viewer.agoraUid = viewerUid;
+  }
+
+  await viewer.save();
+
+  // Update viewer count
+  const activeViewers = await this.viewerModel.countDocuments({ streamId, isActive: true });
+  
+  // ✅ Update stream with viewer count
+  await this.streamModel.findOneAndUpdate(
+    { streamId },
+    {
+      $set: {
+        viewerCount: activeViewers,
+        peakViewers: Math.max(stream.peakViewers || 0, activeViewers)
+      }
+    }
+  );
+
+  return {
+    success: true,
+    data: {
+      streamId: stream.streamId,
+      agoraChannelName: stream.agoraChannelName, // ✅ Use correct field name
+      agoraToken: viewerToken,                   // ✅ Use correct field name
+      agoraUid: viewerUid,                       // ✅ Use correct field name
+      hostAgoraUid: stream.hostAgoraUid,         // ✅ CRITICAL: Add host's Agora UID
+      appId: this.streamAgoraService.getAppId(),
+      streamInfo: {
+        title: stream.title,
+        description: stream.description,
+        hostId: stream.hostId,                    // ✅ Include host info
+        currentState: stream.currentState,
+        viewerCount: activeViewers,               // ✅ Use updated count
+        isMicEnabled: stream.isMicEnabled,
+        isCameraEnabled: stream.isCameraEnabled,
+        allowComments: stream.allowComments,
+        allowGifts: stream.allowGifts,
+        callSettings: stream.callSettings,
+        currentCall: stream.currentCall
+      }
+    }
+  };
+}
+
 
   /**
    * Leave stream
@@ -1032,6 +1111,67 @@ async forceEndStreamAdmin(streamId: string, reason: string): Promise<any> {
     }
   };
 }
+
+/**
+ * Send gift to stream
+ */
+async sendGift(streamId: string, userId: string, giftData: any): Promise<any> {
+  try {
+    const stream = await this.streamModel.findOne({ streamId });
+    
+    if (!stream) {
+      throw new NotFoundException('Stream not found');
+    }
+
+    if (stream.status !== 'live') {
+      throw new BadRequestException('Stream is not live');
+    }
+
+    // ✅ Validate gift amount
+    if (!giftData.amount || giftData.amount <= 0) {
+      throw new BadRequestException('Invalid gift amount');
+    }
+
+    // ✅ Check user wallet balance
+    const user = await this.userModel.findById(userId);
+    
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.wallet || user.wallet.balance < giftData.amount) {
+      throw new BadRequestException(
+        `Insufficient balance. You need ₹${giftData.amount} but have ₹${user.wallet?.balance || 0}`
+      );
+    }
+
+    // ✅ Deduct from user wallet
+    user.wallet.balance -= giftData.amount;
+    user.wallet.totalSpent = (user.wallet.totalSpent || 0) + giftData.amount;
+    await user.save();
+
+    // ✅ Add to stream revenue
+    stream.totalRevenue = (stream.totalRevenue || 0) + giftData.amount;
+    stream.totalGifts = (stream.totalGifts || 0) + 1;
+    await stream.save();
+
+    this.logger.log(`🎁 Gift sent: ${giftData.giftType} (₹${giftData.amount}) by user ${userId}`);
+
+    return {
+      success: true,
+      message: 'Gift sent successfully',
+      data: {
+        newBalance: user.wallet.balance,
+        giftType: giftData.giftType,
+        amount: giftData.amount,
+      },
+    };
+  } catch (error) {
+    this.logger.error('❌ Send gift error:', error);
+    throw error;
+  }
+}
+
 
 }
 

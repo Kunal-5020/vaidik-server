@@ -21,8 +21,9 @@ import { StreamAnalyticsService } from './services/stream-analytics.service';
 import { StreamSession, StreamSessionSchema } from './schemas/stream-session.schema';
 import { StreamViewer, StreamViewerSchema } from './schemas/stream-viewer.schema';
 import { CallTransaction, CallTransactionSchema } from './schemas/call-transaction.schema';
-
 import { Admin, AdminSchema } from '../admin/schemas/admin.schema';
+import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema'; // ✅ ADD THIS
+import { User, UserSchema } from '../users/schemas/user.schema';
 
 @Module({
   imports: [
@@ -37,6 +38,8 @@ import { Admin, AdminSchema } from '../admin/schemas/admin.schema';
       { name: StreamViewer.name, schema: StreamViewerSchema },
       { name: CallTransaction.name, schema: CallTransactionSchema },
       { name: Admin.name, schema: AdminSchema }, 
+      { name: Astrologer.name, schema: AstrologerSchema }, // ✅ ADD THIS
+      { name: User.name, schema: UserSchema },
     ]),
   ],
   controllers: [
@@ -49,11 +52,13 @@ import { Admin, AdminSchema } from '../admin/schemas/admin.schema';
     StreamSessionService,
     StreamAgoraService,
     StreamAnalyticsService,
+    StreamGateway,
   ],
   exports: [
     StreamSessionService,
     StreamAgoraService,
     StreamAnalyticsService,
+    StreamGateway,
   ],
 })
 export class StreamingModule {}

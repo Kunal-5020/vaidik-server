@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Registration, RegistrationDocument, RegistrationStatus, InterviewStatus } from '../../registration/schemas/registration.schema';
-import { Astrologer, AstrologerDocument } from '../../schemas/astrologer.schema';
+import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { NotificationService } from '../../notifications/services/notification.service';
 import { AdminActivityLogService } from './admin-activity-log.service';

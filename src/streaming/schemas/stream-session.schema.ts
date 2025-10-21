@@ -54,11 +54,11 @@ export class StreamSession {
   @Prop()
   agoraChannelName?: string;
 
-  @Prop()
-  agoraToken?: string;
+   @Prop({ required: true }) // ✅ Make sure this field exists
+  hostAgoraUid: number;
 
   @Prop()
-  agoraHostUid?: number;
+  agoraToken?: string;
 
   // Host Controls
   @Prop({ default: true })

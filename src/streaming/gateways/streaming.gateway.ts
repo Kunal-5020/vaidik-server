@@ -9,6 +9,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { StreamSessionService } from '../services/stream-session.service';
+import { Inject, forwardRef } from '@nestjs/common';
 
 @WebSocketGateway({
   cors: {
@@ -22,7 +23,13 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
-  constructor(private streamSessionService: StreamSessionService) {}
+  private userSockets: Map<string, string> = new Map();
+  private streamHosts: Map<string, string> = new Map();
+
+  constructor(
+    @Inject(forwardRef(() => StreamSessionService)) 
+    private streamSessionService: StreamSessionService
+  ) {}
 
   handleConnection(client: Socket) {
     console.log(`✅Stream client connected: ${client.id}`);
@@ -30,6 +37,64 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   handleDisconnect(client: Socket) {
     console.log(`❌Stream client disconnected: ${client.id}`);
+  }
+
+
+  /**
+   * ✅ NEW: Helper method to notify host of call request
+   * Called by service after adding to waitlist
+   */
+  notifyCallRequest(
+    streamId: string,
+    data: {
+      userId: string;
+      userName: string;
+      userAvatar: string | null;
+      callType: 'voice' | 'video';
+      callMode: 'public' | 'private';
+      position: number;
+    }
+  ) {
+    console.log('📞 ===== NOTIFYING HOST OF CALL REQUEST =====');
+    console.log('📞 Stream ID:', streamId);
+    console.log('📞 User:', data.userName);
+
+    // Get host ID for this stream
+    const hostUserId = this.streamHosts.get(streamId);
+    
+    if (!hostUserId) {
+      console.error('❌ No host found for stream:', streamId);
+      console.log('📝 Available hosts:', Array.from(this.streamHosts.entries()));
+      return;
+    }
+
+    console.log('📝 Host User ID:', hostUserId);
+
+    // Get host socket ID
+    const hostSocketId = this.userSockets.get(hostUserId);
+    
+    if (!hostSocketId) {
+      console.error('❌ Host not connected to socket:', hostUserId);
+      console.log('📝 Available sockets:', Array.from(this.userSockets.entries()));
+      return;
+    }
+
+    console.log('📝 Host Socket ID:', hostSocketId);
+
+    // Emit to host's socket
+    this.server.to(hostSocketId).emit('call_request_received', {
+      streamId,
+      userId: data.userId,
+      userName: data.userName,
+      userAvatar: data.userAvatar,
+      callType: data.callType,
+      callMode: data.callMode,
+      position: data.position,
+      timestamp: new Date().toISOString(),
+    });
+
+    console.log('✅ Call request notification sent to host');
+    console.log('📞 ===== NOTIFICATION COMPLETE =====');
   }
 
   // ==================== STREAM EVENTS ====================

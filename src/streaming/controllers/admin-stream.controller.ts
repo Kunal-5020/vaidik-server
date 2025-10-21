@@ -14,6 +14,7 @@ import {
 import { AdminAuthGuard } from '../../admin/guards/admin-auth.guard';
 import { StreamSessionService } from '../services/stream-session.service';
 import { StreamAnalyticsService } from '../services/stream-analytics.service';
+import { StreamAgoraService } from '../services/stream-agora.service';
 
 @Controller('admin/streams')
 @UseGuards(AdminAuthGuard)
@@ -21,6 +22,7 @@ export class AdminStreamController {
   constructor(
     private streamSessionService: StreamSessionService,
     private streamAnalyticsService: StreamAnalyticsService,
+    private streamAgoraService: StreamAgoraService,
   ) {}
 
   /**
@@ -101,4 +103,10 @@ export class AdminStreamController {
   ) {
     return this.streamAnalyticsService.getTopStreamEarners(limit);
   }
+
+  @Get(':streamId/viewer-token')
+async getViewerToken(@Param('streamId') streamId: string) {
+  return this.streamAgoraService.generateViewerTokenByStreamId(streamId); // ✅ USE NEW METHOD
+}
+  
 }

@@ -151,4 +151,18 @@ export class StreamController {
   ) {
     return this.streamSessionService.toggleUserCamera(streamId, body.enabled);
   }
+
+  /**
+ * Send gift to stream
+ * POST /streams/:streamId/gifts
+ */
+@Post(':streamId/gifts')
+@UseGuards(JwtAuthGuard)
+async sendGift(
+  @Param('streamId') streamId: string,
+  @Req() req: AuthenticatedRequest,
+  @Body() giftData: { giftType: string; amount: number },
+) {
+  return this.streamSessionService.sendGift(streamId, req.user._id, giftData);
+}
 }
