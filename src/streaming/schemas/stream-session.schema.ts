@@ -192,11 +192,20 @@ export class StreamSession {
   isPrivate: boolean;
 
   // Recording
-  @Prop({ default: false })
-  isRecorded: boolean;
+ @Prop({ type: Boolean, default: false })
+  isRecording: boolean;
 
-  @Prop()
+  @Prop({ type: String })
+  recordingResourceId?: string;
+
+  @Prop({ type: String })
+  recordingSid?: string;
+
+  @Prop({ type: String })
   recordingUrl?: string;
+
+  @Prop({ type: [String] })
+  recordingFiles?: string[];
 
   @Prop({ default: Date.now })
   createdAt: Date;

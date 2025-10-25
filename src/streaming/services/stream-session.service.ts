@@ -9,6 +9,7 @@ import { StreamAgoraService } from './stream-agora.service';
 import { UpdateCallSettingsDto } from '../dto/update-call-settings.dto';
 import { UpdateStreamDto } from '../dto/update-stream.dto';
 import { StreamGateway } from '../gateways/streaming.gateway';
+import { StreamRecordingService } from './stream-recording.service';
 
 @Injectable()
 export class StreamSessionService {
@@ -19,6 +20,7 @@ export class StreamSessionService {
     @InjectModel(StreamViewer.name) private viewerModel: Model<StreamViewerDocument>,
     @InjectModel(CallTransaction.name) private callTransactionModel: Model<CallTransactionDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    private readonly streamRecordingService: StreamRecordingService,
     private streamAgoraService: StreamAgoraService,
     @Inject(forwardRef(() => StreamGateway)) private streamGateway: StreamGateway,
   ) {}
@@ -159,6 +161,38 @@ export class StreamSessionService {
 
   this.logger.log(`✅ Stream ${streamId} started successfully`);
 
+  // start recording
+
+  //  try {
+  //     const recording = await this.streamRecordingService.startRecording(
+  //       stream.agoraChannelName!,
+  //       String(stream.hostAgoraUid),
+  //       streamId,
+  //     );
+
+  //     stream.isRecording = true;
+  //     stream.recordingResourceId = recording.resourceId;
+  //     stream.recordingSid = recording.sid;
+
+  //     this.logger.log(`✅ Recording started for stream: ${streamId}`);
+  //   } catch (error) {
+  //     this.logger.error('❌ Failed to start recording, continuing stream:', error);
+  //     // Don't fail the stream if recording fails
+  //   }
+
+  setTimeout(async () => {
+    try {
+      const stream = await this.streamModel.findOne({ streamId });
+      
+      if (stream && stream.status === 'live') {
+        console.log('⏰ Stream timeout reached - auto-ending:', streamId);
+        await this.endStream(streamId, hostId);
+      }
+    } catch (error) {
+      console.error('Error in stream timeout:', error);
+    }
+  }, 4 * 60 * 60 * 1000); // 4 hours
+
   return {
     success: true,
     message: 'Stream is now live',
@@ -171,52 +205,17 @@ export class StreamSessionService {
    * End stream
    */
   async endStream(streamId: string, hostId: string): Promise<any> {
-    const stream = await this.streamModel.findOne({ streamId, hostId });
-    if (!stream) {
-      throw new NotFoundException('Stream not found');
-    }
+  const stream = await this.streamModel.findOne({ streamId, hostId });
+  if (!stream) {
+    throw new NotFoundException('Stream not found');
+  }
 
-    if (stream.status !== 'live') {
-      throw new BadRequestException('Stream is not live');
-    }
-
-    // End current call if any
-    if (stream.currentCall?.isOnCall) {
-      await this.endCurrentCall(streamId, hostId);
-    }
-
-    const endTime = new Date();
-    const duration = stream.startedAt 
-      ? Math.floor((endTime.getTime() - stream.startedAt.getTime()) / 1000)
-      : 0;
-
-    stream.status = 'ended';
-    stream.endedAt = endTime;
-    stream.duration = duration;
-    stream.currentState = 'idle';
-
-    // Mark all active viewers as inactive
-    await this.viewerModel.updateMany(
-      { streamId, isActive: true },
-      { 
-        $set: { 
-          isActive: false,
-          leftAt: endTime
-        }
-      }
-    );
-
-    // Reject all pending call requests
-    stream.callWaitlist = stream.callWaitlist.map(req => ({
-      ...req,
-      status: 'expired'
-    }));
-
-    await stream.save();
-
+  // ✅ If already ended, return success (idempotent)
+  if (stream.status === 'ended') {
+    this.logger.warn(`⚠️ Stream ${streamId} already ended`);
     return {
       success: true,
-      message: 'Stream ended',
+      message: 'Stream already ended',
       data: {
         streamId: stream.streamId,
         duration: stream.duration,
@@ -227,6 +226,80 @@ export class StreamSessionService {
       }
     };
   }
+
+  // ✅ Stop recording
+    if (stream.isRecording && stream.recordingResourceId && stream.recordingSid) {
+      try {
+        const recordingResult = await this.streamRecordingService.stopRecording(
+          stream.agoraChannelName!,
+          String(stream.hostAgoraUid),
+          stream.recordingResourceId,
+          stream.recordingSid,
+        );
+
+        stream.recordingFiles = recordingResult.fileList?.map(
+          (file: any) => file.fileName,
+        );
+
+        this.logger.log(`✅ Recording stopped for stream: ${streamId}`);
+      } catch (error) {
+        this.logger.error('❌ Failed to stop recording:', error);
+      }
+    }
+
+  if (stream.status !== 'live') {
+    throw new BadRequestException('Stream is not live');
+  }
+
+  // End current call if any
+  if (stream.currentCall?.isOnCall) {
+    await this.endCurrentCall(streamId, hostId);
+  }
+
+  const endTime = new Date();
+  const duration = stream.startedAt 
+    ? Math.floor((endTime.getTime() - stream.startedAt.getTime()) / 1000)
+    : 0;
+
+  stream.status = 'ended';
+  stream.endedAt = endTime;
+  stream.duration = duration;
+  stream.currentState = 'idle';
+  stream.isRecording = false;
+
+  // Mark all active viewers as inactive
+  await this.viewerModel.updateMany(
+    { streamId, isActive: true },
+    { 
+      $set: { 
+        isActive: false,
+        leftAt: endTime
+      }
+    }
+  );
+
+  // Reject all pending call requests
+  stream.callWaitlist = stream.callWaitlist.map(req => ({
+    ...req,
+    status: 'expired'
+  }));
+
+  await stream.save();
+
+  return {
+    success: true,
+    message: 'Stream ended',
+    data: {
+      streamId: stream.streamId,
+      duration: stream.duration,
+      totalViews: stream.totalViews,
+      peakViewers: stream.peakViewers,
+      totalRevenue: stream.totalRevenue,
+      totalCalls: stream.totalCalls
+    }
+  };
+}
+
 
   /**
    * Update stream
@@ -462,22 +535,21 @@ export class StreamSessionService {
 
 
   /**
-   * Cancel call request
-   */
-  async cancelCallRequest(streamId: string, userId: string): Promise<any> {
-    const stream = await this.streamModel.findOne({ streamId });
-    if (!stream) {
-      throw new NotFoundException('Stream not found');
-    }
+ * Cancel call request
+ */
+async cancelCallRequest(streamId: string, userId: string): Promise<any> {
+  const stream = await this.streamModel.findOne({ streamId });
+  if (!stream) {
+    throw new NotFoundException('Stream not found');
+  }
 
-    const requestIndex = stream.callWaitlist.findIndex(
-      req => req.userId.toString() === userId && req.status === 'waiting'
-    );
+  // ✅ Check if user is in waitlist
+  const requestIndex = stream.callWaitlist.findIndex(
+    req => req.userId.toString() === userId && req.status === 'waiting'
+  );
 
-    if (requestIndex === -1) {
-      throw new BadRequestException('No pending call request found');
-    }
-
+  if (requestIndex !== -1) {
+    // Remove from waitlist
     stream.callWaitlist.splice(requestIndex, 1);
 
     // Reorder positions
@@ -494,6 +566,41 @@ export class StreamSessionService {
       message: 'Call request cancelled'
     };
   }
+
+  // ✅ Check if user is currently on call
+  if (stream.currentCall?.callerId?.toString() === userId) {
+    // End the active call
+    const endTime = new Date();
+    const duration = Math.floor((endTime.getTime() - stream.currentCall.startedAt.getTime()) / 1000);
+
+    // Update transaction
+    await this.callTransactionModel.findOneAndUpdate(
+      {
+        streamId,
+        userId: new Types.ObjectId(userId),
+        endedAt: { $exists: false }
+      },
+      {
+        endedAt: endTime,
+        duration,
+        status: 'cancelled'
+      }
+    );
+
+    // Clear current call
+    stream.currentCall = undefined as any;
+    stream.currentState = 'streaming';
+    await stream.save();
+
+    return {
+      success: true,
+      message: 'Active call cancelled'
+    };
+  }
+
+  throw new BadRequestException('No pending or active call found');
+}
+
 
   /**
    * Get call waitlist
@@ -597,39 +704,43 @@ export class StreamSessionService {
   }
 
   /**
-   * Reject call request
-   */
-  async rejectCallRequest(streamId: string, userId: string): Promise<any> {
-    const stream = await this.streamModel.findOne({ streamId });
-    if (!stream) {
-      throw new NotFoundException('Stream not found');
-    }
-
-    const requestIndex = stream.callWaitlist.findIndex(
-      req => req.userId.toString() === userId && req.status === 'waiting'
-    );
-
-    if (requestIndex === -1) {
-      throw new BadRequestException('Call request not found');
-    }
-
-    stream.callWaitlist[requestIndex].status = 'rejected';
-
-    // Reorder waiting positions
-    let position = 1;
-    stream.callWaitlist.forEach((req) => {
-      if (req.status === 'waiting') {
-        req.position = position++;
-      }
-    });
-
-    await stream.save();
-
-    return {
-      success: true,
-      message: 'Call request rejected'
-    };
+ * Reject call request
+ */
+async rejectCallRequest(streamId: string, userId: string): Promise<any> {
+  const stream = await this.streamModel.findOne({ streamId });
+  if (!stream) {
+    throw new NotFoundException('Stream not found');
   }
+
+  const requestIndex = stream.callWaitlist.findIndex(
+    req => req.userId.toString() === userId && req.status === 'waiting'
+  );
+
+  if (requestIndex === -1) {
+    throw new BadRequestException('Call request not found');
+  }
+
+  // ✅ Mark as rejected instead of removing
+  stream.callWaitlist[requestIndex].status = 'rejected';
+
+  // Reorder waiting positions
+  let position = 1;
+  stream.callWaitlist.forEach((req) => {
+    if (req.status === 'waiting') {
+      req.position = position++;
+    }
+  });
+
+  await stream.save();
+
+  this.logger.log(`❌ Call request rejected: ${userId}`);
+
+  return {
+    success: true,
+    message: 'Call request rejected'
+  };
+}
+
 
   /**
    * End current call

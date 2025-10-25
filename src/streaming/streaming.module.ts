@@ -16,6 +16,7 @@ import { StreamGateway } from './gateways/streaming.gateway';
 import { StreamSessionService } from './services/stream-session.service';
 import { StreamAgoraService } from './services/stream-agora.service';
 import { StreamAnalyticsService } from './services/stream-analytics.service';
+import { StreamRecordingService } from './services/stream-recording.service';
 
 // Schemas
 import { StreamSession, StreamSessionSchema } from './schemas/stream-session.schema';
@@ -53,6 +54,7 @@ import { User, UserSchema } from '../users/schemas/user.schema';
     StreamAgoraService,
     StreamAnalyticsService,
     StreamGateway,
+    StreamRecordingService,
   ],
   exports: [
     StreamSessionService,

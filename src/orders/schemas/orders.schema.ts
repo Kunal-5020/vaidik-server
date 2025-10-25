@@ -102,12 +102,9 @@ export class Order {
 export const OrderSchema = SchemaFactory.createForClass(Order);
 
 // Indexes
-OrderSchema.index({ orderId: 1 }, { unique: true });
-OrderSchema.index({ userId: 1, createdAt: -1 });
-OrderSchema.index({ astrologerId: 1, createdAt: -1 });
-OrderSchema.index({ userId: 1, status: 1 });
-OrderSchema.index({ type: 1, status: 1 });
-OrderSchema.index({ createdAt: -1 });
-OrderSchema.index({ userId: 1, type: 1, status: 1 });
-OrderSchema.index({ callSessionId: 1 }, { sparse: true });
-OrderSchema.index({ chatSessionId: 1 }, { sparse: true });
+OrderSchema.index({ orderId: 1 }, { unique: true }); // ✅ Keep
+OrderSchema.index({ userId: 1, type: 1, status: 1, createdAt: -1 }); // ✅ MAIN USER QUERY INDEX
+OrderSchema.index({ astrologerId: 1, type: 1, status: 1, createdAt: -1 }); // ✅ MAIN ASTROLOGER INDEX
+OrderSchema.index({ callSessionId: 1 }, { sparse: true }); // ✅ Keep
+OrderSchema.index({ chatSessionId: 1 }, { sparse: true }); // ✅ Keep
+OrderSchema.index({ 'payment.paymentStatus': 1, createdAt: -1 }, { sparse: true });

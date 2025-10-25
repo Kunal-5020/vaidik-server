@@ -54,29 +54,39 @@ import { UploadModule } from './upload/upload.module';
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
         try {
-          const store = await redisStore({
-            socket: {
-              host: configService.get<string>('redis.host') || 'localhost',
-              port: configService.get<number>('redis.port') || 6379,
-            },
-            ttl: 300, // 5 minutes default TTL
-            // Add these options for better compatibility
-            database: 0,
-            keyPrefix: 'vaidiktalk:',
-          });
+          const redisUrl = configService.get<string>('REDIS_URL');
+          let store;
 
-          console.log('✅ Redis store created successfully');
-          return {
-            store: () => store,
-          };
+          if (redisUrl) {
+            // 🔹 Use Upstash/Render Redis
+            store = await redisStore({
+              url: redisUrl,
+              ttl: 300,
+              socket: {
+                tls: redisUrl.startsWith('rediss://'), // enable TLS for Upstash
+              },
+              keyPrefix: 'vaidiktalk:',
+            });
+            console.log('✅ Connected to remote Redis:', redisUrl);
+          } else {
+            // 🔹 Fallback to local Redis
+            store = await redisStore({
+              socket: {
+                host: configService.get<string>('REDIS_HOST') || 'localhost',
+                port: configService.get<number>('REDIS_PORT') || 6379,
+              },
+              ttl: 300,
+              database: 0,
+              keyPrefix: 'vaidiktalk:',
+            });
+            console.log('✅ Connected to local Redis');
+          }
+
+          return { store: () => store };
         } catch (error) {
-          console.error('❌ Redis store creation failed:', error);
-          
-          // Fallback to memory store for development
-          console.log('🔄 Falling back to memory cache...');
-          return {
-            ttl: 300,
-          };
+          console.error('❌ Redis connection failed:', error.message);
+          console.log('🔄 Falling back to in-memory cache');
+          return { ttl: 300 };
         }
       },
       inject: [ConfigService],

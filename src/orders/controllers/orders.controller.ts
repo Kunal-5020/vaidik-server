@@ -35,10 +35,12 @@ export class OrdersController {
     @Query('type') type?: string,
     @Query('status') status?: string
   ) {
+    const safeLimit = Math.min(limit, 100);
+
     return this.ordersService.getUserOrders(
       req.user._id,
       page,
-      limit,
+      safeLimit,
       { type, status }
     );
   }

@@ -13,7 +13,7 @@ export class WalletTransaction {
 
   @Prop({ 
     required: true,
-    enum: ['recharge', 'deduction', 'refund', 'bonus'],
+    enum: ['recharge', 'deduction', 'refund', 'bonus', 'gift'],
     index: true
   })
   type: string;
