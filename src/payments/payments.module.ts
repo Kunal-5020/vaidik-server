@@ -11,8 +11,8 @@ import { StripeService } from './services/stripe.service';
 import { PayPalService } from './services/paypal.service';
 import { WalletTransaction, WalletTransactionSchema } from './schemas/wallet-transaction.schema';
 import { PayoutRequest, PayoutRequestSchema } from './schemas/payout-request.schema';
-import { User, UserSchema } from '../users/schemas/user.schema';
-import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema';
+import { UsersModule } from '../users/users.module'; 
+import { AstrologersModule } from '../astrologers/astrologers.module';
 
 @Module({
   imports: [
@@ -20,9 +20,9 @@ import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.
     MongooseModule.forFeature([
       { name: WalletTransaction.name, schema: WalletTransactionSchema },
       { name: PayoutRequest.name, schema: PayoutRequestSchema },
-      { name: User.name, schema: UserSchema },
-      { name: Astrologer.name, schema: AstrologerSchema },
     ]),
+    UsersModule,
+    AstrologersModule,
   ],
   controllers: [
     WalletController,

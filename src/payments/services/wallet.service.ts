@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { WalletTransaction, WalletTransactionDocument } from '../schemas/wallet-transaction.schema';
@@ -8,12 +8,14 @@ import { StripeService } from './stripe.service';
 import { PayPalService } from './paypal.service';
 import { PaymentGatewayService } from './payment-gateway.service';
 
+
 @Injectable()
 export class WalletService {
+  private readonly logger = new Logger(WalletService.name);
   constructor(
     @InjectModel(WalletTransaction.name) 
     private transactionModel: Model<WalletTransactionDocument>,
-    @InjectModel(User.name) 
+    @InjectModel(User.name)
     private userModel: Model<UserDocument>,
     private razorpayService: RazorpayService,
     private stripeService: StripeService,
@@ -174,6 +176,8 @@ export class WalletService {
 
     await Promise.all([transaction.save(), user.save()]);
 
+    this.logger.log(`Deducted ₹${amount} from user ${userId}`);
+
     return transaction;
   }
 
@@ -298,4 +302,65 @@ export class WalletService {
       }
     };
   }
+
+  async creditToWallet(
+    userId: string,
+    amount: number,
+    orderId: string,
+    description: string,
+    type: 'refund' | 'bonus' | 'reward' = 'refund'
+  ): Promise<WalletTransactionDocument> {
+    if (amount <= 0) {
+      throw new BadRequestException('Amount must be greater than 0');
+    }
+
+    const user = await this.userModel.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const transactionId = `TXN_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
+
+    const transaction = new this.transactionModel({
+      transactionId,
+      userId,
+      type,
+      amount,
+      balanceBefore: user.wallet.balance,
+      balanceAfter: user.wallet.balance + amount,
+      description,
+      orderId,
+      status: 'completed',
+      createdAt: new Date()
+    });
+
+    user.wallet.balance += amount;
+    user.wallet.lastTransactionAt = new Date();
+
+    // ✅ Save sequentially (no transactions for now)
+    await transaction.save();
+    await user.save();
+
+    this.logger.log(`Credited ₹${amount} to user ${userId} | Type: ${type}`);
+
+    return transaction;
+  }
+  // Check balance
+  async checkBalance(userId: string, requiredAmount: number): Promise<boolean> {
+    const user = await this.userModel.findById(userId).select('wallet.balance');
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    return user.wallet.balance >= requiredAmount;
+  }
+
+  // Get balance
+  async getBalance(userId: string): Promise<number> {
+    const user = await this.userModel.findById(userId).select('wallet.balance');
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    return user.wallet.balance;
+  }
 }
+

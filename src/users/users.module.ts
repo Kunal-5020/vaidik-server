@@ -6,6 +6,7 @@ import { UsersService } from './services/users.service';
 import { DeviceTokenService } from './services/device-token.service';
 import { User, UserSchema } from './schemas/user.schema';
 
+
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -14,6 +15,6 @@ import { User, UserSchema } from './schemas/user.schema';
   ],
   controllers: [UsersController, DeviceTokenController],
   providers: [UsersService, DeviceTokenService],
-  exports: [UsersService, DeviceTokenService],
+  exports: [UsersService, DeviceTokenService, MongooseModule],
 })
 export class UsersModule {}

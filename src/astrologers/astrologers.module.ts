@@ -36,6 +36,7 @@ import { AstrologerProfileController } from './controllers/astrologer-profile.co
     AstrologersService,
     AvailabilityService,
     EarningsService,
+    MongooseModule,
   ],
 })
 export class AstrologersModule {}

@@ -41,6 +41,7 @@ import { PaymentsModule } from '../payments/payments.module';
 
 import { AdminManagementController } from './controllers/admin-management.controller';
 import { AdminActivityLogsController } from './controllers/admin-activity-logs.controller';
+import { AdminAuthGuard } from './guards/admin-auth.guard';
 
 @Module({
   imports: [
@@ -88,8 +89,9 @@ import { AdminActivityLogsController } from './controllers/admin-activity-logs.c
     AdminPaymentsService,
     AdminAnalyticsService,
     AdminActivityLogService,
-    AdminRegistrationService
+    AdminRegistrationService,
+    AdminAuthGuard,
   ],
-  exports: [AdminAuthService, AdminActivityLogService],
+  exports: [AdminAuthService, AdminActivityLogService, AdminAuthGuard, JwtModule,],
 })
 export class AdminModule {}

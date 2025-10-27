@@ -10,6 +10,7 @@ import { CallRecordingService } from './services/call-recording.service';
 import { CallSession, CallSessionSchema } from './schemas/call-session.schema';
 import { PaymentsModule } from '../payments/payments.module';
 import { AstrologersModule } from '../astrologers/astrologers.module';
+import { OrdersModule } from 'src/orders/orders.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { AstrologersModule } from '../astrologers/astrologers.module';
     ]),
     PaymentsModule, // For wallet deduction
     AstrologersModule, // For earnings credit
+    OrdersModule, // For order validation
   ],
   controllers: [CallController],
   providers: [
