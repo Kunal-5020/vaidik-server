@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+// src/admin/services/admin-orders.service.ts
+
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Order, OrderDocument } from '../../orders/schemas/orders.schema';
 import { WalletService } from '../../payments/services/wallet.service';
 import { AdminActivityLogService } from './admin-activity-log.service';
@@ -8,6 +10,8 @@ import { NotificationService } from '../../notifications/services/notification.s
 
 @Injectable()
 export class AdminOrdersService {
+  private readonly logger = new Logger(AdminOrdersService.name);
+
   constructor(
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
     private walletService: WalletService,
@@ -15,16 +19,37 @@ export class AdminOrdersService {
     private notificationService: NotificationService,
   ) {}
 
+  // Helper: Convert to ObjectId
+  private toObjectId(id: string): Types.ObjectId {
+    try {
+      return new Types.ObjectId(id);
+    } catch (error) {
+      throw new BadRequestException('Invalid ID format');
+    }
+  }
+
+  // ===== ORDER MANAGEMENT =====
+
   async getAllOrders(
     page: number = 1,
     limit: number = 50,
-    filters?: { status?: string; type?: string; startDate?: string; endDate?: string }
+    filters?: {
+      status?: string;
+      type?: string;
+      userId?: string;
+      astrologerId?: string;
+      startDate?: string;
+      endDate?: string;
+    }
   ): Promise<any> {
     const skip = (page - 1) * limit;
-    const query: any = {};
+    const query: any = { isDeleted: false };
 
     if (filters?.status) query.status = filters.status;
     if (filters?.type) query.type = filters.type;
+    if (filters?.userId) query.userId = this.toObjectId(filters.userId);
+    if (filters?.astrologerId) query.astrologerId = this.toObjectId(filters.astrologerId);
+
     if (filters?.startDate || filters?.endDate) {
       query.createdAt = {};
       if (filters.startDate) query.createdAt.$gte = new Date(filters.startDate);
@@ -34,8 +59,8 @@ export class AdminOrdersService {
     const [orders, total] = await Promise.all([
       this.orderModel
         .find(query)
-        .populate('userId', 'name phoneNumber email')
-        .populate('astrologerId', 'name phoneNumber email')
+        .populate('userId', 'name phoneNumber email profileImage wallet')
+        .populate('astrologerId', 'name phoneNumber email profilePicture')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -52,6 +77,8 @@ export class AdminOrdersService {
           limit,
           total,
           pages: Math.ceil(total / limit),
+          hasNext: page < Math.ceil(total / limit),
+          hasPrev: page > 1
         },
       },
     };
@@ -59,9 +86,9 @@ export class AdminOrdersService {
 
   async getOrderDetails(orderId: string): Promise<any> {
     const order = await this.orderModel
-      .findOne({ orderId })
-      .populate('userId')
-      .populate('astrologerId')
+      .findOne({ orderId, isDeleted: false })
+      .populate('userId', 'name phoneNumber email profileImage wallet')
+      .populate('astrologerId', 'name phoneNumber email profilePicture specializations experienceYears')
       .lean();
 
     if (!order) {
@@ -74,61 +101,143 @@ export class AdminOrdersService {
     };
   }
 
-  async refundOrder(orderId: string, adminId: string, refundDto: any): Promise<any> {
-    const order = await this.orderModel.findOne({ orderId });
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    // Process refund
-    await this.walletService.refundToWallet(
-      order.userId.toString(),
-      refundDto.amount || order.totalAmount,
-      orderId,
-      `Refund by admin: ${refundDto.reason}`
-    );
-
-    // Update order
-    order.status = 'cancelled';
-    await order.save();
-
-    // Log activity
-    await this.activityLogService.log({
-      adminId,
-      action: 'order.refund',
-      module: 'orders',
-      targetId: orderId,
-      targetType: 'Order',
-      status: 'success',
-      details: {
-        amount: refundDto.amount || order.totalAmount,
-        reason: refundDto.reason,
-      },
-    });
-
-    // Notify user
-    await this.notificationService.sendNotification({
-      recipientId: order.userId.toString(),
-      recipientModel: 'User',
-      type: 'payment_success',
-      title: 'Refund Processed',
-      message: `Your refund of ₹${refundDto.amount || order.totalAmount} has been processed.`,
-      priority: 'high',
-    });
+  async getOrderStats(): Promise<any> {
+    const [
+      total,
+      completed,
+      cancelled,
+      pending,
+      ongoing,
+      refundRequested,
+      totalRevenue,
+      ordersByType,
+      todayOrders
+    ] = await Promise.all([
+      this.orderModel.countDocuments({ isDeleted: false }),
+      this.orderModel.countDocuments({ status: 'completed', isDeleted: false }),
+      this.orderModel.countDocuments({ status: 'cancelled', isDeleted: false }),
+      this.orderModel.countDocuments({ status: 'pending', isDeleted: false }),
+      this.orderModel.countDocuments({ status: 'ongoing', isDeleted: false }),
+      this.orderModel.countDocuments({ status: 'refund_requested', isDeleted: false }),
+      this.orderModel.aggregate([
+        { $match: { status: 'completed', isDeleted: false } },
+        { $group: { _id: null, total: { $sum: '$totalAmount' } } },
+      ]),
+      this.orderModel.aggregate([
+        { $match: { isDeleted: false } },
+        { $group: { _id: '$type', count: { $sum: 1 } } }
+      ]),
+      this.orderModel.countDocuments({
+        createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) },
+        isDeleted: false
+      })
+    ]);
 
     return {
       success: true,
-      message: 'Refund processed successfully',
+      data: {
+        total,
+        completed,
+        cancelled,
+        pending,
+        ongoing,
+        refundRequested,
+        todayOrders,
+        totalRevenue: totalRevenue[0]?.total || 0,
+        ordersByType: ordersByType.reduce((acc, item) => {
+          acc[item._id] = item.count;
+          return acc;
+        }, {})
+      },
+    };
+  }
+
+  async getRevenueStats(startDate?: string, endDate?: string): Promise<any> {
+    const matchQuery: any = {
+      status: 'completed',
+      isDeleted: false
+    };
+
+    if (startDate || endDate) {
+      matchQuery.createdAt = {};
+      if (startDate) matchQuery.createdAt.$gte = new Date(startDate);
+      if (endDate) matchQuery.createdAt.$lte = new Date(endDate);
+    }
+
+    const [revenueData, revenueByType] = await Promise.all([
+      this.orderModel.aggregate([
+        { $match: matchQuery },
+        {
+          $group: {
+            _id: null,
+            totalRevenue: { $sum: '$totalAmount' },
+            averageOrderValue: { $avg: '$totalAmount' },
+            orderCount: { $sum: 1 }
+          }
+        }
+      ]),
+      this.orderModel.aggregate([
+        { $match: matchQuery },
+        {
+          $group: {
+            _id: '$type',
+            revenue: { $sum: '$totalAmount' },
+            count: { $sum: 1 },
+            avgValue: { $avg: '$totalAmount' }
+          }
+        }
+      ])
+    ]);
+
+    return {
+      success: true,
+      data: {
+        totalRevenue: revenueData[0]?.totalRevenue || 0,
+        averageOrderValue: revenueData[0]?.averageOrderValue || 0,
+        orderCount: revenueData[0]?.orderCount || 0,
+        revenueByType
+      }
     };
   }
 
   async cancelOrder(orderId: string, adminId: string, reason: string): Promise<any> {
-    const order = await this.orderModel.findOne({ orderId });
+    const order = await this.orderModel.findOne({
+      orderId,
+      isDeleted: false
+    });
+
     if (!order) {
       throw new NotFoundException('Order not found');
     }
 
+    if (!['pending', 'ongoing'].includes(order.status)) {
+      throw new BadRequestException('Only pending or ongoing orders can be cancelled');
+    }
+
     order.status = 'cancelled';
+    order.cancellationReason = reason;
+    order.cancelledBy = 'admin';
+    order.cancelledAt = new Date();
+
+    // Process automatic refund if payment was made
+    if (order.payment?.paymentStatus === 'paid' && order.totalAmount > 0) {
+      try {
+        const refundTxn = await this.walletService.creditToWallet(
+          order.userId.toString(),
+          order.totalAmount,
+          orderId,
+          `Automatic refund for admin-cancelled order ${orderId}`
+        );
+
+        order.payment.paymentStatus = 'refunded';
+        order.payment.refundedAt = new Date();
+        order.payment.refundAmount = order.totalAmount;
+        order.payment.refundTransactionId = refundTxn.transactionId;
+      } catch (error: any) {
+        this.logger.error(`Failed to process refund for cancelled order ${orderId}: ${error.message}`);
+      }
+    }
+
     await order.save();
 
     // Log activity
@@ -139,36 +248,388 @@ export class AdminOrdersService {
       targetId: orderId,
       targetType: 'Order',
       status: 'success',
-      details: { reason },
+      details: { reason, refunded: order.payment?.paymentStatus === 'refunded' },
     });
+
+    // Notify user
+    await this.notificationService.sendNotification({
+      recipientId: order.userId.toString(),
+      recipientModel: 'User',
+      type: 'order_cancelled',
+      title: 'Order Cancelled',
+      message: `Your order ${orderId} has been cancelled by admin. ${
+        order.payment?.paymentStatus === 'refunded' ? 'Refund has been processed.' : ''
+      }`,
+      priority: 'high',
+    });
+
+    this.logger.log(`Order cancelled by admin: ${orderId} | Admin: ${adminId}`);
 
     return {
       success: true,
       message: 'Order cancelled successfully',
+      data: {
+        orderId: order.orderId,
+        refunded: order.payment?.paymentStatus === 'refunded',
+        refundAmount: order.payment?.refundAmount
+      }
     };
   }
 
-  async getOrderStats(): Promise<any> {
-    const [total, completed, cancelled, pending, totalRevenue] = await Promise.all([
-      this.orderModel.countDocuments(),
-      this.orderModel.countDocuments({ status: 'completed' }),
-      this.orderModel.countDocuments({ status: 'cancelled' }),
-      this.orderModel.countDocuments({ status: { $in: ['pending', 'ongoing'] } }),
-      this.orderModel.aggregate([
-        { $match: { status: 'completed' } },
-        { $group: { _id: null, total: { $sum: '$totalAmount' } } },
-      ]),
+  // ===== REFUND MANAGEMENT SYSTEM =====
+
+  async getPendingRefundRequests(page: number = 1, limit: number = 20): Promise<any> {
+    const skip = (page - 1) * limit;
+
+    const [requests, total] = await Promise.all([
+      this.orderModel
+        .find({
+          'refundRequest.status': 'pending',
+          status: 'refund_requested',
+          isDeleted: false
+        })
+        .populate('userId', 'name email phoneNumber profileImage')
+        .populate('astrologerId', 'name phoneNumber')
+        .populate('refundRequest.requestedBy', 'name email')
+        .sort({ 'refundRequest.requestedAt': -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.orderModel.countDocuments({
+        'refundRequest.status': 'pending',
+        status: 'refund_requested',
+        isDeleted: false
+      })
     ]);
 
     return {
       success: true,
       data: {
-        total,
-        completed,
-        cancelled,
-        pending,
-        totalRevenue: totalRevenue[0]?.total || 0,
+        refundRequests: requests,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      }
+    };
+  }
+
+  async getAllRefundRequests(
+    page: number = 1,
+    limit: number = 20,
+    status?: string
+  ): Promise<any> {
+    const skip = (page - 1) * limit;
+    const query: any = {
+      'refundRequest': { $exists: true },
+      isDeleted: false
+    };
+
+    if (status) {
+      query['refundRequest.status'] = status;
+    }
+
+    const [requests, total] = await Promise.all([
+      this.orderModel
+        .find(query)
+        .populate('userId', 'name email phoneNumber')
+        .populate('astrologerId', 'name phoneNumber')
+        .populate('refundRequest.requestedBy', 'name email')
+        .populate('refundRequest.processedBy', 'name email')
+        .sort({ 'refundRequest.requestedAt': -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.orderModel.countDocuments(query)
+    ]);
+
+    return {
+      success: true,
+      data: {
+        refundRequests: requests,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      }
+    };
+  }
+
+  async getRefundStats(): Promise<any> {
+    const [
+      totalRequests,
+      pendingRequests,
+      approvedRequests,
+      rejectedRequests,
+      totalRefunded
+    ] = await Promise.all([
+      this.orderModel.countDocuments({
+        'refundRequest': { $exists: true },
+        isDeleted: false
+      }),
+      this.orderModel.countDocuments({
+        'refundRequest.status': 'pending',
+        isDeleted: false
+      }),
+      this.orderModel.countDocuments({
+        'refundRequest.status': 'approved',
+        isDeleted: false
+      }),
+      this.orderModel.countDocuments({
+        'refundRequest.status': 'rejected',
+        isDeleted: false
+      }),
+      this.orderModel.aggregate([
+        {
+          $match: {
+            status: 'refunded',
+            'payment.refundAmount': { $exists: true },
+            isDeleted: false
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$payment.refundAmount' }
+          }
+        }
+      ])
+    ]);
+
+    return {
+      success: true,
+      data: {
+        totalRequests,
+        pendingRequests,
+        approvedRequests,
+        rejectedRequests,
+        totalRefunded: totalRefunded[0]?.total || 0
+      }
+    };
+  }
+
+  async processRefundRequest(
+    orderId: string,
+    adminId: string,
+    processDto: {
+      action: 'approve' | 'reject';
+      refundPercentage?: number;
+      adminNotes?: string;
+      rejectionReason?: string;
+    }
+  ): Promise<any> {
+    const order = await this.orderModel.findOne({
+      orderId,
+      'refundRequest.status': 'pending',
+      status: 'refund_requested',
+      isDeleted: false
+    });
+
+    if (!order || !order.refundRequest) {
+      throw new NotFoundException('Refund request not found or already processed');
+    }
+
+    if (processDto.action === 'approve') {
+      // Calculate refund amount
+      const refundPercentage = processDto.refundPercentage || 100;
+      const refundAmount = (order.totalAmount * refundPercentage) / 100;
+
+      // Update refund request
+      order.refundRequest.status = 'approved';
+      order.refundRequest.processedAt = new Date();
+      order.refundRequest.processedBy = this.toObjectId(adminId);
+      order.refundRequest.adminNotes = processDto.adminNotes;
+      order.refundRequest.refundAmount = refundAmount;
+      order.refundRequest.refundPercentage = refundPercentage;
+
+      order.status = 'refund_approved';
+
+      // Process actual refund
+      try {
+        const refundTxn = await this.walletService.creditToWallet(
+          order.userId.toString(),
+          refundAmount,
+          orderId,
+          `Refund approved for order ${orderId} - ${refundPercentage}% refund`
+        );
+
+        // Update payment details
+        if (!order.payment) {
+          order.payment = { paymentStatus: 'refunded' };
+        }
+        order.payment.paymentStatus = 'refunded';
+        order.payment.refundedAt = new Date();
+        order.payment.refundAmount = refundAmount;
+        order.payment.refundTransactionId = refundTxn.transactionId;
+
+        order.status = 'refunded';
+
+        await order.save();
+
+        // Log activity
+        await this.activityLogService.log({
+          adminId,
+          action: 'refund.approve',
+          module: 'orders',
+          targetId: orderId,
+          targetType: 'Order',
+          status: 'success',
+          details: {
+            refundAmount,
+            refundPercentage,
+            notes: processDto.adminNotes
+          },
+        });
+
+        // Notify user
+        await this.notificationService.sendNotification({
+          recipientId: order.userId.toString(),
+          recipientModel: 'User',
+          type: 'payment_success',
+          title: 'Refund Approved',
+          message: `Your refund request for order ${orderId} has been approved. ₹${refundAmount} has been credited to your wallet.`,
+          priority: 'high',
+        });
+
+        this.logger.log(`Refund approved: ${orderId} | Amount: ₹${refundAmount} | Admin: ${adminId}`);
+
+        return {
+          success: true,
+          message: 'Refund approved and processed successfully',
+          data: {
+            orderId: order.orderId,
+            refundAmount,
+            refundPercentage,
+            refundTransactionId: order.payment.refundTransactionId
+          }
+        };
+      } catch (error: any) {
+        order.refundRequest.status = 'pending'; // Rollback
+        order.status = 'refund_requested';
+        await order.save();
+
+        this.logger.error(`Refund processing failed for ${orderId}: ${error.message}`);
+        throw new BadRequestException(`Refund processing failed: ${error.message}`);
+      }
+    } else {
+      // Reject refund
+      order.refundRequest.status = 'rejected';
+      order.refundRequest.processedAt = new Date();
+      order.refundRequest.processedBy = this.toObjectId(adminId);
+      order.refundRequest.adminNotes = processDto.adminNotes;
+      order.refundRequest.rejectionReason = processDto.rejectionReason;
+
+      order.status = 'refund_rejected';
+
+      await order.save();
+
+      // Log activity
+      await this.activityLogService.log({
+        adminId,
+        action: 'refund.reject',
+        module: 'orders',
+        targetId: orderId,
+        targetType: 'Order',
+        status: 'success',
+        details: {
+          reason: processDto.rejectionReason,
+          notes: processDto.adminNotes
+        },
+      });
+
+      // Notify user
+      await this.notificationService.sendNotification({
+        recipientId: order.userId.toString(),
+        recipientModel: 'User',
+        type: 'general',
+        title: 'Refund Request Rejected',
+        message: `Your refund request for order ${orderId} has been rejected. ${processDto.rejectionReason || ''}`,
+        priority: 'medium',
+      });
+
+      this.logger.log(`Refund rejected: ${orderId} | Reason: ${processDto.rejectionReason} | Admin: ${adminId}`);
+
+      return {
+        success: true,
+        message: 'Refund request rejected',
+        data: {
+          orderId: order.orderId,
+          rejectionReason: processDto.rejectionReason
+        }
+      };
+    }
+  }
+
+  // ===== LEGACY: Direct Refund (for backward compatibility) =====
+  async refundOrderDirect(
+    orderId: string,
+    adminId: string,
+    refundDto: any
+  ): Promise<any> {
+    const order = await this.orderModel.findOne({ orderId, isDeleted: false });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const refundAmount = refundDto.amount || order.totalAmount;
+
+    // Process refund
+    const refundTxn = await this.walletService.creditToWallet(
+      order.userId.toString(),
+      refundAmount,
+      orderId,
+      `Direct refund by admin: ${refundDto.reason || 'No reason provided'}`
+    );
+
+    // Update order
+    order.status = 'refunded';
+    if (!order.payment) {
+      order.payment = { paymentStatus: 'refunded' };
+    }
+    order.payment.paymentStatus = 'refunded';
+    order.payment.refundedAt = new Date();
+    order.payment.refundAmount = refundAmount;
+    order.payment.refundTransactionId = refundTxn.transactionId;
+
+    await order.save();
+
+    // Log activity
+    await this.activityLogService.log({
+      adminId,
+      action: 'order.refund.direct',
+      module: 'orders',
+      targetId: orderId,
+      targetType: 'Order',
+      status: 'success',
+      details: {
+        amount: refundAmount,
+        reason: refundDto.reason,
       },
+    });
+
+    // Notify user
+    await this.notificationService.sendNotification({
+      recipientId: order.userId.toString(),
+      recipientModel: 'User',
+      type: 'payment_success',
+      title: 'Refund Processed',
+      message: `Your refund of ₹${refundAmount} for order ${orderId} has been processed.`,
+      priority: 'high',
+    });
+
+    return {
+      success: true,
+      message: 'Refund processed successfully',
+      data: {
+        orderId: order.orderId,
+        refundAmount,
+        refundTransactionId: order.payment.refundTransactionId
+      }
     };
   }
 }

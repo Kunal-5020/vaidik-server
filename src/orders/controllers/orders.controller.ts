@@ -16,12 +16,10 @@ import {
   BadRequestException
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { AdminAuthGuard } from '../../admin/guards/admin-auth.guard'; // ✅ NEW: Admin guard
 import { OrdersService } from '../services/orders.service';
 import { AddReviewDto } from '../dto/add-review.dto';
 import { CancelOrderDto } from '../dto/cancel-order.dto';
 import { RequestRefundDto } from '../dto/request-refund.dto';
-import { ProcessRefundDto } from '../dto/process-refund.dto';
 
 interface AuthenticatedRequest extends Request {
   user: { _id: string; role?: string };
@@ -122,34 +120,6 @@ export class OrdersController {
     return this.ordersService.getRefundStatus(orderId, req.user._id);
   }
 
-  // ✅ NEW: Admin - Get all refund requests
-  @Get('admin/refunds/pending')
-  @UseGuards(AdminAuthGuard)
-  async getPendingRefunds(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number
-  ) {
-    return this.ordersService.getPendingRefundRequests(page, limit);
-  }
-
-  // ✅ NEW: Admin - Process refund request
-  @Patch('admin/refunds/:orderId/process')
-  @UseGuards(AdminAuthGuard)
-  async processRefund(
-    @Param('orderId') orderId: string,
-    @Req() req: AuthenticatedRequest,
-    @Body(ValidationPipe) processDto: ProcessRefundDto
-  ) {
-    if (processDto.action === 'reject' && !processDto.rejectionReason) {
-      throw new BadRequestException('Rejection reason is required');
-    }
-
-    return this.ordersService.processRefundRequest(
-      orderId,
-      req.user._id,
-      processDto
-    );
-  }
 
   // Get order statistics
   @Get('stats/summary')
