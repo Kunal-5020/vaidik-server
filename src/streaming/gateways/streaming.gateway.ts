@@ -353,31 +353,114 @@ async handleJoinStream(
     return { success: true };
   }
 
-  /**
-   * Call accepted
-   */
-  @SubscribeMessage('call_accepted')
-  handleCallAccepted(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      streamId: string;
-      userId: string;
-      userName: string;
-      callType: 'voice' | 'video';
-      callMode: 'public' | 'private';
+/**
+ * Call accepted - FIXED VERSION WITH TYPE SAFETY
+ */
+@SubscribeMessage('call_accepted')
+async handleCallAccepted(
+  @ConnectedSocket() client: Socket,
+  @MessageBody() data: {
+    streamId: string;
+    userId: string;
+    userName: string;
+    callType: 'voice' | 'video';
+    callMode: 'public' | 'private';
+    callerAgoraUid: number;
+  }
+) {
+  try {
+    console.log('====================================');
+    console.log('✅ CALL ACCEPTED EVENT (GATEWAY)');
+    console.log('Stream ID:', data.streamId);
+    console.log('User ID:', data.userId);
+    console.log('====================================');
+
+    // ✅ Get the caller's socket ID
+    const callerSocketId = this.userSockets.get(data.userId);
+    
+    console.log('📝 Found caller socket:', callerSocketId);
+
+    if (callerSocketId) {
+      // ✅ Get the full stream data
+      const stream = await this.streamSessionService.getStreamById(data.streamId);
+      
+      if (!stream) {
+        console.error('❌ Stream not found');
+        return { success: false, message: 'Stream not found' };
+      }
+
+      if (!stream.currentCall) {
+        console.error('❌ No current call found');
+        return { success: false, message: 'No current call' };
+      }
+
+      // ✅ TYPE SAFETY: Check if agoraChannelName exists
+      if (!stream.agoraChannelName) {
+        console.error('❌ Agora channel name not found');
+        return { success: false, message: 'Invalid stream configuration' };
+      }
+
+      // ✅ Generate NEW token for the caller with their UID
+      const agoraService = this.streamSessionService.getAgoraService();
+      const callerToken = agoraService.generateBroadcasterToken(
+        stream.agoraChannelName, // ✅ Now TypeScript knows this is a string
+        data.callerAgoraUid
+      );
+
+      // ✅ Send FULL credentials to the specific caller
+      const callCredentials = {
+        streamId: data.streamId,
+        userId: data.userId,
+        userName: data.userName,
+        callType: data.callType,
+        callMode: data.callMode,
+        callerAgoraUid: data.callerAgoraUid,
+        // ✅ CRITICAL: Include these for the caller to join
+        channelName: stream.agoraChannelName,
+        token: callerToken,
+        uid: data.callerAgoraUid,
+        appId: process.env.AGORA_APP_ID || '203397a168f8469bb8e672cd15eb3eb6',
+        hostAgoraUid: stream.hostAgoraUid,
+      };
+
+      console.log('====================================');
+      console.log('📡 SENDING CALL CREDENTIALS TO CALLER');
+      console.log('To Socket:', callerSocketId);
+      console.log('Channel:', callCredentials.channelName);
+      console.log('Caller UID:', callCredentials.callerAgoraUid);
+      console.log('====================================');
+
+      // ✅ Send to SPECIFIC caller with credentials
+      this.server.to(callerSocketId).emit('call_started', callCredentials);
+      
+      console.log('✅ Call credentials sent to caller');
+    } else {
+      console.error('❌ Caller socket not found for user:', data.userId);
     }
-  ) {
-    // Notify all viewers
+
+    // ✅ Broadcast to ALL viewers (for split-screen display)
     this.server.to(data.streamId).emit('call_started', {
       userId: data.userId,
       userName: data.userName,
       callType: data.callType,
       callMode: data.callMode,
+      callerAgoraUid: data.callerAgoraUid,
       timestamp: new Date()
     });
 
+    console.log('✅ Call started broadcast to all viewers');
+    console.log('====================================');
+
     return { success: true };
+  } catch (error) {
+    console.error('====================================');
+    console.error('❌ CALL ACCEPTED ERROR');
+    console.error('Error:', error);
+    console.error('====================================');
+    return { success: false, message: error.message };
   }
+}
+
 
  /**
  * Reject call request

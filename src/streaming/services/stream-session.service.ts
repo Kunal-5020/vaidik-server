@@ -622,9 +622,17 @@ async cancelCallRequest(streamId: string, userId: string): Promise<any> {
   }
 
   /**
-   * Accept call request
-   */
-  async acceptCallRequest(streamId: string, userId: string, hostId: string): Promise<any> {
+ * Accept call request - FIXED VERSION
+ */
+async acceptCallRequest(streamId: string, userId: string, hostId: string): Promise<any> {
+  try {
+    console.log('====================================');
+    console.log('✅ ACCEPTING CALL REQUEST');
+    console.log('Stream ID:', streamId);
+    console.log('User ID:', userId);
+    console.log('Host ID:', hostId);
+    console.log('====================================');
+
     const stream = await this.streamModel.findOne({ streamId, hostId });
     if (!stream) {
       throw new NotFoundException('Stream not found');
@@ -644,19 +652,24 @@ async cancelCallRequest(streamId: string, userId: string): Promise<any> {
 
     const request = stream.callWaitlist[requestIndex];
 
-    // Generate Agora token for caller
+    // ✅ Generate Agora token for caller
     const callerUid = this.streamAgoraService.generateUid();
     const callerToken = this.streamAgoraService.generateBroadcasterToken(
       stream.agoraChannelName!,
       callerUid
     );
 
+    console.log('🎥 Generated Agora credentials for caller:');
+    console.log('  Channel:', stream.agoraChannelName);
+    console.log('  Caller UID:', callerUid);
+    console.log('  Token:', callerToken.substring(0, 20) + '...');
+
     // Calculate price
     const pricePerMinute = request.callType === 'video' 
       ? stream.callSettings.videoCallPrice 
       : stream.callSettings.voiceCallPrice;
 
-    // Update stream
+    // ✅ Update stream with current call info
     stream.currentCall = {
       isOnCall: true,
       callerId: request.userId,
@@ -664,7 +677,7 @@ async cancelCallRequest(streamId: string, userId: string): Promise<any> {
       callType: request.callType,
       callMode: request.callMode,
       startedAt: new Date(),
-      callerAgoraUid: callerUid,
+      callerAgoraUid: callerUid, // ✅ Store caller UID
       isCameraOn: request.callType === 'video'
     };
     stream.currentState = 'on_call';
@@ -687,6 +700,10 @@ async cancelCallRequest(streamId: string, userId: string): Promise<any> {
 
     await transaction.save();
 
+    console.log('✅ Call accepted successfully');
+    console.log('✅ Returning caller Agora UID:', callerUid);
+
+    // ✅ CRITICAL: Return BOTH uid and callerAgoraUid
     return {
       success: true,
       message: 'Call request accepted',
@@ -694,14 +711,20 @@ async cancelCallRequest(streamId: string, userId: string): Promise<any> {
         callId: transaction._id,
         channelName: stream.agoraChannelName,
         token: callerToken,
-        uid: callerUid,
+        uid: callerUid,                // ✅ For viewer to use
+        callerAgoraUid: callerUid,     // ✅ For host to render video
+        hostAgoraUid: stream.hostAgoraUid, // ✅ Host's UID
         appId: this.streamAgoraService.getAppId(),
         callType: request.callType,
         callMode: request.callMode,
         maxDuration: stream.callSettings.maxCallDuration
       }
     };
+  } catch (error) {
+    this.logger.error('❌ Accept call error:', error);
+    throw error;
   }
+}
 
   /**
  * Reject call request
@@ -1283,6 +1306,19 @@ async sendGift(streamId: string, userId: string, giftData: any): Promise<any> {
   }
 }
 
+/**
+ * Get stream by ID (for gateway)
+ */
+async getStreamById(streamId: string) {
+  return this.streamModel.findOne({ streamId }).lean();
+}
+
+/**
+ * Get Agora service (for gateway to generate tokens)
+ */
+getAgoraService() {
+  return this.streamAgoraService;
+}
 
 }
 
