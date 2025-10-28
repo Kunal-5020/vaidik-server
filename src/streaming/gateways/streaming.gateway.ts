@@ -503,27 +503,43 @@ handleCallRejected(
   return { success: true };
 }
 
-  /**
-   * Call ended
-   */
-  @SubscribeMessage('call_ended')
-  handleCallEnded(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      streamId: string;
-      duration: number;
-      charge: number;
-    }
-  ) {
-    // Notify all viewers
-    this.server.to(data.streamId).emit('call_finished', {
-      duration: data.duration,
-      charge: data.charge,
-      timestamp: new Date()
-    });
-
-    return { success: true };
+ /**
+ * Call ended - FIXED VERSION
+ */
+@SubscribeMessage('call_ended')
+handleCallEnded(
+  @ConnectedSocket() client: Socket,
+  @MessageBody() data: {
+    streamId: string;
+    duration: number;
+    charge: number;
   }
+) {
+  console.log('====================================');
+  console.log('📞 CALL ENDED EVENT');
+  console.log('Stream ID:', data.streamId);
+  console.log('Duration:', data.duration);
+  console.log('====================================');
+  
+  // ✅ Emit BOTH events for compatibility
+  this.server.to(data.streamId).emit('call_ended', {
+    duration: data.duration,
+    charge: data.charge,
+    timestamp: new Date().toISOString()
+  });
+  
+  this.server.to(data.streamId).emit('call_finished', {
+    duration: data.duration,
+    charge: data.charge,
+    timestamp: new Date().toISOString()
+  });
+  
+  console.log('✅ Call ended events emitted to all viewers');
+
+
+  return { success: true };
+}
+
 
   /**
    * Call mode changed
@@ -716,4 +732,6 @@ handleStreamHeartbeat(
 
   return { success: true };
 }
+
+
 }

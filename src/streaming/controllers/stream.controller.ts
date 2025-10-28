@@ -165,4 +165,19 @@ async sendGift(
 ) {
   return this.streamSessionService.sendGift(streamId, req.user._id, giftData);
 }
+
+/**
+ * End user's own call
+ * POST /streams/:streamId/call/end-user-call
+ */
+@Post(':streamId/call/end-user-call')
+@UseGuards(JwtAuthGuard)
+async endUserCall(
+  @Param('streamId') streamId: string,
+  @Req() req: AuthenticatedRequest
+) {
+  const userId = req.user._id;
+  return this.streamSessionService.endUserCall(streamId, userId);
+}
+
 }

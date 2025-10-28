@@ -1320,5 +1320,105 @@ getAgoraService() {
   return this.streamAgoraService;
 }
 
+/**
+ * End user's own call (when viewer leaves)
+ * POST /streams/:streamId/call/end-user-call
+ */
+async endUserCall(streamId: string, userId: string): Promise<any> {
+  try {
+    console.log('====================================');
+    console.log('📞 USER ENDING THEIR OWN CALL');
+    console.log('Stream ID:', streamId);
+    console.log('User ID:', userId);
+    console.log('====================================');
+    
+    const stream = await this.streamModel.findOne({ streamId });
+    if (!stream) {
+      throw new NotFoundException('Stream not found');
+    }
+
+    console.log('Current Call State:', stream.currentCall);
+    console.log('Caller ID:', stream.currentCall?.callerId?.toString());
+    console.log('User ID:', userId);
+
+    // ✅ FIX: Convert ObjectId to string for comparison
+    if (!stream.currentCall?.isOnCall || 
+        stream.currentCall.callerId?.toString() !== userId.toString()) {
+      // ✅ Still perform local cleanup even if backend state is inconsistent
+      this.logger.warn(`⚠️ User ${userId} not on active call, but allowing cleanup`);
+      
+      return {
+        success: true,
+        message: 'Call ended (already cleared)',
+        data: {
+          duration: 0,
+          charge: 0
+        }
+      };
+    }
+
+    const endTime = new Date();
+    const duration = Math.floor((endTime.getTime() - stream.currentCall.startedAt.getTime()) / 1000);
+
+    // Find and update transaction
+    const transaction = await this.callTransactionModel.findOne({
+      streamId,
+      userId: new Types.ObjectId(userId),
+      endedAt: { $exists: false }
+    });
+
+    let charge = 0;
+    
+    if (transaction) {
+      transaction.endedAt = endTime;
+      transaction.duration = duration;
+      transaction.totalCharge = (duration / 60) * transaction.pricePerMinute;
+      transaction.status = 'completed';
+      charge = transaction.totalCharge;
+      
+      await transaction.save();
+
+      // Update stream revenue
+      stream.totalCallRevenue = (stream.totalCallRevenue || 0) + transaction.totalCharge;
+      stream.totalRevenue = (stream.totalRevenue || 0) + transaction.totalCharge;
+    }
+
+    // Clear current call
+    stream.currentCall = undefined as any;
+    stream.currentState = 'streaming';
+    stream.totalCalls = (stream.totalCalls || 0) + 1;
+
+    await stream.save();
+
+    this.logger.log(`✅ User ${userId} ended their call - Duration: ${duration}s, Charge: ₹${charge}`);
+
+    return {
+      success: true,
+      message: 'Call ended successfully',
+      data: {
+        duration,
+        charge
+      }
+    };
+  } catch (error) {
+    this.logger.error('❌ End user call error:', error);
+    
+    // ✅ Don't throw error - allow frontend to cleanup
+    if (error instanceof NotFoundException || error instanceof BadRequestException) {
+      return {
+        success: true,
+        message: 'Call already ended',
+        data: {
+          duration: 0,
+          charge: 0
+        }
+      };
+    }
+    
+    throw error;
+  }
+}
+
+
 }
 
