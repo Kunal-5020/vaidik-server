@@ -203,7 +203,7 @@ export class User {
   // === ACCOUNT STATUS ===
   @Prop({ 
     required: true,
-    enum: ['active', 'suspended', 'deleted'],
+    enum: ['active', 'suspended','blocked', 'deleted'],
     default: 'active',
   })
   status: string;
