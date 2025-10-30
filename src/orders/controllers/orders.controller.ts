@@ -30,6 +30,12 @@ interface AuthenticatedRequest extends Request {
 export class OrdersController {
   constructor(private ordersService: OrdersService) {}
 
+  // Get order statistics
+  @Get('stats/summary')
+  async getOrderStats(@Req() req: AuthenticatedRequest) {
+    return this.ordersService.getUserOrderStats(req.user._id);
+  }
+
   // Get user's orders
   @Get()
   async getOrders(
@@ -120,10 +126,4 @@ export class OrdersController {
     return this.ordersService.getRefundStatus(orderId, req.user._id);
   }
 
-
-  // Get order statistics
-  @Get('stats/summary')
-  async getOrderStats(@Req() req: AuthenticatedRequest) {
-    return this.ordersService.getUserOrderStats(req.user._id);
-  }
 }

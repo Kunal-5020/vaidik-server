@@ -1,12 +1,15 @@
+// src/chat/schemas/chat-session.schema.ts
+
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
+// ✅ ADD: Export the document type
 export type ChatSessionDocument = ChatSession & Document;
 
 @Schema({ timestamps: true, collection: 'chat_sessions' })
 export class ChatSession {
   @Prop({ required: true, unique: true, index: true })
-  sessionId: string; // "CHAT_20251002_ABC123"
+  sessionId: string;
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
   userId: Types.ObjectId;
@@ -15,7 +18,7 @@ export class ChatSession {
   astrologerId: Types.ObjectId;
 
   @Prop({ required: true })
-  orderId: string; // Reference to Order
+  orderId: string;
 
   @Prop({ 
     required: true,
@@ -32,7 +35,10 @@ export class ChatSession {
   endTime?: Date;
 
   @Prop({ default: 0 })
-  duration: number; // in seconds
+  duration: number;
+
+  @Prop({ default: 0 })
+  billedDuration: number;
 
   @Prop({ required: true })
   ratePerMinute: number;
@@ -41,13 +47,66 @@ export class ChatSession {
   totalAmount: number;
 
   @Prop({ default: 0 })
+  platformCommission: number;
+
+  @Prop({ default: 0 })
+  astrologerEarning: number;
+
+  @Prop({ default: false })
+  isPaid: boolean;
+
+  @Prop()
+  paidAt?: Date;
+
+  @Prop({ default: 0 })
   messageCount: number;
 
   @Prop()
   lastMessageAt?: Date;
 
+  @Prop({
+    type: {
+      content: String,
+      type: String,
+      sentBy: String,
+      sentAt: Date
+    }
+  })
+  lastMessage?: {
+    content: string;
+    type: string;
+    sentBy: string;
+    sentAt: Date;
+  };
+
+  @Prop({
+    type: {
+      userId: { type: Types.ObjectId },
+      isOnline: { type: Boolean, default: false },
+      lastSeen: Date
+    }
+  })
+  userStatus?: {
+    userId: Types.ObjectId;
+    isOnline: boolean;
+    lastSeen?: Date;
+  };
+
+  @Prop({
+    type: {
+      astrologerId: { type: Types.ObjectId },
+      isOnline: { type: Boolean, default: false },
+      lastSeen: Date
+    }
+  })
+  astrologerStatus?: {
+    astrologerId: Types.ObjectId;
+    isOnline: boolean;
+    lastSeen?: Date;
+  };
+
   @Prop()
-  endedBy?: string; // 'user' | 'astrologer' | 'system'
+  endedBy?: string;
 
   @Prop()
   endReason?: string;
@@ -56,6 +115,7 @@ export class ChatSession {
   createdAt: Date;
 }
 
+// ✅ CRITICAL: Export the schema
 export const ChatSessionSchema = SchemaFactory.createForClass(ChatSession);
 
 // Indexes

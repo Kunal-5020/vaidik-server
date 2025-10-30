@@ -22,19 +22,29 @@ export class WalletService {
     private paypalService: PayPalService,
   ) {}
 
+  private generateTransactionId(prefix: string = 'TXN'): string {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+    return `${prefix}_${timestamp}_${random}`;
+  }
+
   // ✅ Gateway Factory
   private getPaymentGateway(gateway: string): PaymentGatewayService {
-    switch (gateway) {
-      case 'razorpay':
-        return this.razorpayService;
-      case 'stripe':
-        return this.stripeService;
-      case 'paypal':
-        return this.paypalService;
-      default:
-        throw new BadRequestException('Unsupported payment gateway');
-    }
+  const normalizedGateway = gateway?.toLowerCase(); // ✅ Normalize
+  
+  switch (normalizedGateway) {
+    case 'razorpay':
+      return this.razorpayService;
+    case 'stripe':
+      return this.stripeService;
+    case 'paypal':
+      return this.paypalService;
+    default:
+      throw new BadRequestException(
+        `Unsupported payment gateway: ${gateway}. Supported: razorpay, stripe, paypal`
+      );
   }
+}
 
   // ✅ UPDATED: Create recharge with gateway integration
   async createRechargeTransaction(
@@ -48,7 +58,8 @@ export class WalletService {
       throw new NotFoundException('User not found');
     }
 
-    const transactionId = `TXN_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
+    // Then use it:
+    const transactionId = this.generateTransactionId('TXN');
 
     // Create transaction record
     const transaction = new this.transactionModel({
@@ -146,6 +157,11 @@ export class WalletService {
     orderId: string,
     description: string
   ): Promise<WalletTransactionDocument> {
+
+    if (amount <= 0) {
+    throw new BadRequestException('Amount must be greater than 0');
+  }
+
     const user = await this.userModel.findById(userId);
     if (!user) {
       throw new NotFoundException('User not found');
@@ -362,5 +378,47 @@ export class WalletService {
     }
     return user.wallet.balance;
   }
+
+  // ✅ ADD: Get payment logs (recharge transactions with gateway details)
+async getPaymentLogs(
+  userId: string,
+  page: number = 1,
+  limit: number = 20,
+  status?: string
+): Promise<any> {
+  const skip = (page - 1) * limit;
+  const query: any = {
+    userId,
+    type: 'recharge' // Only recharge transactions
+  };
+
+  if (status) {
+    query.status = status;
+  }
+
+  const [logs, total] = await Promise.all([
+    this.transactionModel
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .select('transactionId amount paymentGateway paymentId status description createdAt')
+      .lean(),
+    this.transactionModel.countDocuments(query)
+  ]);
+
+  return {
+    success: true,
+    data: {
+      logs,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    }
+  };
 }
 
+}

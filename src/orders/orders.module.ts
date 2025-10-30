@@ -16,6 +16,6 @@ import { PaymentsModule } from '../payments/payments.module'; // ✅ ADD THIS IF
   ],
   controllers: [OrdersController],
   providers: [OrdersService],
-  exports: [OrdersService],
+  exports: [OrdersService, MongooseModule],
 })
 export class OrdersModule {}

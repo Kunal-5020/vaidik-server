@@ -25,6 +25,27 @@ interface AuthenticatedRequest extends Request {
 export class WalletController {
   constructor(private walletService: WalletService) {}
 
+    // Get wallet statistics
+  @Get('stats')
+  async getWalletStats(@Req() req: AuthenticatedRequest) {
+    return this.walletService.getWalletStats(req.user._id);
+  }
+
+  @Get('payment-logs')
+async getPaymentLogs(
+  @Req() req: AuthenticatedRequest,
+  @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+  @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  @Query('status') status?: string
+) {
+  return this.walletService.getPaymentLogs(
+    req.user._id,
+    page,
+    limit,
+    status
+  );
+}
+
   // Create recharge transaction
   @Post('recharge')
   async rechargeWallet(
@@ -75,12 +96,6 @@ export class WalletController {
     @Req() req: AuthenticatedRequest
   ) {
     return this.walletService.getTransactionDetails(transactionId, req.user._id);
-  }
-
-  // Get wallet statistics
-  @Get('stats')
-  async getWalletStats(@Req() req: AuthenticatedRequest) {
-    return this.walletService.getWalletStats(req.user._id);
   }
   
 }

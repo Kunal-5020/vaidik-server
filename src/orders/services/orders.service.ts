@@ -5,10 +5,9 @@ import {
   NotFoundException, 
   BadRequestException,
   Logger,
-  InternalServerErrorException 
 } from '@nestjs/common';
-import { InjectModel, InjectConnection } from '@nestjs/mongoose';
-import { Model, Types, Connection } from 'mongoose';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
 import { Order, OrderDocument } from '../schemas/orders.schema';
 import { WalletService } from '../../payments/services/wallet.service';
 
@@ -18,7 +17,6 @@ export class OrdersService {
 
   constructor(
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
-    @InjectConnection() private connection: Connection,
     private walletService: WalletService, // ✅ Inject WalletService
   ) {}
 
@@ -248,69 +246,57 @@ export class OrdersService {
 
   // ===== REFUND SYSTEM =====
 
-  // Request refund
   async requestRefund(
     orderId: string,
     userId: string,
     reason: string
   ): Promise<any> {
-    const session = await this.connection.startSession();
-    session.startTransaction();
+    const order = await this.orderModel.findOne({
+      orderId,
+      userId: this.toObjectId(userId),
+      status: 'completed',
+      isDeleted: false
+    });
 
-    try {
-      const order = await this.orderModel.findOne({
-        orderId,
-        userId: this.toObjectId(userId),
-        status: 'completed',
-        isDeleted: false
-      }).session(session);
-
-      if (!order) {
-        throw new NotFoundException('Order not found or not eligible for refund');
-      }
-
-      // Check if already refunded or refund requested
-      if (order.status === 'refunded') {
-        throw new BadRequestException('Order already refunded');
-      }
-
-      if (order.refundRequest && order.refundRequest.status === 'pending') {
-        throw new BadRequestException('Refund request already submitted');
-      }
-
-      // Create refund request
-      order.refundRequest = {
-        requestedAt: new Date(),
-        requestedBy: this.toObjectId(userId),
-        reason,
-        status: 'pending',
-        refundAmount: order.totalAmount,
-        refundPercentage: 100
-      };
-
-      order.status = 'refund_requested';
-      await order.save({ session });
-
-      await session.commitTransaction();
-
-      this.logger.log(`Refund requested: ${orderId} | User: ${userId} | Amount: ${order.totalAmount}`);
-
-      return {
-        success: true,
-        message: 'Refund request submitted successfully',
-        data: {
-          orderId: order.orderId,
-          refundAmount: order.totalAmount,
-          status: 'pending'
-        }
-      };
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
+    if (!order) {
+      throw new NotFoundException('Order not found or not eligible for refund');
     }
+
+    // Check if already refunded or refund requested
+    if (order.status === 'refunded') {
+      throw new BadRequestException('Order already refunded');
+    }
+
+    if (order.refundRequest && order.refundRequest.status === 'pending') {
+      throw new BadRequestException('Refund request already submitted');
+    }
+
+    // Create refund request
+    order.refundRequest = {
+      requestedAt: new Date(),
+      requestedBy: this.toObjectId(userId),
+      reason,
+      status: 'pending',
+      refundAmount: order.totalAmount,
+      refundPercentage: 100
+    };
+
+    order.status = 'refund_requested';
+    await order.save();
+
+    this.logger.log(`Refund requested: ${orderId} | User: ${userId} | Amount: ${order.totalAmount}`);
+
+    return {
+      success: true,
+      message: 'Refund request submitted successfully',
+      data: {
+        orderId: order.orderId,
+        refundAmount: order.totalAmount,
+        status: 'pending'
+      }
+    };
   }
+
 
   // Get refund status
   async getRefundStatus(orderId: string, userId: string): Promise<any> {
@@ -395,66 +381,57 @@ export class OrdersService {
   }
 
   // ===== CANCEL ORDER =====
+ // ✅ UPDATED: Cancel order (without transactions)
   async cancelOrder(
     orderId: string,
     userId: string,
     reason: string,
     cancelledBy: 'user' | 'astrologer' | 'system' | 'admin'
   ): Promise<any> {
-    const session = await this.connection.startSession();
-    session.startTransaction();
+    const order = await this.orderModel.findOne({
+      orderId,
+      userId: this.toObjectId(userId),
+      status: { $in: ['pending', 'ongoing'] },
+      isDeleted: false
+    });
 
-    try {
-      const order = await this.orderModel.findOne({
-        orderId,
-        userId: this.toObjectId(userId),
-        status: { $in: ['pending', 'ongoing'] },
-        isDeleted: false
-      }).session(session);
-
-      if (!order) {
-        throw new NotFoundException('Order not found or cannot be cancelled');
-      }
-
-      order.status = 'cancelled';
-      order.cancellationReason = reason;
-      order.cancelledBy = cancelledBy;
-      order.cancelledAt = new Date();
-
-      // If payment was made, trigger refund
-      if (order.payment?.paymentStatus === 'paid' && order.totalAmount > 0) {
-        try {
-          await this.walletService.creditToWallet(
-            order.userId.toString(),
-            order.totalAmount,
-            orderId,
-            `Refund for cancelled order ${orderId}`
-          );
-
-          order.payment.paymentStatus = 'refunded';
-          order.payment.refundedAt = new Date();
-          order.payment.refundAmount = order.totalAmount;
-        } catch (error: any) {
-          this.logger.error(`Failed to refund cancelled order: ${error.message}`);
-        }
-      }
-
-      await order.save({ session });
-      await session.commitTransaction();
-
-      this.logger.log(`Order cancelled: ${orderId} | By: ${cancelledBy}`);
-
-      return {
-        success: true,
-        message: 'Order cancelled successfully',
-        data: order
-      };
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
+    if (!order) {
+      throw new NotFoundException('Order not found or cannot be cancelled');
     }
+
+    order.status = 'cancelled';
+    order.cancellationReason = reason;
+    order.cancelledBy = cancelledBy;
+    order.cancelledAt = new Date();
+
+    // If payment was made, trigger refund
+    if (order.payment?.paymentStatus === 'paid' && order.totalAmount > 0) {
+      try {
+        const refundTxn = await this.walletService.creditToWallet(
+          order.userId.toString(),
+          order.totalAmount,
+          orderId,
+          `Refund for cancelled order ${orderId}`
+        );
+
+        order.payment.paymentStatus = 'refunded';
+        order.payment.refundedAt = new Date();
+        order.payment.refundAmount = order.totalAmount;
+        order.payment.refundTransactionId = refundTxn.transactionId;
+      } catch (error: any) {
+        this.logger.error(`Failed to refund cancelled order: ${error.message}`);
+      }
+    }
+
+    await order.save();
+
+    this.logger.log(`Order cancelled: ${orderId} | By: ${cancelledBy}`);
+
+    return {
+      success: true,
+      message: 'Order cancelled successfully',
+      data: order
+    };
   }
 
   // ===== STATISTICS =====
