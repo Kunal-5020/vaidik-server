@@ -1,23 +1,34 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
+import * as path from 'path';
+import * as fs from 'fs';
 
 @Injectable()
 export class FcmService {
   private readonly logger = new Logger(FcmService.name);
 
-  constructor(private configService: ConfigService) {
-    const serviceAccount = this.configService.get<string>('FIREBASE_SERVICE_ACCOUNT_PATH');
-    
-    if (serviceAccount && !admin.apps.length) {
-      try {
-        admin.initializeApp({
-          credential: admin.credential.cert(require(serviceAccount)),
-        });
-        this.logger.log('Firebase Admin initialized successfully');
-      } catch (error: any) {
-        this.logger.error(`Failed to initialize Firebase: ${error.message}`);
+constructor() {
+    try {
+      // ✅ Always resolve from project root, not from dist
+      const serviceAccountPath = path.resolve(
+        process.cwd(),
+        'src/config/firebase-service-account.json'
+      );
+
+      if (!fs.existsSync(serviceAccountPath)) {
+        throw new Error(`Service account file not found at: ${serviceAccountPath}`);
       }
+
+      const serviceAccount = require(serviceAccountPath);
+
+      if (!admin.apps.length) {
+        admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount),
+        });
+        this.logger.log('✅ Firebase Admin initialized successfully (from JSON file)');
+      }
+    } catch (error: any) {
+      this.logger.error(`❌ Failed to initialize Firebase: ${error.message}`);
     }
   }
 

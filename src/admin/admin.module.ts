@@ -24,6 +24,7 @@ import { AdminAstrologersController } from './controllers/admin-astrologers.cont
 import { AdminOrdersController } from './controllers/admin-orders.controller';
 import { AdminPaymentsController } from './controllers/admin-payments.controller';
 import { AdminAnalyticsController } from './controllers/admin-analytics.controller';
+import { AdminNotificationController } from './controllers/admin-notification.controller';
 
 // Services
 import { AdminAuthService } from './services/admin-auth.service';
@@ -34,6 +35,7 @@ import { AdminPaymentsService } from './services/admin-payments.service';
 import { AdminAnalyticsService } from './services/admin-analytics.service';
 import { AdminActivityLogService } from './services/admin-activity-log.service';
 import { AdminRegistrationService } from './services/admin-registration.service';
+import { NotificationSchedulerService } from './services/notification-scheduler.service';
 
 // Import other modules
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -79,7 +81,8 @@ import { AdminAuthGuard } from './guards/admin-auth.guard';
     AdminAnalyticsController,
     AdminManagementController,
     AdminActivityLogsController,
-    AdminRegistrationController 
+    AdminRegistrationController,
+    AdminNotificationController,
   ],
   providers: [
     AdminAuthService,
@@ -91,7 +94,8 @@ import { AdminAuthGuard } from './guards/admin-auth.guard';
     AdminActivityLogService,
     AdminRegistrationService,
     AdminAuthGuard,
+    NotificationSchedulerService,
   ],
-  exports: [AdminAuthService, AdminActivityLogService, AdminAuthGuard, JwtModule,],
+  exports: [AdminAuthService, AdminActivityLogService, AdminAuthGuard, JwtModule, NotificationSchedulerService,],
 })
 export class AdminModule {}

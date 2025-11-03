@@ -17,7 +17,6 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { AstrologersModule } from './astrologers/astrologers.module';
 import { ChatModule } from './chat/chat.module';
-import { FirebaseModule } from './firebase/firebase.module';
 import { CallsModule } from './calls/calls.module';
 import { StreamingModule } from './streaming/streaming.module';
 import { AdminModule } from './admin/admin.module';
@@ -96,7 +95,6 @@ import { UploadModule } from './upload/upload.module';
     UsersModule,
     AstrologersModule,
     ChatModule,
-    FirebaseModule,
     CallsModule,
     StreamingModule,
     AdminModule,

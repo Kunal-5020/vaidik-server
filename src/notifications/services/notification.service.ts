@@ -1,10 +1,11 @@
+// notifications/services/notification.service.ts (ENHANCED)
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Notification, NotificationDocument } from '../schemas/notification.schema';
-import { FcmService } from './fcm.service';
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
+import { NotificationDeliveryService } from './notification-delivery.service';
 
 @Injectable()
 export class NotificationService {
@@ -12,10 +13,10 @@ export class NotificationService {
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
-    private fcmService: FcmService,
+    private deliveryService: NotificationDeliveryService,
   ) {}
 
-  // ✅ Create and send notification (all in one)
+  // ✅ Main method: Create and send notification (hybrid delivery)
   async sendNotification(data: {
     recipientId: string;
     recipientModel: 'User' | 'Astrologer';
@@ -29,7 +30,7 @@ export class NotificationService {
   }): Promise<NotificationDocument> {
     const notificationId = `NOTIF_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
 
-    // Create in-app notification
+    // 1. Create notification in database
     const notification = new this.notificationModel({
       notificationId,
       recipientId: data.recipientId,
@@ -43,72 +44,150 @@ export class NotificationService {
       priority: data.priority || 'medium',
       isRead: false,
       isPushSent: false,
+      isSocketSent: false,
+      isBroadcast: false,
       createdAt: new Date(),
     });
 
     await notification.save();
 
-    // Send push notification in background (don't await)
-    this.sendPushNotification(notification).catch(err => {
-      console.error('Push notification failed:', err);
+    // 2. Get FCM token
+    let fcmToken: string | undefined;
+    if (data.recipientModel === 'User') {
+      const user = await this.userModel.findById(data.recipientId).select('fcmToken').lean();
+      fcmToken = user?.fcmToken;
+    } else {
+      const astrologer = await this.astrologerModel.findById(data.recipientId).select('fcmToken').lean();
+      fcmToken = astrologer?.fcmToken;
+    }
+
+    // 3. Deliver via hybrid system (Socket.io + FCM) - non-blocking
+    this.deliveryService.deliverToMobile(notification, fcmToken).catch(err => {
+      console.error('Delivery failed:', err);
+    });
+
+    // 4. Notify admin portal - non-blocking
+    this.deliveryService.deliverToAdmins(notification).catch(err => {
+      console.error('Admin notification failed:', err);
     });
 
     return notification;
   }
 
-  // ✅ Send push notification
-  private async sendPushNotification(notification: NotificationDocument): Promise<void> {
-    try {
-      // Get FCM token
-      let fcmToken: string | undefined;
+  // ✅ Broadcast to all users
+  async broadcastToAllUsers(data: {
+    type: string;
+    title: string;
+    message: string;
+    data?: Record<string, any>;
+    imageUrl?: string;
+    actionUrl?: string;
+    priority?: 'low' | 'medium' | 'high' | 'urgent';
+  }): Promise<{ sent: number; failed: number }> {
+    // Get all users with FCM tokens
+    const users = await this.userModel.find({ fcmToken: { $exists: true, $ne: null } }).select('_id fcmToken').lean();
 
-      if (notification.recipientModel === 'User') {
-        const user = await this.userModel.findById(notification.recipientId).select('fcmToken');
-        fcmToken = user?.fcmToken;
-      } else {
-        const astrologer = await this.astrologerModel.findById(notification.recipientId).select('fcmToken');
-        fcmToken = astrologer?.fcmToken;
-      }
+    let sent = 0;
+    let failed = 0;
 
-      if (!fcmToken) {
-        console.log('No FCM token available for recipient');
-        return;
+    for (const user of users) {
+      try {
+        await this.sendNotification({
+          recipientId: user._id.toString(),
+          recipientModel: 'User',
+          ...data,
+        });
+        sent++;
+      } catch (error) {
+        failed++;
+        console.error(`Failed to send to user ${user._id}:`, error);
       }
-
-      // Convert data to string format for FCM
-      const fcmData: Record<string, string> = {};
-      if (notification.data) {
-        for (const [key, value] of Object.entries(notification.data)) {
-          fcmData[key] = String(value);
-        }
-      }
-      fcmData['notificationId'] = notification.notificationId;
-      fcmData['type'] = notification.type;
-      if (notification.actionUrl) {
-        fcmData['actionUrl'] = notification.actionUrl;
-      }
-
-      // Send push
-      const result = await this.fcmService.sendToDevice(
-        fcmToken,
-        notification.title,
-        notification.message,
-        fcmData,
-        notification.imageUrl
-      );
-
-      // Update notification
-      if (result.success) {
-        notification.isPushSent = true;
-        notification.pushSentAt = new Date();
-        await notification.save();
-      }
-    } catch (error) {
-      console.error('Error sending push:', error);
     }
+
+    // Notify admins about broadcast completion
+    this.deliveryService.sendRealtimeEventToAdmins('broadcast_complete', {
+      sent,
+      failed,
+      totalUsers: users.length,
+      broadcastType: data.type,
+    });
+
+    return { sent, failed };
   }
 
-  // ✅ Get user notifications
+  // ✅ Broadcast to specific users
+  async broadcastToUsers(
+    userIds: string[],
+    data: {
+      type: string;
+      title: string;
+      message: string;
+      data?: Record<string, any>;
+      imageUrl?: string;
+      actionUrl?: string;
+      priority?: 'low' | 'medium' | 'high' | 'urgent';
+    }
+  ): Promise<{ sent: number; failed: number }> {
+    let sent = 0;
+    let failed = 0;
+
+    for (const userId of userIds) {
+      try {
+        await this.sendNotification({
+          recipientId: userId,
+          recipientModel: 'User',
+          ...data,
+        });
+        sent++;
+      } catch (error) {
+        failed++;
+        console.error(`Failed to send to user ${userId}:`, error);
+      }
+    }
+
+    return { sent, failed };
+  }
+
+  // ✅ Notify astrologer's followers (livestream use case)
+  async notifyFollowers(astrologerId: string, data: {
+    type: 'stream_started' | 'stream_reminder';
+    title: string;
+    message: string;
+    data?: Record<string, any>;
+    imageUrl?: string;
+    actionUrl?: string;
+  }): Promise<{ sent: number; failed: number }> {
+    // Option B: Query users who follow this astrologer
+    const followers = await this.userModel
+      .find({ followedAstrologers: astrologerId })
+      .select('_id')
+      .lean();
+
+    if (followers.length === 0) {
+      return { sent: 0, failed: 0 };
+    }
+
+    const followerIds = followers.map(f => f._id.toString());
+
+    // Get astrologer details for notification
+    const astrologer = await this.astrologerModel.findById(astrologerId).lean();
+
+    return this.broadcastToUsers(followerIds, {
+      type: data.type,
+      title: data.title,
+      message: data.message,
+      data: {
+        ...data.data,
+        astrologerId,
+        astrologerName: astrologer?.name,
+      },
+      imageUrl: data.imageUrl || astrologer?.profilePicture, // ✅ FIXED: Use profilePicture
+      actionUrl: data.actionUrl,
+      priority: 'high', // Livestream notifications are high priority
+    });
+  }
+
+  // ✅ Get user notifications (mobile endpoint)
   async getUserNotifications(
     userId: string,
     page: number = 1,
@@ -187,5 +266,25 @@ export class NotificationService {
   // ✅ Get unread count
   async getUnreadCount(userId: string): Promise<number> {
     return this.notificationModel.countDocuments({ recipientId: userId, isRead: false });
+  }
+
+  // ✅ Get notification stats (for admin)
+  async getNotificationStats(): Promise<any> {
+    const [total, unread, byType] = await Promise.all([
+      this.notificationModel.countDocuments(),
+      this.notificationModel.countDocuments({ isRead: false }),
+      this.notificationModel.aggregate([
+        { $group: { _id: '$type', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
+    ]);
+
+    return {
+      total,
+      unread,
+      byType,
+      connectedUsers: this.deliveryService.getConnectedUsersCount(),
+      connectedAdmins: this.deliveryService.getConnectedAdminsCount(),
+    };
   }
 }
