@@ -122,107 +122,99 @@ export class AstrologerAuthService {
    * Verify OTP and login astrologer
    */
   async verifyLoginOtp(verifyOtpDto: VerifyOtpDto) {
-    const { phoneNumber, countryCode, otp } = verifyOtpDto;
+  const { phoneNumber, countryCode, otp } = verifyOtpDto;
 
-    this.logger.log('🔍 Starting astrologer OTP verification');
+  this.logger.log('🔍 Starting astrologer OTP verification');
 
-    // Step 1: Verify OTP
-    const isOtpValid = await this.otpService.verifyOTP(phoneNumber, countryCode, otp);
+  const isOtpValid = await this.otpService.verifyOTP(phoneNumber, countryCode, otp);
 
-    if (!isOtpValid) {
-      this.logger.error('❌ Invalid OTP');
-      throw new BadRequestException('Invalid or expired OTP');
-    }
-
-    this.logger.log('✅ OTP is valid');
-
-    // Step 2: Find user
-    const fullPhoneNumber = `+${countryCode}${phoneNumber}`;
-    
-    const user = await this.userModel.findOne({
-      phoneNumber: fullPhoneNumber
-    });
-
-    if (!user) {
-      throw new UnauthorizedException('User not found');
-    }
-
-    this.logger.log('✅ User found', { userId: user._id });
-
-    // Step 3: Find astrologer profile
-    const astrologer = await this.astrologerModel.findOne({
-      userId: user._id
-    });
-
-    if (!astrologer) {
-      throw new UnauthorizedException('Astrologer profile not found');
-    }
-
-    if (astrologer.accountStatus === 'suspended') {
-      throw new UnauthorizedException(
-        `Your account is suspended. Reason: ${astrologer.suspensionReason || 'Please contact support'}`
-      );
-    }
-
-    this.logger.log('✅ Astrologer found', { astrologerId: astrologer._id });
-
-    // Step 4: Update last active
-    astrologer.availability.lastActive = new Date();
-    await astrologer.save();
-
-    user.lastLoginAt = new Date();
-    await user.save();
-
-    // Step 5: Generate JWT tokens with astrologer info
-    // ✅ Don't pass role, just pass 'astrologer' string
-    const tokens = this.jwtAuthService.generateAstrologerTokens(
-      user._id as Types.ObjectId,
-      astrologer._id as Types.ObjectId,
-      user.phoneNumber,
-      'astrologer' // ✅ Hardcoded since this is astrologer auth service
-    );
-
-    // Step 6: Store refresh token
-    await this.cacheService.set(
-      `astrologer_refresh_${user._id}`,
-      tokens.refreshToken,
-      7 * 24 * 60 * 60
-    );
-
-    this.logger.log('✅ Astrologer login successful');
-
-    return {
-      success: true,
-      message: 'Login successful',
-      data: {
-        user: {
-          id: user._id,
-          phoneNumber: user.phoneNumber,
-          name: user.name || astrologer.name, // ✅ Fallback to astrologer name
-          profileImage: user.profileImage
-        },
-        astrologer: {
-          id: astrologer._id,
-          name: astrologer.name,
-          email: astrologer.email,
-          profilePicture: astrologer.profilePicture,
-          specializations: astrologer.specializations,
-          languages: astrologer.languages,
-          ratings: astrologer.ratings,
-          stats: astrologer.stats,
-          profileCompletion: astrologer.profileCompletion,
-          accountStatus: astrologer.accountStatus,
-          availability: {
-            isOnline: astrologer.availability.isOnline,
-            isAvailable: astrologer.availability.isAvailable,
-            isLive: astrologer.availability.isLive
-          }
-        },
-        tokens,
-        profileComplete: astrologer.profileCompletion.isComplete
-      }
-    };
+  if (!isOtpValid) {
+    this.logger.error('❌ Invalid OTP');
+    throw new BadRequestException('Invalid or expired OTP');
   }
+
+  this.logger.log('✅ OTP is valid');
+
+  const fullPhoneNumber = `+${countryCode}${phoneNumber}`;
+  
+  const user = await this.userModel.findOne({ phoneNumber: fullPhoneNumber });
+
+  if (!user) {
+    throw new UnauthorizedException('User not found');
+  }
+
+  this.logger.log('✅ User found', { userId: user._id });
+
+  const astrologer = await this.astrologerModel.findOne({ userId: user._id });
+
+  if (!astrologer) {
+    throw new UnauthorizedException('Astrologer profile not found');
+  }
+
+  // ✅ Check accountStatus (not account.status)
+  if (astrologer.accountStatus === 'suspended') {
+    throw new UnauthorizedException(
+      `Your account is suspended. Reason: ${astrologer.suspensionReason || 'Please contact support'}`
+    );
+  }
+
+  this.logger.log('✅ Astrologer found', { astrologerId: astrologer._id });
+
+  // ✅ REACTIVATE deleted/inactive astrologers (use accountStatus)
+  if (astrologer.accountStatus === 'deleted' || astrologer.accountStatus === 'inactive') {
+    this.logger.log(`♻️ Reactivating ${astrologer.accountStatus} astrologer`);
+    astrologer.accountStatus = 'active';
+  }
+
+  // ✅ REACTIVATE deleted/inactive users
+  if (user.status === 'deleted' || user.status === 'inactive') {
+    this.logger.log(`♻️ Reactivating ${user.status} user`);
+    user.status = 'active';
+  }
+
+  astrologer.availability.lastActive = new Date();
+  await astrologer.save();
+
+  user.lastLoginAt = new Date();
+  await user.save();
+
+  const tokens = this.jwtAuthService.generateAstrologerTokens(
+    user._id as Types.ObjectId,
+    astrologer._id as Types.ObjectId,
+    user.phoneNumber,
+    'astrologer'
+  );
+
+  await this.cacheService.set(
+    `astrologer_refresh_${(user._id as any).toString()}`,
+    tokens.refreshToken,
+    7 * 24 * 60 * 60
+  );
+
+  this.logger.log('✅ Astrologer login successful');
+
+  return {
+    success: true,
+    message: 'Login successful',
+    data: {
+      user: {
+        id: user._id,
+        phoneNumber: user.phoneNumber,
+        name: user.name || astrologer.name,
+        profileImage: user.profileImage
+      },
+      astrologer: {
+        id: astrologer._id,
+        name: astrologer.name,
+        profilePicture: astrologer.profilePicture,
+        accountStatus: astrologer.accountStatus,
+      },
+      tokens,
+    },
+  };
+}
+
+
 
   /**
    * Refresh astrologer token

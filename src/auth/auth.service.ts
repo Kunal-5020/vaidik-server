@@ -1,4 +1,4 @@
-// src/auth/auth.service.ts
+// src/auth/auth.service.ts (COMPLETE - FIXED)
 import { 
   Injectable, 
   BadRequestException, 
@@ -8,7 +8,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
-import * as crypto from 'crypto'; // Fixed import
+import * as crypto from 'crypto';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { OtpService } from './services/otp/otp.service';
 import { TruecallerService } from './services/truecaller.service';
@@ -20,85 +20,19 @@ import { TruecallerVerifyDto } from './dto/truecaller-verify.dto';
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly countryCurrencyMap: { [key: string]: string } = {
-    // Major countries
-    '91': 'INR',    // India
-    '1': 'USD',     // United States & Canada
-    '44': 'GBP',    // United Kingdom
-    '61': 'AUD',    // Australia
-    '64': 'NZD',    // New Zealand
-    
-    // European countries
-    '33': 'EUR',    // France
-    '34': 'EUR',    // Spain
-    '39': 'EUR',    // Italy
-    '49': 'EUR',    // Germany
-    '31': 'EUR',    // Netherlands
-    '32': 'EUR',    // Belgium
-    '43': 'EUR',    // Austria
-    '358': 'EUR',   // Finland
-    '351': 'EUR',   // Portugal
-    '353': 'EUR',   // Ireland
-    '30': 'EUR',    // Greece
-    
-    // Non-Euro European countries
-    '41': 'CHF',    // Switzerland
-    '46': 'SEK',    // Sweden
-    '47': 'NOK',    // Norway
-    '45': 'DKK',    // Denmark
-    '48': 'PLN',    // Poland
-    '420': 'CZK',   // Czech Republic
-    '36': 'HUF',    // Hungary
-    '40': 'RON',    // Romania
-    
-    // Asian countries
-    '86': 'CNY',    // China
-    '81': 'JPY',    // Japan
-    '82': 'KRW',    // South Korea
-    '66': 'THB',    // Thailand
-    '84': 'VND',    // Vietnam
-    '63': 'PHP',    // Philippines
-    '62': 'IDR',    // Indonesia
-    '60': 'MYR',    // Malaysia
-    '65': 'SGD',    // Singapore
-    '852': 'HKD',   // Hong Kong
-    '886': 'TWD',   // Taiwan
-    '92': 'PKR',    // Pakistan
-    '880': 'BDT',   // Bangladesh
-    '94': 'LKR',    // Sri Lanka
-    '977': 'NPR',   // Nepal
-    '95': 'MMK',    // Myanmar
-    
-    // Middle East
-    '971': 'AED',   // UAE
-    '966': 'SAR',   // Saudi Arabia
-    '974': 'QAR',   // Qatar
-    '965': 'KWD',   // Kuwait
-    '968': 'OMR',   // Oman
-    '973': 'BHD',   // Bahrain
-    '972': 'ILS',   // Israel
-    '90': 'TRY',    // Turkey
-    '20': 'EGP',    // Egypt
-    
-    // African countries
-    '27': 'ZAR',    // South Africa
-    '234': 'NGN',   // Nigeria
-    '254': 'KES',   // Kenya
-    '233': 'GHS',   // Ghana
-    '255': 'TZS',   // Tanzania
-    '256': 'UGX',   // Uganda
-    
-    // South American countries
-    '55': 'BRL',    // Brazil
-    '54': 'ARS',    // Argentina
-    '52': 'MXN',    // Mexico
-    '56': 'CLP',    // Chile
-    '57': 'COP',    // Colombia
-    '51': 'PEN',    // Peru
-    '58': 'VES',    // Venezuela
-    
-    // Other countries
-    '7': 'RUB',     // Russia
-    '380': 'UAH',   // Ukraine
+    '91': 'INR', '1': 'USD', '44': 'GBP', '61': 'AUD', '64': 'NZD',
+    '33': 'EUR', '34': 'EUR', '39': 'EUR', '49': 'EUR', '31': 'EUR',
+    '32': 'EUR', '43': 'EUR', '358': 'EUR', '351': 'EUR', '353': 'EUR',
+    '30': 'EUR', '41': 'CHF', '46': 'SEK', '47': 'NOK', '45': 'DKK',
+    '48': 'PLN', '420': 'CZK', '36': 'HUF', '40': 'RON', '86': 'CNY',
+    '81': 'JPY', '82': 'KRW', '66': 'THB', '84': 'VND', '63': 'PHP',
+    '62': 'IDR', '60': 'MYR', '65': 'SGD', '852': 'HKD', '886': 'TWD',
+    '92': 'PKR', '880': 'BDT', '94': 'LKR', '977': 'NPR', '95': 'MMK',
+    '971': 'AED', '966': 'SAR', '974': 'QAR', '965': 'KWD', '968': 'OMR',
+    '973': 'BHD', '972': 'ILS', '90': 'TRY', '20': 'EGP', '27': 'ZAR',
+    '234': 'NGN', '254': 'KES', '233': 'GHS', '255': 'TZS', '256': 'UGX',
+    '55': 'BRL', '54': 'ARS', '52': 'MXN', '56': 'CLP', '57': 'COP',
+    '51': 'PEN', '58': 'VES', '7': 'RUB', '380': 'UAH',
   };
 
   constructor(
@@ -110,15 +44,12 @@ export class AuthService {
     private cacheService: SimpleCacheService,
   ) {}
 
-  // ✅ ADDED: Helper method to get currency from country code
   private getCurrencyFromCountryCode(countryCode: string): string {
     const currency = this.countryCurrencyMap[countryCode];
-    
     if (!currency) {
       this.logger.warn(`⚠️ Unknown country code: ${countryCode}, defaulting to INR`);
-      return 'INR'; // Default fallback
+      return 'INR';
     }
-    
     this.logger.log(`✅ Currency mapped: ${countryCode} → ${currency}`);
     return currency;
   }
@@ -126,15 +57,13 @@ export class AuthService {
   async sendOtp(phoneNumber: string, countryCode: string) {
     try {
       const result = await this.otpService.sendOTP(phoneNumber, countryCode);
-      
       return {
         success: true,
         message: result.message,
         data: {
           phoneNumber,
           countryCode,
-          expiryTime: 600, // 10 minutes in seconds
-          // Only include OTP in development
+          expiryTime: 600,
           ...(process.env.NODE_ENV === 'development' && result.otp && { otp: result.otp })
         }
       };
@@ -146,15 +75,13 @@ export class AuthService {
   async resendOtp(phoneNumber: string, countryCode: string) {
     try {
       const result = await this.otpService.resendOTP(phoneNumber, countryCode);
-      
       return {
         success: true,
         message: result.message,
         data: {
           phoneNumber,
           countryCode,
-          expiryTime: 600, // 10 minutes in seconds
-          // Only include OTP in development
+          expiryTime: 600,
           ...(process.env.NODE_ENV === 'development' && result.otp && { otp: result.otp })
         }
       };
@@ -163,7 +90,7 @@ export class AuthService {
     }
   }
 
-async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<{
+  async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<{
   success: boolean;
   message: string;
   data: {
@@ -175,212 +102,151 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
   this.logger.log('🔍 AUTH SERVICE: Starting OTP verification process');
   
   try {
-    // Step 1: Log input validation
     this.logger.log('📤 AUTH SERVICE: Input validation', {
       phoneNumber,
       countryCode,
       otpLength: otp.length,
-      hasPhoneNumber: !!phoneNumber,
-      hasCountryCode: !!countryCode,
-      hasOtp: !!otp
     });
 
-    // Step 2: Verify OTP (we know this works)
-    this.logger.log('📤 AUTH SERVICE: Calling OtpService.verifyOTP...');
     const isOtpValid = await this.otpService.verifyOTP(phoneNumber, countryCode, otp);
-    
-    this.logger.log('📥 AUTH SERVICE: OTP validation result:', { isOtpValid });
     
     if (!isOtpValid) {
       this.logger.error('❌ AUTH SERVICE: OTP validation failed');
       throw new BadRequestException('Invalid OTP');
     }
 
-    this.logger.log('✅ AUTH SERVICE: OTP is valid, proceeding with user operations...');
+    this.logger.log('✅ AUTH SERVICE: OTP is valid');
 
-    // Step 3: Process phone number and hash
-    this.logger.log('📤 AUTH SERVICE: Processing phone number and hash...');
     const phoneHash = this.otpService.hashPhoneNumber(phoneNumber, countryCode);
     const fullPhoneNumber = `+${countryCode}${phoneNumber}`;
-
     const currency = this.getCurrencyFromCountryCode(countryCode);
 
     this.logger.log('✅ AUTH SERVICE: Phone processing completed', {
-      originalPhone: phoneNumber,
       fullPhoneNumber,
       countryCode,
       currency,
-      phoneHashLength: phoneHash.length,
-      phoneHashPreview: phoneHash.substring(0, 8) + '...'
     });
 
-    // Step 4: Database user search
-    this.logger.log('📤 AUTH SERVICE: Searching for existing user in database...');
-    let user;
-    try {
-      user = await this.userModel.findOne({ 
-        $or: [
-          { phoneNumber: phoneNumber }, // Legacy compatibility
-          { phoneNumber: fullPhoneNumber }, // New format with country code
-          { phoneHash }, // Direct hash match - this will catch existing user
-        ]
-      }).exec();
-      
-      this.logger.log('📥 AUTH SERVICE: User search completed', {
-        userFound: !!user,
-        userId: user?._id?.toString(),
-        userPhone: user?.phoneNumber,
-        searchCriteria: [phoneNumber, fullPhoneNumber]
-      });
-    } catch (dbError) {
-      this.logger.error('❌ AUTH SERVICE: Database user search failed:', {
-        error: dbError.message,
-        stack: dbError.stack?.substring(0, 200)
-      });
-      throw new BadRequestException('Database error during user search');
-    }
+    this.logger.log('📤 AUTH SERVICE: Searching for existing user...');
+    let user = await this.userModel.findOne({ 
+      $or: [
+        { phoneNumber: phoneNumber },
+        { phoneNumber: fullPhoneNumber },
+        { phoneHash },
+      ]
+    }).exec();
+    
+    this.logger.log('📥 AUTH SERVICE: User search completed', {
+      userFound: !!user,
+      userId: user ? (user._id as any).toString() : 'N/A',
+      userStatus: user?.status,
+    });
     
     let isNewUser = false;
 
-    // Step 5: User creation or update
     if (!user) {
       this.logger.log('📤 AUTH SERVICE: Creating new user...');
-      try {
-        user = new this.userModel({
-          phoneNumber: fullPhoneNumber, // Store with country code
-          phoneHash,
-          countryCode,
-          isPhoneVerified: true,
-          status: 'active',
-          appLanguage: 'en',
-          registrationMethod: 'otp',
-          wallet: {
-            balance: 0,
-            totalRecharged: 0,
-            totalSpent: 0,
-            currency: currency,
-          },
-          stats: {
-            totalSessions: 0,
-            totalMinutesSpent: 0,
-            totalAmount: 0,
-            totalRatings: 0
-          },
-          orders: [],
-          walletTransactions: [],
-          remedies: [],
-          reports: [],
-          favoriteAstrologers: []
-        });
+      user = new this.userModel({
+        phoneNumber: fullPhoneNumber,
+        phoneHash,
+        countryCode,
+        isPhoneVerified: true,
+        status: 'active',
+        appLanguage: 'en',
+        registrationMethod: 'otp',
+        wallet: {
+          balance: 0,
+          totalRecharged: 0,
+          totalSpent: 0,
+          currency: currency,
+        },
+        stats: {
+          totalSessions: 0,
+          totalMinutesSpent: 0,
+          totalAmount: 0,
+          totalRatings: 0
+        },
+        orders: [],
+        walletTransactions: [],
+        remedies: [],
+        reports: [],
+        favoriteAstrologers: []
+      });
 
-        this.logger.log('📤 AUTH SERVICE: Saving new user to database...');
-        await user.save();
-        this.logger.log('✅ AUTH SERVICE: New user created successfully', {
-          userId: user._id.toString(),
-          phoneNumber: user.phoneNumber,
-          currency: user.wallet.currency,
-        });
-        isNewUser = true;
-      } catch (userCreateError) {
-        this.logger.error('❌ AUTH SERVICE: User creation failed:', {
-          error: userCreateError.message,
-          stack: userCreateError.stack?.substring(0, 300),
-          validationErrors: userCreateError.errors,
-          name: userCreateError.name
-        });
-        throw new BadRequestException(`Failed to create user: ${userCreateError.message}`);
+      await user.save();
+      this.logger.log('✅ AUTH SERVICE: New user created', {
+        userId: (user._id as any).toString(),
+        phoneNumber: user.phoneNumber,
+      });
+      isNewUser = true;
+    } else {
+      this.logger.log('📤 AUTH SERVICE: Existing user found, checking status...');
+      
+      // ✅ REACTIVATE deleted/inactive users
+      if (user.status === 'deleted' || user.status === 'inactive') {
+        this.logger.log(`♻️ AUTH SERVICE: Reactivating ${user.status} user: ${user.phoneNumber}`);
+        user.status = 'active';
       }
-    } else {
-      this.logger.log('📤 AUTH SERVICE: Updating existing user...');
+
+      const updateData: any = {
+        isPhoneVerified: true,
+        lastLoginAt: new Date(),
+        countryCode: countryCode,
+        status: 'active',
+      };
+
+      if (user.phoneHash !== phoneHash) {
+        updateData.phoneHash = phoneHash;
+      }
+
       try {
-    // ✅ Only update fields that might have changed, avoid phoneHash conflict
-    const updateData: any = {
-      isPhoneVerified: true,
-      lastLoginAt: new Date(),
-      countryCode: countryCode
-    };
-
-    // ✅ Only update phoneHash if it's different
-    if (user.phoneHash !== phoneHash) {
-      updateData.phoneHash = phoneHash;
-      this.logger.log('📤 AUTH SERVICE: Updating phoneHash (different from stored)');
-    } else {
-      this.logger.log('📤 AUTH SERVICE: phoneHash unchanged, skipping update');
+        user = await this.userModel.findOneAndUpdate(
+          { _id: user._id },
+          updateData,
+          { new: true }
+        );
+        
+        // ✅ FIX: Add null check after update
+        if (!user) {
+          throw new BadRequestException('User update returned null');
+        }
+        
+        this.logger.log('✅ AUTH SERVICE: Existing user updated', {
+          userId: (user._id as any).toString(),
+          status: user.status,
+        });
+      } catch (userUpdateError) {
+        if ((userUpdateError as any).code === 11000 && (userUpdateError as any).message.includes('phoneHash')) {
+          this.logger.warn('⚠️ AUTH SERVICE: phoneHash duplicate (same user)');
+        } else {
+          throw new BadRequestException(`Failed to update user: ${(userUpdateError as any).message}`);
+        }
+      }
     }
 
-    // Use findOneAndUpdate to avoid duplicate key issues
-    user = await this.userModel.findOneAndUpdate(
-      { _id: user._id },
-      updateData,
-      { new: true }
-    );
-    
-    this.logger.log('✅ AUTH SERVICE: Existing user updated successfully', {
-      userId: user._id.toString()
-    });
-  } catch (userUpdateError) {
-    this.logger.error('❌ AUTH SERVICE: User update failed:', {
-      error: userUpdateError.message,
-      code: userUpdateError.code,
-      stack: userUpdateError.stack?.substring(0, 300)
-    });
-    
-    // ✅ Handle duplicate key error gracefully
-    if (userUpdateError.code === 11000 && userUpdateError.message.includes('phoneHash')) {
-      this.logger.warn('⚠️ AUTH SERVICE: phoneHash duplicate error ignored (same user)');
-      // Continue with the existing user data - this is not a fatal error
-    } else {
-      throw new BadRequestException(`Failed to update user: ${userUpdateError.message}`);
+    // ✅ FIX: Add null check before using user
+    if (!user) {
+      throw new BadRequestException('User not found after creation/update');
     }
-  }
-}
 
-    // Step 6: Generate JWT tokens
     this.logger.log('📤 AUTH SERVICE: Generating JWT tokens...');
-    let tokens;
-    try {
-      tokens = this.jwtAuthService.generateTokenPair(
-        user._id as Types.ObjectId,
-        user.phoneNumber,
-        user.phoneHash
-      );
-      this.logger.log('✅ AUTH SERVICE: JWT tokens generated successfully', {
-        hasAccessToken: !!tokens.accessToken,
-        hasRefreshToken: !!tokens.refreshToken,
-        expiresIn: tokens.expiresIn,
-        accessTokenLength: tokens.accessToken?.length,
-        refreshTokenLength: tokens.refreshToken?.length
-      });
-    } catch (tokenError) {
-      this.logger.error('❌ AUTH SERVICE: Token generation failed:', {
-        error: tokenError.message,
-        stack: tokenError.stack?.substring(0, 300),
-        userId: user._id.toString()
-      });
-      throw new BadRequestException(`Failed to generate tokens: ${tokenError.message}`);
-    }
+    const tokens = this.jwtAuthService.generateTokenPair(
+      user._id as Types.ObjectId,
+      user.phoneNumber,
+      user.phoneHash
+    );
 
-    // Step 7: Store refresh token in cache
-    this.logger.log('📤 AUTH SERVICE: Storing refresh token in cache...');
     try {
       await this.cacheService.set(
-        `refresh_token_${user._id}`, 
+        `refresh_token_${(user._id as any).toString()}`, 
         tokens.refreshToken, 
-        7 * 24 * 60 * 60 // 7 days in seconds
+        7 * 24 * 60 * 60
       );
-      this.logger.log('✅ AUTH SERVICE: Refresh token stored in cache successfully');
+      this.logger.log('✅ AUTH SERVICE: Refresh token stored');
     } catch (cacheError) {
-      this.logger.error('❌ AUTH SERVICE: Cache storage failed:', {
-        error: cacheError.message,
-        stack: cacheError.stack?.substring(0, 300),
-        userId: user._id.toString()
-      });
-      // Don't fail the entire process for cache errors
-      this.logger.warn('⚠️ AUTH SERVICE: Continuing without cache storage');
+      this.logger.warn('⚠️ AUTH SERVICE: Cache storage failed, continuing');
     }
 
-    // Step 8: Prepare response
-    this.logger.log('📤 AUTH SERVICE: Preparing response...');
     const result = {
       success: true,
       message: isNewUser ? 'Registration successful' : 'Login successful',
@@ -403,38 +269,27 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
       }
     };
 
-    this.logger.log('✅ AUTH SERVICE: OTP verification completed successfully', {
-      success: result.success,
-      message: result.message,
+    this.logger.log('✅ AUTH SERVICE: OTP verification completed', {
       userId: result.data.user.id,
       isNewUser: result.data.isNewUser,
-      responseDataKeys: Object.keys(result.data)
     });
     
     return result;
 
   } catch (error) {
-    this.logger.error('❌ AUTH SERVICE: OTP verification process failed:', {
-      errorMessage: error.message,
-      errorType: error.constructor.name,
-      errorStatus: error.status,
-      errorStack: error.stack?.substring(0, 500),
-      inputData: {
-        phoneNumber,
-        countryCode,
-        otpLength: otp?.length
-      }
+    this.logger.error('❌ AUTH SERVICE: OTP verification failed:', {
+      errorMessage: (error as any).message,
+      errorType: (error as any).constructor.name,
     });
 
     if (error instanceof BadRequestException) {
       throw error;
     }
     
-    throw new BadRequestException(`OTP verification failed: ${error.message}`);
+    throw new BadRequestException(`OTP verification failed: ${(error as any).message}`);
   }
 }
 
-  // Fixed - Single refreshToken method
   async refreshToken(refreshToken: string) {
     try {
       const newTokens = this.jwtAuthService.refreshAccessToken(refreshToken);
@@ -451,8 +306,10 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
 
   async logout(userId: string) {
     try {
-      // Remove refresh token from cache
+      // ✅ DON'T change user status on logout
       await this.cacheService.del(`refresh_token_${userId}`);
+
+      this.logger.log('✅ AUTH SERVICE: User logged out', { userId });
 
       return {
         success: true,
@@ -464,164 +321,136 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
   }
 
   async verifyTruecaller(truecallerVerifyDto: TruecallerVerifyDto) {
-  try {
-    this.logger.log('🔍 Truecaller verification started');
+    try {
+      this.logger.log('🔍 Truecaller verification started');
 
-    // Verify with Truecaller and get user profile
-    this.logger.log('📤 Calling TruecallerService to verify and fetch profile...');
-    
-    const verification = await this.truecallerService.verifyOAuthCode(
-      truecallerVerifyDto.authorizationCode,
-      truecallerVerifyDto.codeVerifier
-    );
-
-    if (!verification.success || !verification.userProfile) {
-      this.logger.error('❌ Truecaller verification failed');
-      throw new BadRequestException(
-        verification.message || 'Truecaller verification failed'
+      const verification = await this.truecallerService.verifyOAuthCode(
+        truecallerVerifyDto.authorizationCode,
+        truecallerVerifyDto.codeVerifier
       );
-    }
 
-    this.logger.log('✅ Truecaller verification successful');
-
-    // Extract user profile from backend response
-    const { phoneNumber, countryCode, firstName, lastName } = verification.userProfile;
-    const phoneHash = this.generatePhoneHash(phoneNumber);
-    const fullName = `${firstName || ''} ${lastName || ''}`.trim() || 'User';
-
-    const currency = this.getCurrencyFromCountryCode(countryCode);
-
-    this.logger.log('📊 User profile data:', {
-      phoneNumber,
-      name: fullName,
-      countryCode,
-      currency,
-    });
-
-    // Find or create user
-    this.logger.log('🔍 Looking for existing user...');
-
-    let user = await this.userModel.findOne({
-      $or: [{ phoneNumber }, { phoneHash }],
-    });
-
-    let isNewUser = false;
-
-    if (!user) {
-      this.logger.log('📤 Creating new user with Truecaller data...');
-
-      user = new this.userModel({
-        phoneNumber,
-        phoneHash,
-        countryCode: countryCode,
-        name: fullName,
-        isPhoneVerified: true,
-        registrationMethod: 'truecaller',
-        status: 'active',
-        appLanguage: 'en',
-        notifications: {
-          liveEvents: true,
-          normal: true,
-        },
-        privacy: {
-          nameVisibleInReviews: true,
-          restrictions: {
-            astrologerChatAccessAfterEnd: true,
-            downloadSharedImages: true,
-            restrictChatScreenshots: true,
-            accessCallRecording: true,
-          },
-        },
-        wallet: {
-          balance: 0,
-          currency: currency,
-          totalSpent: 0,
-          totalRecharged: 0,
-        },
-        stats: {
-          totalSessions: 0,
-          totalMinutesSpent: 0,
-          totalAmount: 0,
-          totalRatings: 0,
-        },
-        orders: [],
-        walletTransactions: [],
-        remedies: [],
-        reports: [],
-        favoriteAstrologers: [],
-      });
-
-      await user.save();
-      isNewUser = true;
-
-      this.logger.log('✅ New user created:', {
-        userId: (user._id as Types.ObjectId).toString(),
-        name: fullName,
-        phoneNumber,
-        currency: currency,
-      });
-    } else {
-      this.logger.log('📤 Updating existing user...');
-
-      user.isPhoneVerified = true;
-      user.lastLoginAt = new Date();
-
-      if (!user.name || user.name === 'User') {
-        user.name = fullName;
-        this.logger.log('✅ Updated user name to:', fullName);
+      if (!verification.success || !verification.userProfile) {
+        this.logger.error('❌ Truecaller verification failed');
+        throw new BadRequestException(
+          verification.message || 'Truecaller verification failed'
+        );
       }
 
-      await user.save();
+      this.logger.log('✅ Truecaller verification successful');
 
-      this.logger.log('✅ Existing user updated:', {
-        userId: (user._id as Types.ObjectId).toString(),
-        name: user.name,
+      const { phoneNumber, countryCode, firstName, lastName } = verification.userProfile;
+      const phoneHash = this.generatePhoneHash(phoneNumber);
+      const fullName = `${firstName || ''} ${lastName || ''}`.trim() || 'User';
+      const currency = this.getCurrencyFromCountryCode(countryCode);
+
+      this.logger.log('📊 User profile data:', { phoneNumber, name: fullName });
+
+      let user = await this.userModel.findOne({
+        $or: [{ phoneNumber }, { phoneHash }],
       });
-    }
 
-    // Generate tokens
-    this.logger.log('🔐 Generating JWT tokens...');
-    const tokens = this.jwtAuthService.generateTokenPair(
-      user._id as Types.ObjectId,
-      user.phoneNumber,
-      user.phoneHash
-    );
+      let isNewUser = false;
 
-    // Store refresh token
-    await this.cacheService.set(
-      `refresh_token_${(user._id as Types.ObjectId).toString()}`,
-      tokens.refreshToken,
-      7 * 24 * 60 * 60
-    );
+      if (!user) {
+        this.logger.log('📤 Creating new user with Truecaller data...');
 
-    this.logger.log('✅ Truecaller authentication successful', {
-      userId: (user._id as Types.ObjectId).toString(),
-      isNewUser,
-      userName: user.name,
-    });
+        user = new this.userModel({
+          phoneNumber,
+          phoneHash,
+          countryCode: countryCode,
+          name: fullName,
+          isPhoneVerified: true,
+          registrationMethod: 'truecaller',
+          status: 'active', // ✅ SET TO ACTIVE
+          appLanguage: 'en',
+          wallet: {
+            balance: 0,
+            currency: currency,
+            totalSpent: 0,
+            totalRecharged: 0,
+          },
+          stats: {
+            totalSessions: 0,
+            totalMinutesSpent: 0,
+            totalAmount: 0,
+            totalRatings: 0,
+          },
+          orders: [],
+          walletTransactions: [],
+          remedies: [],
+          reports: [],
+          favoriteAstrologers: [],
+        });
 
-    return {
-      success: true,
-      message: isNewUser ? 'Welcome to VaidikTalk!' : 'Welcome back!',
-      data: {
-        user: this.sanitizeUser(user),
-        tokens,
+        await user.save();
+        isNewUser = true;
+
+        this.logger.log('✅ New user created via Truecaller', {
+          userId: (user._id as Types.ObjectId).toString(),
+          name: fullName,
+        });
+      } else {
+        this.logger.log('📤 Updating existing user...');
+
+        // ✅ REACTIVATE deleted/inactive users
+        if (user.status === 'deleted' || user.status === 'inactive') {
+          this.logger.log(`♻️ Reactivating ${user.status} user: ${user.phoneNumber}`);
+          user.status = 'active';
+        }
+
+        user.isPhoneVerified = true;
+        user.lastLoginAt = new Date();
+
+        if (!user.name || user.name === 'User') {
+          user.name = fullName;
+        }
+
+        await user.save();
+
+        this.logger.log('✅ Existing user updated', {
+          userId: (user._id as Types.ObjectId).toString(),
+          status: user.status,
+        });
+      }
+
+      this.logger.log('🔐 Generating JWT tokens...');
+      const tokens = this.jwtAuthService.generateTokenPair(
+        user._id as Types.ObjectId,
+        user.phoneNumber,
+        user.phoneHash
+      );
+
+      await this.cacheService.set(
+        `refresh_token_${(user._id as Types.ObjectId).toString()}`,
+        tokens.refreshToken,
+        7 * 24 * 60 * 60
+      );
+
+      this.logger.log('✅ Truecaller authentication successful', {
+        userId: (user._id as Types.ObjectId).toString(),
         isNewUser,
-      },
-    };
-  } catch (error) {
-    this.logger.error('❌ Truecaller authentication failed:', {
-      message: error.message,
-      stack: error.stack?.substring(0, 300),
-    });
+      });
 
-    throw new BadRequestException(
-      error.message || 'Truecaller login failed. Please use OTP login.'
-    );
+      return {
+        success: true,
+        message: isNewUser ? 'Welcome to VaidikTalk!' : 'Welcome back!',
+        data: {
+          user: this.sanitizeUser(user),
+          tokens,
+          isNewUser,
+        },
+      };
+    } catch (error) {
+      this.logger.error('❌ Truecaller authentication failed:', {
+        message: error.message,
+      });
+
+      throw new BadRequestException(
+        error.message || 'Truecaller login failed. Please use OTP login.'
+      );
+    }
   }
-}
 
-  // Get authentication options available
   async getAuthOptions(): Promise<{
     success: boolean;
     data: {
@@ -647,42 +476,10 @@ async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<
     };
   }
 
-  // Helper method: Generate phone hash for JWT payload
   private generatePhoneHash(phoneNumber: string): string {
     return crypto.createHash('sha256').update(phoneNumber).digest('hex').substring(0, 16);
   }
 
-  // Helper method: Parse phone number to extract country code
-  private parsePhoneNumber(fullPhoneNumber: string): { phoneNumber: string; countryCode: string } {
-    if (fullPhoneNumber.startsWith('+91')) {
-      return {
-        phoneNumber: fullPhoneNumber.substring(3),
-        countryCode: '91'
-      };
-    } else if (fullPhoneNumber.startsWith('+1')) {
-      return {
-        phoneNumber: fullPhoneNumber.substring(2),
-        countryCode: '1'
-      };
-    } else if (fullPhoneNumber.startsWith('+')) {
-      // Generic parsing for other countries
-      const match = fullPhoneNumber.match(/^\+(\d{1,4})(\d+)$/);
-      if (match) {
-        return {
-          phoneNumber: match[2],
-          countryCode: match[1]
-        };
-      }
-    }
-    
-    // Default assumption - Indian number
-    return {
-      phoneNumber: fullPhoneNumber.replace(/^\+?91/, ''),
-      countryCode: '91'
-    };
-  }
-
-  // Helper method: Remove sensitive data from user object
   private sanitizeUser(user: UserDocument): any {
     const userObj = user.toObject();
     delete userObj.phoneHash;

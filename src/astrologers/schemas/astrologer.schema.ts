@@ -284,11 +284,27 @@ export class Astrologer {
   @Prop()
   suspendedBy?: Types.ObjectId;
 
-  @Prop()
-  fcmToken?: string;
-
-  @Prop()
-  fcmTokenUpdatedAt?: Date;
+@Prop({
+    type: [
+      {
+        fcmToken: { type: String, required: true },
+        deviceId: String,
+        deviceType: { type: String, enum: ['android', 'ios', 'web'] },
+        deviceName: String,
+        lastActive: { type: Date, default: Date.now },
+        isActive: { type: Boolean, default: true },
+      },
+    ],
+    default: [],
+  })
+  devices: {
+    fcmToken: string;
+    deviceId?: string;
+    deviceType?: 'android' | 'ios' | 'web';
+    deviceName?: string;
+    lastActive: Date;
+    isActive: boolean;
+  }[];
 
   @Prop({ default: Date.now })
   createdAt: Date;

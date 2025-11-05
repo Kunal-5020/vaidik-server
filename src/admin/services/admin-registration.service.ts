@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import * as crypto from 'crypto';
 import { Registration, RegistrationDocument, RegistrationStatus, InterviewStatus } from '../../registration/schemas/registration.schema';
 import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
 import { User, UserDocument } from '../../users/schemas/user.schema';
@@ -285,29 +286,66 @@ export class AdminRegistrationService {
       let userId: Types.ObjectId;
 
       if (existingUser) {
-        userId = existingUser._id as Types.ObjectId; // ✅ Type cast
+        userId = existingUser._id as Types.ObjectId;
         console.log(`✅ User already exists: ${userId}`);
       } else {
+        // ✅ FIXED: Add all required fields
+        const phoneHash = this.generatePhoneHash(registration.phoneNumber);
+        const countryCode = this.extractCountryCode(registration.phoneNumber);
+
         const newUser = new this.userModel({
-          name: registration.name,
+          // ✅ REQUIRED FIELDS (was missing these)
           phoneNumber: registration.phoneNumber,
+          phoneHash: phoneHash,
+          countryCode: countryCode,
+          
+          // Basic info
+          name: registration.name,
           email: registration.email,
-          role: 'astrologer',
-          isPhoneVerified: true,
-          profileImage: registration.profilePicture,
-          dateOfBirth: registration.dateOfBirth,
           gender: registration.gender,
+          dateOfBirth: registration.dateOfBirth,
+          profileImage: registration.profilePicture,
+          
+          // Account status
+          status: 'active', // ✅ ADDED
+          isPhoneVerified: true,
+          appLanguage: 'en',
+          registrationMethod: 'otp',
+          
+          // Wallet & Stats
+          wallet: {
+            balance: 0,
+            totalRecharged: 0,
+            totalSpent: 0,
+            currency: 'INR',
+          },
+          stats: {
+            totalSessions: 0,
+            totalMinutesSpent: 0,
+            totalAmount: 0,
+            totalRatings: 0
+          },
+          
+          // Collections
+          orders: [],
+          walletTransactions: [],
+          remedies: [],
+          reports: [],
+          favoriteAstrologers: [],
+          
+          // Timestamps
           createdAt: new Date(),
           updatedAt: new Date()
         });
 
         await newUser.save();
-        userId = newUser._id as Types.ObjectId; // ✅ Type cast
+        userId = newUser._id as Types.ObjectId;
         console.log(`✅ New user created: ${userId}`);
       }
 
+      // ✅ Create Astrologer Profile
       const astrologer = new this.astrologerModel({
-        registrationId: registration._id as Types.ObjectId, // ✅ Type cast
+        registrationId: registration._id as Types.ObjectId,
         userId: userId,
         name: registration.name,
         phoneNumber: registration.phoneNumber,
@@ -317,8 +355,8 @@ export class AdminRegistrationService {
         bio: registration.bio || '',
         profilePicture: registration.profilePicture,
         experienceYears: 0,
-        specializations: registration.skills,
-        languages: registration.languagesKnown,
+        specializations: registration.skills || [],
+        languages: registration.languagesKnown || [],
         pricing: {
           chat: 0,
           call: 0,
@@ -338,39 +376,50 @@ export class AdminRegistrationService {
         accountStatus: 'active',
         isChatEnabled: false,
         isCallEnabled: false,
-        isLiveStreamEnabled: false
+        isLiveStreamEnabled: false,
+        availability: {
+          isOnline: false,
+          isAvailable: false,
+          isLive: false,
+          workingHours: []
+        }
       });
 
       await astrologer.save();
       console.log(`✅ Astrologer profile created: ${astrologer._id}`);
 
+      // ✅ Update Registration Status
       registration.status = RegistrationStatus.APPROVED;
       registration.approval = {
         approvedAt: new Date(),
         approvedBy: new Types.ObjectId(adminId),
         adminNotes: adminNotes || '',
-        astrologerId: astrologer._id as Types.ObjectId, // ✅ Type cast
+        astrologerId: astrologer._id as Types.ObjectId,
         canLogin: true
       };
 
       await registration.save();
 
-      // Send notification
-      await this.notificationService.sendNotification({
-        recipientId: (astrologer._id as Types.ObjectId).toString(), // ✅ Type cast
-        recipientModel: 'Astrologer',
-        type: 'astrologer_approved',
-        title: 'Application Approved! 🎉',
-        message: 'Congratulations! You can now login to complete your profile and start earning.',
-        priority: 'high'
-      });
+      // ✅ Send Notification
+      try {
+        await this.notificationService.sendNotification({
+          recipientId: (astrologer._id as Types.ObjectId).toString(),
+          recipientModel: 'Astrologer',
+          type: 'astrologer_approved',
+          title: 'Application Approved! 🎉',
+          message: 'Congratulations! You can now login to complete your profile and start earning.',
+          priority: 'high'
+        });
+      } catch (notifyError) {
+        console.warn('⚠️ Notification failed, but astrologer profile created successfully');
+      }
 
-      // Log activity
+      // ✅ Log Activity
       await this.activityLogService.log({
         adminId,
         action: 'registration.approved',
         module: 'registrations',
-        targetId: (registration._id as Types.ObjectId).toString(), // ✅ Type cast
+        targetId: (registration._id as Types.ObjectId).toString(),
         targetType: 'Registration',
         status: 'success',
         details: {
@@ -385,8 +434,32 @@ export class AdminRegistrationService {
 
     } catch (error) {
       console.error('❌ Error creating astrologer profile:', error);
-      throw new BadRequestException('Failed to create astrologer profile. Please try again.');
+      throw new BadRequestException(`Failed to create astrologer profile: ${(error as any).message}`);
     }
+  }
+
+  /**
+   * ✅ Helper: Generate phone hash
+   */
+  private generatePhoneHash(phoneNumber: string): string {
+    return crypto
+      .createHash('sha256')
+      .update(phoneNumber)
+      .digest('hex')
+      .substring(0, 16);
+  }
+
+  /**
+   * ✅ Helper: Extract country code from phone number
+   */
+  private extractCountryCode(phoneNumber: string): string {
+    if (phoneNumber.startsWith('+91')) return '91';
+    if (phoneNumber.startsWith('+1')) return '1';
+    if (phoneNumber.startsWith('+')) {
+      const match = phoneNumber.match(/^\+(\d{1,4})/);
+      return match ? match[1] : '91';
+    }
+    return '91'; // Default fallback
   }
 
   /**

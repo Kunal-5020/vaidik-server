@@ -1,7 +1,20 @@
-import { IsString, IsNotEmpty } from 'class-validator';
+// src/notifications/dto/register-device.dto.ts
+import { IsString, IsNotEmpty, IsOptional, IsEnum } from 'class-validator';
 
 export class RegisterDeviceDto {
-  @IsString({ message: 'FCM token must be a string' })
-  @IsNotEmpty({ message: 'FCM token is required' })
+  @IsString()
+  @IsNotEmpty()
   fcmToken: string;
+
+  @IsString()
+  @IsOptional()
+  deviceId?: string;
+
+  @IsEnum(['android', 'ios', 'web'])
+  @IsOptional()
+  deviceType?: 'android' | 'ios' | 'web';
+
+  @IsString()
+  @IsOptional()
+  deviceName?: string;
 }

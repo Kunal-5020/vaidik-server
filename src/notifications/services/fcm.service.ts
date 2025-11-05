@@ -86,23 +86,29 @@ constructor() {
     }
   }
 
-  // Send to multiple devices (batch)
+  /**
+   * Send notification to multiple devices (NEW)
+   */
   async sendToMultipleDevices(
     fcmTokens: string[],
     title: string,
     body: string,
     data?: Record<string, string>,
     imageUrl?: string
-  ): Promise<{ successCount: number; failureCount: number }> {
+  ): Promise<{ successCount: number; failureCount: number; failedTokens: string[] }> {
     try {
+      if (!fcmTokens || fcmTokens.length === 0) {
+        return { successCount: 0, failureCount: 0, failedTokens: [] };
+      }
+
       const message: admin.messaging.MulticastMessage = {
-        tokens: fcmTokens,
         notification: {
           title,
           body,
-          imageUrl,
+          ...(imageUrl && { imageUrl }),
         },
         data: data || {},
+        tokens: fcmTokens,
         android: {
           priority: 'high',
           notification: {
@@ -121,19 +127,27 @@ constructor() {
       };
 
       const response = await admin.messaging().sendEachForMulticast(message);
-      this.logger.log(
-        `📤 Batch push: ${response.successCount} success, ${response.failureCount} failed`
-      );
+
+      const failedTokens: string[] = [];
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          failedTokens.push(fcmTokens[idx]);
+        }
+      });
+
+      console.log(`✅ FCM Multicast: ${response.successCount} success, ${response.failureCount} failed`);
 
       return {
         successCount: response.successCount,
         failureCount: response.failureCount,
+        failedTokens,
       };
-    } catch (error: any) {
-      this.logger.error(`❌ Batch push failed: ${error.message}`);
+    } catch (error) {
+      console.error('❌ FCM multicast send error:', error);
       return {
         successCount: 0,
         failureCount: fcmTokens.length,
+        failedTokens: fcmTokens,
       };
     }
   }

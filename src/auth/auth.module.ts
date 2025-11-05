@@ -15,7 +15,6 @@ import { TruecallerService } from './services/truecaller.service'; // Added
 import { SimpleCacheService } from './services/cache/cache.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { OptionalAuthGuard } from './guards/optional-auth.guard';
 import { AstrologerAuthService } from './services/astrologer-auth.service';
 import { AstrologerAuthController } from './controllers/astrologer-auth.controller';
 
@@ -64,13 +63,11 @@ import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.
     SimpleCacheService, // Added
     JwtStrategy,
     JwtAuthGuard,
-    OptionalAuthGuard,
   ],
   exports: [
     AuthService,
     JwtAuthService,
     JwtAuthGuard,
-    OptionalAuthGuard,
     OtpService,
     SimpleCacheService, // Export for use in other modules
     PassportModule,

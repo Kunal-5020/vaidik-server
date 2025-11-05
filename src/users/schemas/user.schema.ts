@@ -221,11 +221,28 @@ export class User {
   @Prop({ required: false })
   lastIPAddress?: string;
 
-  @Prop()
-fcmToken?: string; // Firebase Cloud Messaging token for push notifications
+@Prop({
+    type: [
+      {
+        fcmToken: { type: String, required: true },
+        deviceId: String,
+        deviceType: { type: String, enum: ['android', 'ios', 'web'] },
+        deviceName: String,
+        lastActive: { type: Date, default: Date.now },
+        isActive: { type: Boolean, default: true },
+      },
+    ],
+    default: [],
+  })
+  devices: {
+    fcmToken: string;
+    deviceId?: string;
+    deviceType?: 'android' | 'ios' | 'web';
+    deviceName?: string;
+    lastActive: Date;
+    isActive: boolean;
+  }[];
 
-@Prop()
-fcmTokenUpdatedAt?: Date;
 
   createdAt: Date;
   updatedAt: Date;
@@ -238,6 +255,8 @@ UserSchema.index({ phoneNumber: 1, status: 1, createdAt: -1 });
 UserSchema.index({ phoneHash: 1 });
 UserSchema.index({ status: 1 });
 UserSchema.index({ createdAt: -1 });
+UserSchema.index({ 'devices.fcmToken': 1 });
+UserSchema.index({ 'devices.isActive': 1 });
 
 // === VIRTUAL FIELDS (Query from separate collections) ===
 UserSchema.virtual('orders', {
