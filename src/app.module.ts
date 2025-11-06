@@ -28,9 +28,12 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { RegistrationModule } from './registration/registration.module';
 import { UploadModule } from './upload/upload.module';
 
+import { ScheduleModule } from '@nestjs/schedule';
+
 @Module({
   imports: [
     // Global configuration
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       load: [databaseConfig, redisConfig, jwtConfig],

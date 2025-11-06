@@ -1,5 +1,5 @@
 // notifications/notifications.module.ts (ENHANCED)
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
@@ -14,13 +14,14 @@ import { NotificationDeliveryService } from './services/notification-delivery.se
 
 // Gateways
 import { MobileNotificationGateway } from './gateways/mobile-notification.gateway';
-import { AdminNotificationGateway } from './gateways/admin-notification.gateway';
 
 // Schemas
 import { Notification, NotificationSchema } from './schemas/notification.schema';
 import { ScheduledNotification, ScheduledNotificationSchema } from './schemas/scheduled-notification.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema';
+import { AdminModule } from 'src/admin/admin.module';
+
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.
       { name: User.name, schema: UserSchema },
       { name: Astrologer.name, schema: AstrologerSchema },
     ]),
+    forwardRef(() => require('../admin/admin.module').AdminModule),
   ],
   controllers: [NotificationController],
   providers: [
@@ -42,13 +44,11 @@ import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.
     FcmService,
     NotificationDeliveryService,
     MobileNotificationGateway,
-    AdminNotificationGateway,
   ],
   exports: [
     NotificationService,
     NotificationDeliveryService,
     MobileNotificationGateway,
-    AdminNotificationGateway,
     MongooseModule, // Export schemas for Admin Module
   ],
 })

@@ -94,25 +94,26 @@ export class AdminNotificationController {
   // ========== SCHEDULED NOTIFICATIONS ==========
 
   // ✅ Schedule notification
-  @Post('schedule')
-  async scheduleNotification(
-    @Req() req: AuthenticatedRequest,
-    @Body(ValidationPipe) scheduleDto: ScheduleNotificationDto
-  ) {
-    const scheduled = await this.schedulerService.scheduleNotification(
-      req.user._id,
-      {
-        ...scheduleDto,
-        scheduledFor: new Date(scheduleDto.scheduledFor),
-      }
-    );
+ @Post('schedule')
+async scheduleNotification(
+  @Req() req: AuthenticatedRequest,
+  @Body(ValidationPipe) scheduleDto: ScheduleNotificationDto
+) {
+  const scheduled = await this.schedulerService.scheduleNotification(
+    req.user._id,
+    {
+      ...scheduleDto,
+      scheduledFor: new Date(scheduleDto.scheduledFor),
+      // ✅ Type is now properly inferred from DTO
+    }
+  );
 
-    return {
-      success: true,
-      message: 'Notification scheduled successfully',
-      data: scheduled,
-    };
-  }
+  return {
+    success: true,
+    message: 'Notification scheduled successfully',
+    data: scheduled,
+  };
+}
 
   // ✅ Get all scheduled notifications
   @Get('scheduled')

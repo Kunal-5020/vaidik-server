@@ -23,4 +23,17 @@ export class VerifyOtpDto {
   @Length(6, 6, { message: 'OTP must be exactly 6 digits' })
   @Matches(/^\d{6}$/, { message: 'OTP must contain only numbers' })
   otp: string;
+
+  // ✅ ADD THESE FOR DEVICE STORAGE
+  @IsString()
+  fcmToken?: string;
+
+  @IsString()
+  deviceId?: string;
+
+  @IsString()
+  deviceType?: string; // 'android' | 'ios'
+
+  @IsString()
+  deviceName?: string;
 }

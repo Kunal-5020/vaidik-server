@@ -80,49 +80,51 @@ export class AuthController {
 
   @Post('verify-otp')
   @HttpCode(HttpStatus.OK)
-  async verifyOtp(@Body(ValidationPipe) verifyOtpDto: VerifyOtpDto) { // ✅ Using VerifyOtpDto
-    try {
-      this.logger.log('🔍 CONTROLLER: OTP verification request received', {
+  async verifyOtp(@Body(ValidationPipe) verifyOtpDto: VerifyOtpDto) {
+  try {
+    this.logger.log('🔍 CONTROLLER: OTP verification request received', {
+      phoneNumber: verifyOtpDto.phoneNumber,
+      countryCode: verifyOtpDto.countryCode,
+      otpLength: verifyOtpDto.otp?.length,
+      hasDeviceInfo: !!(verifyOtpDto.fcmToken && verifyOtpDto.deviceId)
+    });
+
+    // ✅ PASS DEVICE INFO
+    const result = await this.authService.verifyOtp(
+      verifyOtpDto.phoneNumber, 
+      verifyOtpDto.countryCode, 
+      verifyOtpDto.otp,
+      {
+        fcmToken: verifyOtpDto.fcmToken,
+        deviceId: verifyOtpDto.deviceId,
+        deviceType: verifyOtpDto.deviceType,
+        deviceName: verifyOtpDto.deviceName,
+      }
+    );
+
+    this.logger.log('✅ CONTROLLER: OTP verification successful', {
+      success: result.success,
+      message: result.message,
+      userId: result.data?.user?.id,
+      isNewUser: result.data?.isNewUser
+    });
+
+    return result;
+  } catch (error) {
+    this.logger.error('❌ CONTROLLER: OTP verification failed', {
+      error: error.message,
+      status: error.status,
+      stack: error.stack?.substring(0, 300),
+      requestData: {
         phoneNumber: verifyOtpDto.phoneNumber,
         countryCode: verifyOtpDto.countryCode,
-        otpLength: verifyOtpDto.otp?.length,
-        hasAllFields: !!(verifyOtpDto.phoneNumber && verifyOtpDto.countryCode && verifyOtpDto.otp)
-      });
-
-      // ✅ DTO validation ensures:
-      // - phoneNumber: 10-15 digits, numbers only
-      // - countryCode: 1-4 digits (e.g., 91 for India)
-      // - otp: exactly 6 digits, numbers only
-
-      const result = await this.authService.verifyOtp(
-        verifyOtpDto.phoneNumber, 
-        verifyOtpDto.countryCode, 
-        verifyOtpDto.otp
-      );
-
-      this.logger.log('✅ CONTROLLER: OTP verification successful', {
-        success: result.success,
-        message: result.message,
-        userId: result.data?.user?.id,
-        isNewUser: result.data?.isNewUser
-      });
-
-      return result;
-    } catch (error) {
-      this.logger.error('❌ CONTROLLER: OTP verification failed', {
-        error: error.message,
-        status: error.status,
-        stack: error.stack?.substring(0, 300),
-        requestData: {
-          phoneNumber: verifyOtpDto.phoneNumber,
-          countryCode: verifyOtpDto.countryCode,
-          otpLength: verifyOtpDto.otp?.length
-        }
-      });
-      
-      throw error;
-    }
+        otpLength: verifyOtpDto.otp?.length
+      }
+    });
+    
+    throw error;
   }
+}
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
@@ -220,7 +222,6 @@ export class AuthController {
     }
   }
 
-  // TrueCaller verification endpoint
 // TrueCaller verification endpoint
 @Post('verify-truecaller')
 @HttpCode(HttpStatus.OK)
@@ -229,11 +230,18 @@ async verifyTruecaller(@Body(ValidationPipe) truecallerVerifyDto: TruecallerVeri
     this.logger.log('🔍 CONTROLLER: TrueCaller OAuth verification request received', {
       hasAuthCode: !!truecallerVerifyDto.authorizationCode,
       hasCodeVerifier: !!truecallerVerifyDto.codeVerifier,
-      authCodeLength: truecallerVerifyDto.authorizationCode?.length,
-      verifierLength: truecallerVerifyDto.codeVerifier?.length
+      hasDeviceInfo: !!(truecallerVerifyDto.fcmToken && truecallerVerifyDto.deviceId)
     });
 
-    const result = await this.authService.verifyTruecaller(truecallerVerifyDto);
+    // ✅ EXTRACT DEVICE INFO
+    const deviceInfo = {
+      fcmToken: truecallerVerifyDto.fcmToken,
+      deviceId: truecallerVerifyDto.deviceId,
+      deviceType: truecallerVerifyDto.deviceType,
+      deviceName: truecallerVerifyDto.deviceName,
+    };
+
+    const result = await this.authService.verifyTruecaller(truecallerVerifyDto, deviceInfo);
     
     this.logger.log('✅ CONTROLLER: TrueCaller verification successful', {
       userId: result.data?.user?.id,

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common'
 import { MongooseModule } from '@nestjs/mongoose';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -44,6 +44,7 @@ import { PaymentsModule } from '../payments/payments.module';
 import { AdminManagementController } from './controllers/admin-management.controller';
 import { AdminActivityLogsController } from './controllers/admin-activity-logs.controller';
 import { AdminAuthGuard } from './guards/admin-auth.guard';
+import { AdminNotificationGateway } from './gateways/admin-notification.gateway';
 
 @Module({
   imports: [
@@ -69,8 +70,8 @@ import { AdminAuthGuard } from './guards/admin-auth.guard';
       { name: WalletTransaction.name, schema: WalletTransactionSchema },
       { name: PayoutRequest.name, schema: PayoutRequestSchema },
     ]),
-    NotificationsModule,
     PaymentsModule,
+    forwardRef(() => require('../notifications/notifications.module').NotificationsModule),
   ],
   controllers: [
     AdminAuthController,
@@ -95,7 +96,8 @@ import { AdminAuthGuard } from './guards/admin-auth.guard';
     AdminRegistrationService,
     AdminAuthGuard,
     NotificationSchedulerService,
+    AdminNotificationGateway,
   ],
-  exports: [AdminAuthService, AdminActivityLogService, AdminAuthGuard, JwtModule, NotificationSchedulerService,],
+  exports: [AdminAuthService, AdminActivityLogService, AdminAuthGuard, JwtModule, NotificationSchedulerService, MongooseModule, AdminNotificationGateway,],
 })
 export class AdminModule {}

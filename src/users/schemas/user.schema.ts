@@ -215,8 +215,6 @@ export class User {
   lastActiveAt?: Date;
 
   // === DEVICE INFO ===
-  @Prop({ type: [String], default: [] })
-  deviceTokens: string[];
 
   @Prop({ required: false })
   lastIPAddress?: string;

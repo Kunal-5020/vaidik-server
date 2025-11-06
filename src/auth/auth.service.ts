@@ -90,7 +90,7 @@ export class AuthService {
     }
   }
 
-  async verifyOtp(phoneNumber: string, countryCode: string, otp: string): Promise<{
+  async verifyOtp(phoneNumber: string, countryCode: string, otp: string, deviceInfo?: any): Promise<{
   success: boolean;
   message: string;
   data: {
@@ -247,6 +247,66 @@ export class AuthService {
       this.logger.warn('⚠️ AUTH SERVICE: Cache storage failed, continuing');
     }
 
+  if (deviceInfo?.fcmToken) {
+      this.logger.log('📱 AUTH SERVICE: Storing device token during login...', {
+        deviceType: deviceInfo.deviceType,
+        deviceName: deviceInfo.deviceName,
+      });
+
+      try {
+        // Check if device already exists
+        const existingDeviceIndex = user.devices?.findIndex(
+          (d: any) => d.fcmToken === deviceInfo.fcmToken
+        ) || -1;
+
+        if (existingDeviceIndex !== -1) {
+          // Update existing device
+          user.devices[existingDeviceIndex] = {
+            ...user.devices[existingDeviceIndex],
+            lastActive: new Date(),
+            isActive: true,
+          };
+          this.logger.log('✅ AUTH SERVICE: Device updated');
+        } else {
+          // Add new device
+          if (!user.devices) user.devices = [];
+          
+          user.devices.push({
+            fcmToken: deviceInfo.fcmToken,
+            deviceId: deviceInfo.deviceId,
+            deviceType: deviceInfo.deviceType,
+            deviceName: deviceInfo.deviceName,
+            lastActive: new Date(),
+            isActive: true,
+          });
+          this.logger.log('✅ AUTH SERVICE: Device added', {
+            totalDevices: user.devices.length,
+          });
+        }
+
+        // Keep only last 5 devices
+        if (user.devices.length > 5) {
+          user.devices = user.devices
+            .sort((a: any, b: any) => 
+              new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime()
+            )
+            .slice(0, 5);
+          this.logger.log('✅ AUTH SERVICE: Trimmed to 5 devices');
+        }
+
+        // Save user with device
+        await user.save();
+        this.logger.log('✅ AUTH SERVICE: Device saved to user document', {
+          totalDevices: user.devices.length,
+        });
+      } catch (deviceError) {
+        this.logger.error('❌ AUTH SERVICE: Device storage failed:', {
+          error: (deviceError as any).message,
+        });
+        // Don't fail login if device storage fails
+      }
+    }
+
     const result = {
       success: true,
       message: isNewUser ? 'Registration successful' : 'Login successful',
@@ -320,136 +380,190 @@ export class AuthService {
     }
   }
 
-  async verifyTruecaller(truecallerVerifyDto: TruecallerVerifyDto) {
-    try {
-      this.logger.log('🔍 Truecaller verification started');
+  async verifyTruecaller(truecallerVerifyDto: TruecallerVerifyDto, deviceInfo?: any) {
+  try {
+    this.logger.log('🔍 Truecaller verification started');
 
-      const verification = await this.truecallerService.verifyOAuthCode(
-        truecallerVerifyDto.authorizationCode,
-        truecallerVerifyDto.codeVerifier
-      );
+    const verification = await this.truecallerService.verifyOAuthCode(
+      truecallerVerifyDto.authorizationCode,
+      truecallerVerifyDto.codeVerifier
+    );
 
-      if (!verification.success || !verification.userProfile) {
-        this.logger.error('❌ Truecaller verification failed');
-        throw new BadRequestException(
-          verification.message || 'Truecaller verification failed'
-        );
-      }
-
-      this.logger.log('✅ Truecaller verification successful');
-
-      const { phoneNumber, countryCode, firstName, lastName } = verification.userProfile;
-      const phoneHash = this.generatePhoneHash(phoneNumber);
-      const fullName = `${firstName || ''} ${lastName || ''}`.trim() || 'User';
-      const currency = this.getCurrencyFromCountryCode(countryCode);
-
-      this.logger.log('📊 User profile data:', { phoneNumber, name: fullName });
-
-      let user = await this.userModel.findOne({
-        $or: [{ phoneNumber }, { phoneHash }],
-      });
-
-      let isNewUser = false;
-
-      if (!user) {
-        this.logger.log('📤 Creating new user with Truecaller data...');
-
-        user = new this.userModel({
-          phoneNumber,
-          phoneHash,
-          countryCode: countryCode,
-          name: fullName,
-          isPhoneVerified: true,
-          registrationMethod: 'truecaller',
-          status: 'active', // ✅ SET TO ACTIVE
-          appLanguage: 'en',
-          wallet: {
-            balance: 0,
-            currency: currency,
-            totalSpent: 0,
-            totalRecharged: 0,
-          },
-          stats: {
-            totalSessions: 0,
-            totalMinutesSpent: 0,
-            totalAmount: 0,
-            totalRatings: 0,
-          },
-          orders: [],
-          walletTransactions: [],
-          remedies: [],
-          reports: [],
-          favoriteAstrologers: [],
-        });
-
-        await user.save();
-        isNewUser = true;
-
-        this.logger.log('✅ New user created via Truecaller', {
-          userId: (user._id as Types.ObjectId).toString(),
-          name: fullName,
-        });
-      } else {
-        this.logger.log('📤 Updating existing user...');
-
-        // ✅ REACTIVATE deleted/inactive users
-        if (user.status === 'deleted' || user.status === 'inactive') {
-          this.logger.log(`♻️ Reactivating ${user.status} user: ${user.phoneNumber}`);
-          user.status = 'active';
-        }
-
-        user.isPhoneVerified = true;
-        user.lastLoginAt = new Date();
-
-        if (!user.name || user.name === 'User') {
-          user.name = fullName;
-        }
-
-        await user.save();
-
-        this.logger.log('✅ Existing user updated', {
-          userId: (user._id as Types.ObjectId).toString(),
-          status: user.status,
-        });
-      }
-
-      this.logger.log('🔐 Generating JWT tokens...');
-      const tokens = this.jwtAuthService.generateTokenPair(
-        user._id as Types.ObjectId,
-        user.phoneNumber,
-        user.phoneHash
-      );
-
-      await this.cacheService.set(
-        `refresh_token_${(user._id as Types.ObjectId).toString()}`,
-        tokens.refreshToken,
-        7 * 24 * 60 * 60
-      );
-
-      this.logger.log('✅ Truecaller authentication successful', {
-        userId: (user._id as Types.ObjectId).toString(),
-        isNewUser,
-      });
-
-      return {
-        success: true,
-        message: isNewUser ? 'Welcome to VaidikTalk!' : 'Welcome back!',
-        data: {
-          user: this.sanitizeUser(user),
-          tokens,
-          isNewUser,
-        },
-      };
-    } catch (error) {
-      this.logger.error('❌ Truecaller authentication failed:', {
-        message: error.message,
-      });
-
+    if (!verification.success || !verification.userProfile) {
+      this.logger.error('❌ Truecaller verification failed');
       throw new BadRequestException(
-        error.message || 'Truecaller login failed. Please use OTP login.'
+        verification.message || 'Truecaller verification failed'
       );
     }
+
+    this.logger.log('✅ Truecaller verification successful');
+
+    const { phoneNumber, countryCode, firstName, lastName } = verification.userProfile;
+    const phoneHash = this.generatePhoneHash(phoneNumber);
+    const fullName = `${firstName || ''} ${lastName || ''}`.trim() || 'User';
+    const currency = this.getCurrencyFromCountryCode(countryCode);
+
+    this.logger.log('📊 User profile data:', { phoneNumber, name: fullName });
+
+    let user = await this.userModel.findOne({
+      $or: [{ phoneNumber }, { phoneHash }],
+    });
+
+    let isNewUser = false;
+
+    if (!user) {
+      this.logger.log('📤 Creating new user with Truecaller data...');
+
+      user = new this.userModel({
+        phoneNumber,
+        phoneHash,
+        countryCode: countryCode,
+        name: fullName,
+        isPhoneVerified: true,
+        registrationMethod: 'truecaller',
+        status: 'active',
+        appLanguage: 'en',
+        wallet: {
+          balance: 0,
+          currency: currency,
+          totalSpent: 0,
+          totalRecharged: 0,
+        },
+        stats: {
+          totalSessions: 0,
+          totalMinutesSpent: 0,
+          totalAmount: 0,
+          totalRatings: 0,
+        },
+        orders: [],
+        walletTransactions: [],
+        remedies: [],
+        reports: [],
+        favoriteAstrologers: [],
+      });
+
+      await user.save();
+      isNewUser = true;
+
+      this.logger.log('✅ New user created via Truecaller', {
+        userId: (user._id as Types.ObjectId).toString(),
+        name: fullName,
+      });
+    } else {
+      this.logger.log('📤 Updating existing user...');
+
+      if (user.status === 'deleted' || user.status === 'inactive') {
+        this.logger.log(`♻️ Reactivating ${user.status} user: ${user.phoneNumber}`);
+        user.status = 'active';
+      }
+
+      user.isPhoneVerified = true;
+      user.lastLoginAt = new Date();
+
+      if (!user.name || user.name === 'User') {
+        user.name = fullName;
+      }
+
+      await user.save();
+
+      this.logger.log('✅ Existing user updated', {
+        userId: (user._id as Types.ObjectId).toString(),
+        status: user.status,
+      });
+    }
+
+    this.logger.log('🔐 Generating JWT tokens...');
+    const tokens = this.jwtAuthService.generateTokenPair(
+      user._id as Types.ObjectId,
+      user.phoneNumber,
+      user.phoneHash
+    );
+
+    await this.cacheService.set(
+      `refresh_token_${(user._id as Types.ObjectId).toString()}`,
+      tokens.refreshToken,
+      7 * 24 * 60 * 60
+    );
+
+    // ✅ ADD DEVICE STORAGE (Same as OTP verification)
+    if (deviceInfo?.fcmToken) {
+      this.logger.log('📱 AUTH SERVICE: Storing device token from Truecaller login...', {
+        deviceType: deviceInfo.deviceType,
+        deviceName: deviceInfo.deviceName,
+      });
+
+      try {
+        const existingDeviceIndex = user.devices?.findIndex(
+          (d: any) => d.fcmToken === deviceInfo.fcmToken
+        ) || -1;
+
+        if (existingDeviceIndex !== -1) {
+          user.devices[existingDeviceIndex] = {
+            ...user.devices[existingDeviceIndex],
+            lastActive: new Date(),
+            isActive: true,
+          };
+          this.logger.log('✅ AUTH SERVICE: Device updated');
+        } else {
+          if (!user.devices) user.devices = [];
+          
+          user.devices.push({
+            fcmToken: deviceInfo.fcmToken,
+            deviceId: deviceInfo.deviceId,
+            deviceType: deviceInfo.deviceType,
+            deviceName: deviceInfo.deviceName,
+            lastActive: new Date(),
+            isActive: true,
+          });
+          this.logger.log('✅ AUTH SERVICE: Device added', {
+            totalDevices: user.devices.length,
+          });
+        }
+
+        if (user.devices.length > 5) {
+          user.devices = user.devices
+            .sort((a: any, b: any) => 
+              new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime()
+            )
+            .slice(0, 5);
+          this.logger.log('✅ AUTH SERVICE: Trimmed to 5 devices');
+        }
+
+        await user.save();
+        this.logger.log('✅ AUTH SERVICE: Device saved to user document', {
+          totalDevices: user.devices.length,
+        });
+      } catch (deviceError) {
+        this.logger.error('❌ AUTH SERVICE: Device storage failed:', {
+          error: (deviceError as any).message,
+        });
+      }
+    }
+
+    this.logger.log('✅ Truecaller authentication successful', {
+      userId: (user._id as Types.ObjectId).toString(),
+      isNewUser,
+    });
+
+    return {
+      success: true,
+      message: isNewUser ? 'Welcome to VaidikTalk!' : 'Welcome back!',
+      data: {
+        user: this.sanitizeUser(user),
+        tokens,
+        isNewUser,
+      },
+    };
+  } catch (error) {
+    this.logger.error('❌ Truecaller authentication failed:', {
+      message: (error as any).message,
+    });
+
+    throw new BadRequestException(
+      (error as any).message || 'Truecaller login failed. Please use OTP login.'
+    );
   }
+}
 
   async getAuthOptions(): Promise<{
     success: boolean;

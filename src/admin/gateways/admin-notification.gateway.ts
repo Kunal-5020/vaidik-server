@@ -1,4 +1,4 @@
-// notifications/gateways/admin-notification.gateway.ts (FIXED)
+// src/admin/gateways/admin-notification.gateway.ts (MOVED & UPDATED)
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -11,11 +11,15 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { Admin, AdminDocument } from '../schemas/admin.schema';
 
 @WebSocketGateway({
-  namespace: 'admin-notifications', // Admin portal namespace
+  namespace: 'admin-notifications',
   cors: {
-    origin: 'http://localhost:3000', // Your admin portal URL
+    origin: process.env.ADMIN_PORTAL_URL || 'http://localhost:3000',
     credentials: true,
   },
 })
@@ -24,16 +28,18 @@ export class AdminNotificationGateway implements OnGatewayConnection, OnGatewayD
   server: Server;
 
   private readonly logger = new Logger(AdminNotificationGateway.name);
-  
-  // Track connected admins: Map<adminId, Set<socketId>>
   private connectedAdmins: Map<string, Set<string>> = new Map();
 
-  constructor(private jwtService: JwtService) {}
+  constructor(
+    private jwtService: JwtService,
+    private configService: ConfigService,
+    @InjectModel(Admin.name) private adminModel: Model<AdminDocument>,
+  ) {}
 
   async handleConnection(client: Socket) {
     try {
-      // Extract token
-      const token = client.handshake.auth.token || client.handshake.headers.authorization?.split(' ')[1];
+      const token = client.handshake.auth.token || 
+                   client.handshake.headers.authorization?.split(' ')[1];
 
       if (!token) {
         this.logger.warn(`❌ Admin connection rejected - No token`);
@@ -41,14 +47,64 @@ export class AdminNotificationGateway implements OnGatewayConnection, OnGatewayD
         return;
       }
 
-      // Verify JWT
-      const payload = await this.jwtService.verifyAsync(token);
-      const adminId = payload.sub || payload._id;
+      this.logger.log('🔐 Verifying admin token...');
 
-      // Store admin info
+      let payload: any;
+      try {
+        payload = await this.jwtService.verifyAsync(token, {
+          secret: this.configService.get<string>('JWT_SECRET'),
+        });
+      } catch (error) {
+        this.logger.error(`❌ Token verification failed:`, {
+          error: (error as any).message,
+        });
+        client.disconnect();
+        return;
+      }
+
+      if (!payload.isAdmin) {
+        this.logger.warn('❌ Token is not an admin token');
+        client.disconnect();
+        return;
+      }
+
+      const adminId = payload._id;
+
+      if (!adminId) {
+        this.logger.warn('❌ No admin ID in token');
+        client.disconnect();
+        return;
+      }
+
+      this.logger.log('📋 Looking up admin in database...');
+      
+      const admin = await this.adminModel
+        .findById(adminId)
+        .select('_id status lockedUntil roleId')
+        .lean()
+        .exec() as AdminDocument | null;
+
+      if (!admin) {
+        this.logger.warn(`❌ Admin not found in database: ${adminId}`);
+        client.disconnect();
+        return;
+      }
+
+      if (admin.status !== 'active') {
+        this.logger.warn(`❌ Admin account is not active: ${admin.status}`);
+        client.disconnect();
+        return;
+      }
+
+      if (admin.lockedUntil && new Date(admin.lockedUntil) > new Date()) {
+        this.logger.warn(`❌ Admin account is locked`);
+        client.disconnect();
+        return;
+      }
+
       client.data.adminId = adminId;
+      client.data.admin = admin;
 
-      // Track connection (FIXED: Proper null check)
       if (!this.connectedAdmins.has(adminId)) {
         this.connectedAdmins.set(adminId, new Set());
       }
@@ -57,20 +113,26 @@ export class AdminNotificationGateway implements OnGatewayConnection, OnGatewayD
         adminSockets.add(client.id);
       }
 
-      // Join admin room for broadcasts
       client.join('admin-room');
 
       this.logger.log(`✅ Admin connected: ${adminId} (Socket: ${client.id})`);
       this.logger.log(`📊 Total connected admins: ${this.connectedAdmins.size}`);
 
-      // Send connection success
       client.emit('connection-success', {
         message: 'Connected to admin notification system',
         adminId,
         timestamp: new Date(),
       });
+
+      this.adminModel
+        .findByIdAndUpdate(adminId, { lastActivityAt: new Date() })
+        .exec()
+        .catch(err => this.logger.error('Failed to update last activity:', err));
+
     } catch (error) {
-      this.logger.error(`❌ Admin authentication failed: ${error.message}`);
+      this.logger.error(`❌ Admin authentication failed:`, {
+        error: (error as any).message,
+      });
       client.disconnect();
     }
   }
@@ -81,7 +143,6 @@ export class AdminNotificationGateway implements OnGatewayConnection, OnGatewayD
     if (adminId && this.connectedAdmins.has(adminId)) {
       const adminSockets = this.connectedAdmins.get(adminId);
       
-      // FIXED: Proper null check
       if (adminSockets) {
         adminSockets.delete(client.id);
 
@@ -95,13 +156,11 @@ export class AdminNotificationGateway implements OnGatewayConnection, OnGatewayD
     this.logger.log(`📊 Remaining admins: ${this.connectedAdmins.size}`);
   }
 
-  // Send to all admins
   sendToAllAdmins(notification: any) {
     this.server.to('admin-room').emit('new-notification', notification);
     this.logger.log(`📢 Notification sent to all admins (${this.connectedAdmins.size} connected)`);
   }
 
-  // Send to specific admin
   sendToAdmin(adminId: string, notification: any) {
     const adminSockets = this.connectedAdmins.get(adminId);
     
@@ -113,7 +172,6 @@ export class AdminNotificationGateway implements OnGatewayConnection, OnGatewayD
     }
   }
 
-  // Broadcast system alert (high priority)
   broadcastSystemAlert(alert: any) {
     this.server.to('admin-room').emit('system-alert', {
       ...alert,
@@ -123,12 +181,10 @@ export class AdminNotificationGateway implements OnGatewayConnection, OnGatewayD
     this.logger.warn(`🚨 SYSTEM ALERT: ${alert.message}`);
   }
 
-  // Real-time dashboard stats update
   updateDashboardStats(stats: any) {
     this.server.to('admin-room').emit('dashboard-stats-update', stats);
   }
 
-  // Send real-time event to admins (orders, calls, etc.)
   sendRealtimeEvent(eventType: string, eventData: any) {
     this.server.to('admin-room').emit('realtime-event', {
       eventType,
@@ -138,17 +194,14 @@ export class AdminNotificationGateway implements OnGatewayConnection, OnGatewayD
     this.logger.log(`📡 Realtime event sent to admins: ${eventType}`);
   }
 
-  // Check if any admin is online
   isAnyAdminOnline(): boolean {
     return this.connectedAdmins.size > 0;
   }
 
-  // Get connected admins count
   getConnectedAdminsCount(): number {
     return this.connectedAdmins.size;
   }
 
-  // Subscribe to specific event types
   @SubscribeMessage('subscribe-to-event')
   handleSubscribeToEvent(
     @ConnectedSocket() client: Socket,
@@ -159,7 +212,6 @@ export class AdminNotificationGateway implements OnGatewayConnection, OnGatewayD
     return { success: true, subscribedTo: eventType };
   }
 
-  // Unsubscribe from events
   @SubscribeMessage('unsubscribe-from-event')
   handleUnsubscribeFromEvent(
     @ConnectedSocket() client: Socket,

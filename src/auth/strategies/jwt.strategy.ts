@@ -1,4 +1,4 @@
-// src/auth/strategies/jwt.strategy.ts (FINAL - COMPLETE)
+// src/auth/strategies/jwt.strategy.ts (FINAL - WITH ADMIN TOKEN SUPPORT)
 import { Injectable, UnauthorizedException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
@@ -38,12 +38,29 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         hasUserId: !!payload.userId,
         has_id: !!payload._id,
         hasAstrologerId: !!payload.astrologerId,
+        isAdmin: !!payload.isAdmin, // ✅ ADD THIS
         role: payload.role,
       });
 
       if (payload.type && payload.type !== 'access') {
         this.logger.error('❌ Invalid token type:', payload.type);
         throw new UnauthorizedException('Invalid token type');
+      }
+
+      // ========================================
+      // ✅ ADMIN TOKEN VALIDATION (CHECK FIRST!)
+      // ========================================
+      if (payload.isAdmin === true) {
+        this.logger.log('👨‍💼 ADMIN token detected - returning admin payload');
+        
+        return {
+          _id: payload._id,
+          email: payload.email,
+          isAdmin: true,
+          isSuperAdmin: payload.isSuperAdmin,
+          roleType: payload.roleType,
+          role: 'admin',
+        };
       }
 
       // ========================================
