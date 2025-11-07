@@ -145,8 +145,8 @@ export class RatingReviewService {
       rating: order.rating,
       review: order.review,
       serviceType: order.type,
-      duration: order.duration,
-      reviewDate: order.endTime,
+      duration: order.actualDurationSeconds,
+      reviewDate: order.endedAt,
       orderId: order.orderId
     }));
 

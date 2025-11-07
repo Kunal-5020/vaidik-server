@@ -15,6 +15,8 @@ import { Order, OrderSchema } from '../orders/schemas/orders.schema';
 import { WalletTransaction, WalletTransactionSchema } from '../payments/schemas/wallet-transaction.schema';
 import { PayoutRequest, PayoutRequestSchema } from '../payments/schemas/payout-request.schema';
 import { Registration, RegistrationSchema } from '../registration/schemas/registration.schema';
+import { ShopifyOrderEntity, ShopifyOrderSchema } from '../shopify/schemas/shopify-order.schema';
+import { Remedy, RemedySchema } from '../remedies/schemas/remedies.schema';
 
 // Controllers
 import { AdminAuthController } from './controllers/admin-auth.controller';
@@ -25,6 +27,7 @@ import { AdminOrdersController } from './controllers/admin-orders.controller';
 import { AdminPaymentsController } from './controllers/admin-payments.controller';
 import { AdminAnalyticsController } from './controllers/admin-analytics.controller';
 import { AdminNotificationController } from './controllers/admin-notification.controller';
+import { AdminController } from './controllers/admin-remedies.controller';
 
 // Services
 import { AdminAuthService } from './services/admin-auth.service';
@@ -36,9 +39,9 @@ import { AdminAnalyticsService } from './services/admin-analytics.service';
 import { AdminActivityLogService } from './services/admin-activity-log.service';
 import { AdminRegistrationService } from './services/admin-registration.service';
 import { NotificationSchedulerService } from './services/notification-scheduler.service';
+import { AdminMonitoringService } from './services/admin-monitoring.service';
 
 // Import other modules
-import { NotificationsModule } from '../notifications/notifications.module';
 import { PaymentsModule } from '../payments/payments.module';
 
 import { AdminManagementController } from './controllers/admin-management.controller';
@@ -69,6 +72,8 @@ import { AdminNotificationGateway } from './gateways/admin-notification.gateway'
       { name: Order.name, schema: OrderSchema },
       { name: WalletTransaction.name, schema: WalletTransactionSchema },
       { name: PayoutRequest.name, schema: PayoutRequestSchema },
+      { name: ShopifyOrderEntity.name, schema: ShopifyOrderSchema },
+      { name: Remedy.name, schema: RemedySchema },
     ]),
     PaymentsModule,
     forwardRef(() => require('../notifications/notifications.module').NotificationsModule),
@@ -84,6 +89,7 @@ import { AdminNotificationGateway } from './gateways/admin-notification.gateway'
     AdminActivityLogsController,
     AdminRegistrationController,
     AdminNotificationController,
+    AdminController,
   ],
   providers: [
     AdminAuthService,
@@ -97,6 +103,7 @@ import { AdminNotificationGateway } from './gateways/admin-notification.gateway'
     AdminAuthGuard,
     NotificationSchedulerService,
     AdminNotificationGateway,
+    AdminMonitoringService,
   ],
   exports: [AdminAuthService, AdminActivityLogService, AdminAuthGuard, JwtModule, NotificationSchedulerService, MongooseModule, AdminNotificationGateway,],
 })

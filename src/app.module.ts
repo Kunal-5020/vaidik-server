@@ -27,6 +27,7 @@ import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { RegistrationModule } from './registration/registration.module';
 import { UploadModule } from './upload/upload.module';
+import { ShopifyModule } from './shopify/shopify.module';
 
 import { ScheduleModule } from '@nestjs/schedule';
 
@@ -107,7 +108,8 @@ import { ScheduleModule } from '@nestjs/schedule';
     ReportsModule,
     NotificationsModule,
     RegistrationModule,
-    UploadModule
+    UploadModule,
+    ShopifyModule,
   ],
   controllers: [AppController],
   providers: [

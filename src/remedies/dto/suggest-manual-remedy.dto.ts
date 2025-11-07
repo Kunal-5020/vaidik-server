@@ -1,21 +1,13 @@
 import {
   IsString,
   IsNotEmpty,
-  IsEnum,
-  IsMongoId,
   MinLength,
-  MaxLength
+  MaxLength,
+  IsEnum,
+  IsOptional,
 } from 'class-validator';
 
-export class CreateRemedyDto {
-  @IsMongoId({ message: 'Invalid user ID format' })
-  @IsNotEmpty({ message: 'User ID is required' })
-  userId: string;
-
-  @IsString({ message: 'Order ID must be a string' })
-  @IsNotEmpty({ message: 'Order ID is required' })
-  orderId: string;
-
+export class SuggestManualRemedyDto {
   @IsString({ message: 'Title must be a string' })
   @IsNotEmpty({ message: 'Title is required' })
   @MinLength(5, { message: 'Title must be at least 5 characters' })
@@ -29,8 +21,22 @@ export class CreateRemedyDto {
   description: string;
 
   @IsEnum(['gemstone', 'mantra', 'puja', 'donation', 'yantra', 'other'], {
-    message: 'Invalid remedy type'
+    message: 'Invalid remedy type',
   })
   @IsNotEmpty({ message: 'Remedy type is required' })
   type: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  usageInstructions?: string;
+
+  @IsString({ message: 'Recommendation reason must be a string' })
+  @IsNotEmpty({ message: 'Recommendation reason is required' })
+  @MinLength(10)
+  recommendationReason: string;
+
+  @IsOptional()
+  @IsEnum(['call', 'chat'])
+  suggestedInChannel?: 'call' | 'chat';
 }

@@ -1,3 +1,5 @@
+// src/chat/dto/end-chat.dto.ts
+
 import { IsString, IsNotEmpty, IsOptional, MaxLength } from 'class-validator';
 
 export class EndChatDto {
@@ -6,7 +8,7 @@ export class EndChatDto {
   sessionId: string;
 
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Reason must be a string' })
   @MaxLength(500, { message: 'Reason cannot exceed 500 characters' })
   reason?: string;
 }

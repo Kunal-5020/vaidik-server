@@ -8,9 +8,9 @@ import { ChatSessionService } from './services/chat-session.service';
 import { ChatMessageService } from './services/chat-message.service';
 import { ChatSession, ChatSessionSchema } from './schemas/chat-session.schema';
 import { ChatMessage, ChatMessageSchema } from './schemas/chat-message.schema';
-import { OrdersModule } from '../orders/orders.module'; // ✅ ADD
-import { PaymentsModule } from '../payments/payments.module'; // ✅ ADD
-import { AstrologersModule } from '../astrologers/astrologers.module'; // ✅ ADD
+import { OrdersModule } from '../orders/orders.module';
+import { PaymentsModule } from '../payments/payments.module';
+import { AstrologersModule } from '../astrologers/astrologers.module';
 
 @Module({
   imports: [
@@ -18,9 +18,9 @@ import { AstrologersModule } from '../astrologers/astrologers.module'; // ✅ AD
       { name: ChatSession.name, schema: ChatSessionSchema },
       { name: ChatMessage.name, schema: ChatMessageSchema },
     ]),
-    OrdersModule, // ✅ For order integration
-    PaymentsModule, // ✅ For wallet operations
-    AstrologersModule, // ✅ For astrologer details
+    OrdersModule,
+    PaymentsModule,
+    AstrologersModule,
   ],
   controllers: [ChatController],
   providers: [ChatGateway, ChatSessionService, ChatMessageService],

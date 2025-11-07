@@ -3,7 +3,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
-// ✅ ADD: Export the document type
 export type ChatSessionDocument = ChatSession & Document;
 
 @Schema({ timestamps: true, collection: 'chat_sessions' })
@@ -20,13 +19,24 @@ export class ChatSession {
   @Prop({ required: true })
   orderId: string;
 
-  @Prop({ 
+  // ===== STATUS FLOW =====
+  @Prop({
     required: true,
-    enum: ['waiting', 'active', 'ended', 'cancelled'],
-    default: 'waiting',
+    enum: ['initiated', 'ringing', 'waiting', 'waiting_in_queue', 'active', 'ended', 'cancelled', 'rejected'],
+    default: 'initiated',
     index: true
   })
   status: string;
+
+  // ===== TIMING =====
+  @Prop()
+  requestCreatedAt: Date;
+
+  @Prop()
+  acceptedAt?: Date;
+
+  @Prop()
+  ringTime?: Date;
 
   @Prop()
   startTime?: Date;
@@ -35,11 +45,18 @@ export class ChatSession {
   endTime?: Date;
 
   @Prop({ default: 0 })
+  maxDurationMinutes: number;
+
+  @Prop({ default: 0 })
+  maxDurationSeconds: number;
+
+  @Prop({ default: 0 })
   duration: number;
 
   @Prop({ default: 0 })
-  billedDuration: number;
+  billedMinutes: number;
 
+  // ===== RATE & PRICING =====
   @Prop({ required: true })
   ratePerMinute: number;
 
@@ -58,6 +75,29 @@ export class ChatSession {
   @Prop()
   paidAt?: Date;
 
+  // ===== TIMER STATE =====
+  @Prop({ 
+    enum: ['not_started', 'running', 'paused', 'ended'],
+    default: 'not_started'
+  })
+  timerStatus: string;
+
+  @Prop({
+    type: {
+      elapsedSeconds: { type: Number, default: 0 },
+      remainingSeconds: { type: Number, default: 0 },
+      lastUpdatedAt: Date,
+      warningShownAt1Min: { type: Boolean, default: false }
+    }
+  })
+  timerMetrics: {
+    elapsedSeconds: number;
+    remainingSeconds: number;
+    lastUpdatedAt?: Date;
+    warningShownAt1Min?: boolean;
+  };
+
+  // ===== MESSAGE TRACKING =====
   @Prop({ default: 0 })
   messageCount: number;
 
@@ -79,6 +119,7 @@ export class ChatSession {
     sentAt: Date;
   };
 
+  // ===== ONLINE STATUS =====
   @Prop({
     type: {
       userId: { type: Types.ObjectId },
@@ -105,17 +146,28 @@ export class ChatSession {
     lastSeen?: Date;
   };
 
+  // ===== QUEUE INFO =====
+  @Prop()
+  expectedWaitTime?: number;
+
+  @Prop()
+  estimatedStartTime?: Date;
+
+  @Prop()
+  queuePosition?: number;
+
+  // ===== END DETAILS =====
   @Prop()
   endedBy?: string;
 
   @Prop()
   endReason?: string;
 
-  @Prop({ default: Date.now })
+  // ===== METADATA =====
+  @Prop({ default: Date.now, index: true })
   createdAt: Date;
 }
 
-// ✅ CRITICAL: Export the schema
 export const ChatSessionSchema = SchemaFactory.createForClass(ChatSession);
 
 // Indexes
@@ -124,4 +176,6 @@ ChatSessionSchema.index({ userId: 1, createdAt: -1 });
 ChatSessionSchema.index({ astrologerId: 1, createdAt: -1 });
 ChatSessionSchema.index({ orderId: 1 });
 ChatSessionSchema.index({ status: 1 });
+ChatSessionSchema.index({ userId: 1, status: 1 });
+ChatSessionSchema.index({ astrologerId: 1, status: 1 });
 ChatSessionSchema.index({ createdAt: -1 });

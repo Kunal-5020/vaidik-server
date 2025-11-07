@@ -10,253 +10,214 @@ export class ChatMessageService {
   private readonly logger = new Logger(ChatMessageService.name);
 
   constructor(
-    @InjectModel(ChatMessage.name) private messageModel: Model<ChatMessageDocument>,
+    @InjectModel(ChatMessage.name) private messageModel: Model<ChatMessageDocument>
   ) {}
 
-  // Generate message ID
   private generateMessageId(): string {
     return `MSG_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
   }
 
-  // Send message
-  async sendMessage(messageData: {
+  private toObjectId(id: string): Types.ObjectId {
+    try {
+      return new Types.ObjectId(id);
+    } catch {
+      throw new BadRequestException('Invalid ID format');
+    }
+  }
+
+  // ===== SEND MESSAGE (Text, Image, Video, Voice Note) =====
+  async sendMessage(data: {
     sessionId: string;
     senderId: string;
     senderModel: 'User' | 'Astrologer';
     receiverId: string;
     receiverModel: 'User' | 'Astrologer';
+    orderId: string;
     type: string;
     content: string;
     fileUrl?: string;
     fileS3Key?: string;
     fileSize?: number;
     fileName?: string;
-    thumbnailUrl?: string;
-    duration?: number;
-    replyTo?: string; // ✅ NEW
-    quotedMessage?: any; // ✅ NEW
+    fileDuration?: number;
+    mimeType?: string;
+    replyToId?: string;
   }): Promise<ChatMessageDocument> {
     const messageId = this.generateMessageId();
 
     const message = new this.messageModel({
       messageId,
-      ...messageData,
-      deliveryStatus: 'sent',
-      isRead: false,
-      isDeleted: false,
+      sessionId: this.toObjectId(data.sessionId),
+      orderId: data.orderId,
+      senderId: this.toObjectId(data.senderId),
+      senderModel: data.senderModel,
+      receiverId: this.toObjectId(data.receiverId),
+      receiverModel: data.receiverModel,
+      type: data.type,
+      content: data.content,
+      fileUrl: data.fileUrl,
+      fileS3Key: data.fileS3Key,
+      fileSize: data.fileSize,
+      fileName: data.fileName,
+      fileDuration: data.fileDuration,
+      mimeType: data.mimeType,
+      replyToId: data.replyToId,
+      deleteStatus: 'visible',
+      deliveryStatus: 'sending', // ✅ Start as sending
       sentAt: new Date(),
-      reactions: [],
-      starredBy: []
+      createdAt: new Date()
     });
 
     await message.save();
 
-    this.logger.log(`Message sent: ${messageId} | Session: ${messageData.sessionId}`);
+    this.logger.log(`Message created: ${messageId} | Type: ${data.type} | Status: sending`);
 
     return message;
   }
 
-  // ✅ NEW: Mark as delivered
-  async markAsDelivered(messageIds: string[]): Promise<void> {
+  // ===== SEND KUNDLI DETAILS (Auto message) =====
+  async sendKundliDetailsMessage(
+    sessionId: string,
+    astrologerId: string,
+    userId: string,
+    orderId: string,
+    kundliData: {
+      name: string;
+      dob: string;
+      birthTime: string;
+      birthPlace: string;
+      gender: string;
+    }
+  ): Promise<ChatMessageDocument> {
+    const messageId = this.generateMessageId();
+
+    const message = new this.messageModel({
+      messageId,
+      sessionId: this.toObjectId(sessionId),
+      orderId,
+      senderId: this.toObjectId(userId), // Sent by user but auto-generated
+      senderModel: 'User',
+      receiverId: this.toObjectId(astrologerId),
+      receiverModel: 'Astrologer',
+      type: 'kundli_details',
+      content: `Kundli Details: ${kundliData.name}, DOB: ${kundliData.dob}, Birth Time: ${kundliData.birthTime}, Place: ${kundliData.birthPlace}, Gender: ${kundliData.gender}`,
+      kundliDetails: kundliData,
+      isVisibleToUser: false, // ✅ Only visible to astrologer
+      isVisibleToAstrologer: true, // ✅ Visible to astrologer only
+      deleteStatus: 'visible',
+      deliveryStatus: 'sent',
+      sentAt: new Date(),
+      createdAt: new Date()
+    });
+
+    await message.save();
+
+    this.logger.log(`Kundli details message sent: ${messageId}`);
+
+    return message;
+  }
+
+  // ===== UPDATE DELIVERY STATUS (Sent) =====
+  async markAsSent(messageIds: string[]): Promise<void> {
     await this.messageModel.updateMany(
-      {
-        messageId: { $in: messageIds },
-        deliveryStatus: 'sent'
-      },
+      { messageId: { $in: messageIds } },
       {
         $set: {
-          deliveryStatus: 'delivered',
+          deliveryStatus: 'sent', // ✅ Grey double tick
+          sentAt: new Date()
+        }
+      }
+    );
+
+    this.logger.log(`${messageIds.length} messages marked as sent`);
+  }
+
+  // ===== UPDATE DELIVERY STATUS (Delivered) =====
+  async markAsDelivered(messageIds: string[]): Promise<void> {
+    await this.messageModel.updateMany(
+      { messageId: { $in: messageIds } },
+      {
+        $set: {
+          deliveryStatus: 'delivered', // ✅ Grey double tick (delivered)
           deliveredAt: new Date()
         }
       }
     );
+
+    this.logger.log(`${messageIds.length} messages marked as delivered`);
   }
 
-  // Mark as read
+  // ===== UPDATE DELIVERY STATUS (Read/Blue Tick) =====
   async markAsRead(messageIds: string[], userId: string): Promise<void> {
     await this.messageModel.updateMany(
-      {
-        messageId: { $in: messageIds },
-        receiverId: userId,
-        isRead: false
-      },
+      { messageId: { $in: messageIds } },
       {
         $set: {
-          deliveryStatus: 'read',
-          isRead: true,
+          deliveryStatus: 'read', // ✅ Blue double tick (read)
           readAt: new Date()
         }
       }
     );
+
+    this.logger.log(`${messageIds.length} messages marked as read by ${userId}`);
   }
 
-  // ✅ NEW: Add reaction (WhatsApp style)
-  async addReaction(
-  messageId: string,
-  userId: string,
-  userModel: 'User' | 'Astrologer',
-  emoji: string
-): Promise<ChatMessageDocument> {
-  const message = await this.messageModel.findOne({ messageId });
-  if (!message) {
-    throw new NotFoundException('Message not found');
-  }
+  // ===== MARK MESSAGE AS STARRED =====
+  async starMessage(messageId: string, userId: string): Promise<ChatMessageDocument | null> {
+    const message = await this.messageModel.findOne({ messageId });
 
-  // ✅ Initialize reactions if undefined
-  if (!message.reactions) {
-    message.reactions = [];
-  }
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
 
-  // Remove existing reaction from this user
-  message.reactions = message.reactions.filter(
-    (r: any) => r.userId.toString() !== userId
-  );
+    const userObjectId = this.toObjectId(userId);
 
-  // Add new reaction
-  message.reactions.push({
-    userId: new Types.ObjectId(userId),
-    userModel,
-    emoji,
-    reactedAt: new Date()
-  } as any);
+    // Check if already starred by this user
+    if (message.starredBy && message.starredBy.includes(userObjectId)) {
+      throw new BadRequestException('Message already starred by you');
+    }
 
-  await message.save();
-  return message;
-}
-
-  // ✅ NEW: Remove reaction
-  async removeReaction(messageId: string, userId: string): Promise<void> {
-    await this.messageModel.updateOne(
-      { messageId },
-      {
-        $pull: {
-          reactions: { userId: new Types.ObjectId(userId) }
-        }
-      }
-    );
-  }
-
-  // ✅ NEW: Star/Unstar message
-  async toggleStar(messageId: string, userId: string): Promise<boolean> {
-  const message = await this.messageModel.findOne({ messageId });
-  if (!message) {
-    throw new NotFoundException('Message not found');
-  }
-
-  // ✅ Initialize starredBy if undefined
-  if (!message.starredBy) {
-    message.starredBy = [];
-  }
-
-  const userObjectId = new Types.ObjectId(userId);
-  const isStarred = message.starredBy.some((id: any) => id.toString() === userId);
-
-  if (isStarred) {
-    message.starredBy = message.starredBy.filter((id: any) => id.toString() !== userId);
-  } else {
+    message.isStarred = true;
+    if (!message.starredBy) {
+      message.starredBy = [];
+    }
     message.starredBy.push(userObjectId);
+    message.starredAt = new Date();
+
+    await message.save();
+
+    this.logger.log(`Message starred: ${messageId}`);
+
+    return message;
   }
 
-  await message.save();
-  return !isStarred;
-}
+  // ===== UNSTAR MESSAGE =====
+  async unstarMessage(messageId: string, userId: string): Promise<ChatMessageDocument | null> {
+    const message = await this.messageModel.findOne({ messageId });
 
-  // ✅ NEW: Get starred messages
-  async getStarredMessages(userId: string, sessionId: string): Promise<ChatMessageDocument[]> {
-    return this.messageModel
-      .find({
-        sessionId,
-        starredBy: userId,
-        isDeleted: false
-      })
-      .sort({ sentAt: -1 })
-      .lean();
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    const userObjectId = this.toObjectId(userId);
+
+    // Remove user from starredBy array
+    message.starredBy = message.starredBy?.filter(id => id.toString() !== userObjectId.toString()) || [];
+
+    if (message.starredBy.length === 0) {
+      message.isStarred = false;
+      message.starredAt = undefined;
+    }
+
+    await message.save();
+
+    this.logger.log(`Message unstarred: ${messageId}`);
+
+    return message;
   }
 
-  // ✅ NEW: Edit message
-  async editMessage(
-  messageId: string,
-  senderId: string,
-  newContent: string
-): Promise<ChatMessageDocument> {
-  const message = await this.messageModel.findOne({ messageId, senderId });
-  if (!message) {
-    throw new NotFoundException('Message not found');
-  }
-
-  if (message.type !== 'text') {
-    throw new BadRequestException('Only text messages can be edited');
-  }
-
-  message.content = newContent;
-  (message as any).isEdited = true;
-  (message as any).editedAt = new Date();
-
-  await message.save();
-  return message;
-}
-
-  // Delete message
-  async deleteMessage(
-  messageId: string,
-  senderId: string,
-  deleteFor: 'sender' | 'everyone' = 'sender'
-): Promise<void> {
-  const message = await this.messageModel.findOne({ messageId, senderId });
-  if (!message) {
-    throw new NotFoundException('Message not found');
-  }
-
-  message.isDeleted = true;
-  message.deletedAt = new Date();
-  (message as any).deletedFor = deleteFor;
-
-  if (deleteFor === 'everyone') {
-    message.content = 'This message was deleted';
-  }
-
-  await message.save();
-}
-
-  // ✅ NEW: Forward message
-  async forwardMessage(
-  originalMessageId: string,
-  targetSessionId: string,
-  senderId: string,
-  senderModel: 'User' | 'Astrologer',
-  receiverId: string,
-  receiverModel: 'User' | 'Astrologer'
-): Promise<ChatMessageDocument> {
-  const originalMessage = await this.messageModel.findOne({ messageId: originalMessageId });
-  if (!originalMessage) {
-    throw new NotFoundException('Original message not found');
-  }
-
-  const forwardedMessage = await this.sendMessage({
-    sessionId: targetSessionId,
-    senderId,
-    senderModel,
-    receiverId,
-    receiverModel,
-    type: originalMessage.type,
-    content: originalMessage.content,
-    fileUrl: originalMessage.fileUrl,
-    fileS3Key: originalMessage.fileS3Key,
-    fileSize: originalMessage.fileSize,
-    fileName: originalMessage.fileName,
-    thumbnailUrl: (originalMessage as any).thumbnailUrl,
-    duration: (originalMessage as any).duration
-  });
-
-  (forwardedMessage as any).isForwarded = true;
-  (forwardedMessage as any).originalMessageId = originalMessageId;
-  await forwardedMessage.save();
-
-  return forwardedMessage;
-}
-
-  // Get session messages
-  async getSessionMessages(
+  // ===== GET STARRED MESSAGES =====
+  async getStarredMessages(
     sessionId: string,
     page: number = 1,
     limit: number = 50
@@ -265,57 +226,258 @@ export class ChatMessageService {
 
     const [messages, total] = await Promise.all([
       this.messageModel
-        .find({ sessionId, isDeleted: false })
-        .populate('replyTo', 'messageId content type senderId')
-        .sort({ sentAt: -1 }) // ✅ Descending for pagination (latest first)
+        .find({
+          sessionId: this.toObjectId(sessionId),
+          isStarred: true,
+          isDeleted: false
+        })
+        .populate('senderId', 'name profileImage profilePicture')
+        .sort({ starredAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      this.messageModel.countDocuments({ sessionId, isDeleted: false })
+      this.messageModel.countDocuments({
+        sessionId: this.toObjectId(sessionId),
+        isStarred: true,
+        isDeleted: false
+      })
     ]);
 
     return {
-      messages: messages.reverse(), // ✅ Reverse for chronological order in UI
+      messages,
       pagination: {
         page,
         limit,
         total,
-        pages: Math.ceil(total / limit),
-        hasMore: page < Math.ceil(total / limit)
+        pages: Math.ceil(total / limit)
       }
     };
   }
 
-  // Get unread count
+  // ===== GET SESSION MESSAGES =====
+  async getSessionMessages(
+    sessionId: string,
+    page: number = 1,
+    limit: number = 50,
+    userId?: string
+  ): Promise<any> {
+    const skip = (page - 1) * limit;
+
+    let visibilityFilter: any = { isDeleted: false, deleteStatus: 'visible' };
+
+    // Filter based on visibility
+    if (userId) {
+      visibilityFilter.$or = [
+        { isVisibleToUser: true },
+        { isVisibleToAstrologer: true }
+      ];
+    }
+
+    const [messages, total] = await Promise.all([
+      this.messageModel
+        .find({
+          sessionId: this.toObjectId(sessionId),
+          ...visibilityFilter
+        })
+        .populate('senderId', 'name profileImage profilePicture')
+        .sort({ sentAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.messageModel.countDocuments({
+        sessionId: this.toObjectId(sessionId),
+        ...visibilityFilter
+      })
+    ]);
+
+    return {
+      messages: messages.reverse(),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  // ===== GET UNREAD COUNT =====
   async getUnreadCount(userId: string, sessionId: string): Promise<number> {
     return this.messageModel.countDocuments({
-      sessionId,
-      receiverId: userId,
-      isRead: false,
+      sessionId: this.toObjectId(sessionId),
+      receiverId: this.toObjectId(userId),
+      deliveryStatus: { $in: ['sending', 'sent', 'delivered'] }, // Not read
       isDeleted: false
     });
   }
 
-  // ✅ NEW: Get total unread count across all sessions
+  // ===== GET TOTAL UNREAD COUNT =====
   async getTotalUnreadCount(userId: string): Promise<number> {
     return this.messageModel.countDocuments({
-      receiverId: userId,
-      isRead: false,
+      receiverId: this.toObjectId(userId),
+      deliveryStatus: { $in: ['sending', 'sent', 'delivered'] },
       isDeleted: false
     });
   }
 
-  // ✅ NEW: Search messages
-  async searchMessages(sessionId: string, query: string): Promise<ChatMessageDocument[]> {
-    return this.messageModel
-      .find({
-        sessionId,
-        type: 'text',
+  // ===== ADD REACTION =====
+  async addReaction(
+    messageId: string,
+    userId: string,
+    userModel: 'User' | 'Astrologer',
+    emoji: string
+  ): Promise<void> {
+    const message = await this.messageModel.findOne({ messageId });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    // Check if user already reacted with this emoji
+    const existingReaction = message.reactions?.find(
+      r => r.userId.toString() === userId && r.emoji === emoji
+    );
+
+    if (existingReaction) {
+      throw new BadRequestException('You already reacted with this emoji');
+    }
+
+    await this.messageModel.findOneAndUpdate(
+      { messageId },
+      {
+        $push: {
+          reactions: {
+            userId: this.toObjectId(userId),
+            emoji,
+            userModel,
+            addedAt: new Date()
+          }
+        }
+      }
+    );
+
+    this.logger.log(`Reaction added to message: ${messageId} | Emoji: ${emoji}`);
+  }
+
+  // ===== REMOVE REACTION =====
+  async removeReaction(
+    messageId: string,
+    userId: string,
+    emoji: string
+  ): Promise<void> {
+    await this.messageModel.findOneAndUpdate(
+      { messageId },
+      {
+        $pull: {
+          reactions: {
+            userId: this.toObjectId(userId),
+            emoji
+          }
+        }
+      }
+    );
+
+    this.logger.log(`Reaction removed from message: ${messageId}`);
+  }
+
+  // ===== EDIT MESSAGE =====
+  async editMessage(messageId: string, senderId: string, newContent: string): Promise<ChatMessageDocument | null> {
+    const message = await this.messageModel.findOne({ messageId });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    if (message.senderId.toString() !== senderId) {
+      throw new BadRequestException('You can only edit your own messages');
+    }
+
+    const oldContent = message.content;
+    message.content = newContent;
+    message.isEdited = true;
+    message.editedAt = new Date();
+
+    if (!message.editHistory) {
+      message.editHistory = [];
+    }
+
+    message.editHistory.push({
+      content: oldContent,
+      editedAt: new Date()
+    });
+
+    await message.save();
+
+    this.logger.log(`Message edited: ${messageId}`);
+
+    return message;
+  }
+
+  // ===== DELETE MESSAGE =====
+  async deleteMessage(
+    messageId: string,
+    senderId: string,
+    deleteFor: 'sender' | 'everyone'
+  ): Promise<void> {
+    const message = await this.messageModel.findOne({ messageId });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    if (message.senderId.toString() !== senderId) {
+      throw new BadRequestException('You can only delete your own messages');
+    }
+
+    if (deleteFor === 'everyone') {
+      message.isDeleted = true;
+      message.deleteStatus = 'deleted_for_everyone';
+      message.deletedAt = new Date();
+    } else {
+      message.deleteStatus = 'deleted_for_sender';
+    }
+
+    await message.save();
+
+    this.logger.log(`Message deleted: ${messageId} | Delete for: ${deleteFor}`);
+  }
+
+  // ===== SEARCH MESSAGES =====
+  async searchMessages(
+    sessionId: string,
+    query: string,
+    page: number = 1,
+    limit: number = 50
+  ): Promise<any> {
+    const skip = (page - 1) * limit;
+
+    const [messages, total] = await Promise.all([
+      this.messageModel
+        .find({
+          sessionId: this.toObjectId(sessionId),
+          content: { $regex: query, $options: 'i' },
+          isDeleted: false
+        })
+        .populate('senderId', 'name profileImage')
+        .sort({ sentAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.messageModel.countDocuments({
+        sessionId: this.toObjectId(sessionId),
         content: { $regex: query, $options: 'i' },
         isDeleted: false
       })
-      .sort({ sentAt: -1 })
-      .limit(50)
-      .lean();
+    ]);
+
+    return {
+      messages,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
   }
 }

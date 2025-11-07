@@ -2,46 +2,59 @@
 
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { CallSession, CallSessionDocument } from '../schemas/call-session.schema';
 import { OrdersService } from '../../orders/services/orders.service';
+import { OrderPaymentService } from '../../orders/services/order-payment.service';
 import { WalletService } from '../../payments/services/wallet.service';
-import { AgoraService } from './agora.service';
-import { CallRecordingService } from './call-recording.service';
 
 @Injectable()
 export class CallSessionService {
   private readonly logger = new Logger(CallSessionService.name);
+  private sessionTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     @InjectModel(CallSession.name) private sessionModel: Model<CallSessionDocument>,
-    private agoraService: AgoraService,
-    private ordersService: OrdersService, // ✅ ADD
-    private walletService: WalletService, // ✅ ADD
-    private recordingService: CallRecordingService, // ✅ ADD
+    private ordersService: OrdersService,
+    private orderPaymentService: OrderPaymentService,
+    private walletService: WalletService
   ) {}
 
-  // ✅ UPDATED: Create session with order
-  async createSession(sessionData: {
+  private generateSessionId(): string {
+    return `CALL_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
+  }
+
+  private toObjectId(id: string): Types.ObjectId {
+    try {
+      return new Types.ObjectId(id);
+    } catch {
+      throw new BadRequestException('Invalid ID format');
+    }
+  }
+
+  // ===== INITIATE CALL =====
+  async initiateCall(sessionData: {
     userId: string;
     astrologerId: string;
     astrologerName: string;
     callType: 'audio' | 'video';
     ratePerMinute: number;
   }): Promise<any> {
-    // Check wallet balance first
-    const estimatedCost = sessionData.ratePerMinute; // At least 1 minute
-    const hasBalance = await this.walletService.checkBalance(sessionData.userId, estimatedCost);
-    
+    const estimatedCost = sessionData.ratePerMinute * 5;
+    const hasBalance = await this.walletService.checkBalance(
+      sessionData.userId,
+      estimatedCost
+    );
+
     if (!hasBalance) {
       throw new BadRequestException(
         `Insufficient balance. Minimum ₹${estimatedCost} required to start call.`
       );
     }
 
-    const sessionId = `CALL_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
+    const sessionId = this.generateSessionId();
 
-    // ✅ Create order first
+    // Create order with HOLD payment
     const order = await this.ordersService.createOrder({
       userId: sessionData.userId,
       astrologerId: sessionData.astrologerId,
@@ -52,225 +65,385 @@ export class CallSessionService {
       sessionId: sessionId
     });
 
-    // Generate Agora credentials
-    const channelName = this.agoraService.generateChannelName();
-    const uid = this.agoraService.generateUid();
-    const token = this.agoraService.generateRtcToken(channelName, uid, 'publisher', 3600);
-
+    // Create call session (INITIATED)
     const session = new this.sessionModel({
       sessionId,
-      userId: sessionData.userId,
-      astrologerId: sessionData.astrologerId,
+      userId: this.toObjectId(sessionData.userId),
+      astrologerId: this.toObjectId(sessionData.astrologerId),
       orderId: order.orderId,
       callType: sessionData.callType,
       ratePerMinute: sessionData.ratePerMinute,
       status: 'initiated',
-      agoraChannelName: channelName,
-      agoraToken: token,
-      agoraUid: uid,
-      isRecorded: false,
-      createdAt: new Date()
+      requestCreatedAt: new Date(),
+      ringTime: new Date(),
+      maxDurationMinutes: 0,
+      maxDurationSeconds: 0,
+      timerStatus: 'not_started',
+      timerMetrics: {
+        elapsedSeconds: 0,
+        remainingSeconds: 0
+      },
+      userStatus: {
+        userId: this.toObjectId(sessionData.userId),
+        isOnline: false,
+        isMuted: false,
+        isVideoOn: sessionData.callType === 'video',
+        connectionQuality: 'offline'
+      },
+      astrologerStatus: {
+        astrologerId: this.toObjectId(sessionData.astrologerId),
+        isOnline: false,
+        isMuted: false,
+        isVideoOn: sessionData.callType === 'video',
+        connectionQuality: 'offline'
+      }
     });
 
     await session.save();
 
-    this.logger.log(`Call session created: ${sessionId} | Type: ${sessionData.callType} | Order: ${order.orderId}`);
+    // Set 3-min timeout
+    this.setRequestTimeout(sessionId, order.orderId, sessionData.userId);
+
+    this.logger.log(`Call initiated: ${sessionId} | Order: ${order.orderId} | Type: ${sessionData.callType}`);
 
     return {
-      sessionId: session.sessionId,
-      orderId: order.orderId,
-      channelName: session.agoraChannelName,
-      token: session.agoraToken,
-      uid: session.agoraUid,
-      appId: this.agoraService.getAppId(),
-      callType: session.callType,
-      ratePerMinute: session.ratePerMinute
+      success: true,
+      message: 'Call initiated - waiting for astrologer',
+      data: {
+        sessionId: session.sessionId,
+        orderId: order.orderId,
+        status: 'initiated',
+        callType: sessionData.callType,
+        ratePerMinute: sessionData.ratePerMinute
+      }
     };
   }
 
-  // Update status
-  async updateStatus(
-    sessionId: string,
-    status: 'ringing' | 'active' | 'ended' | 'cancelled' | 'missed' | 'rejected'
-  ): Promise<CallSessionDocument> {
+  // ===== ACCEPT CALL =====
+  async acceptCall(sessionId: string, astrologerId: string): Promise<any> {
     const session = await this.sessionModel.findOne({ sessionId });
     if (!session) {
       throw new NotFoundException('Session not found');
     }
 
-    session.status = status;
-
-    if (status === 'ringing' && !session.ringTime) {
-      session.ringTime = new Date();
+    if (session.status !== 'initiated') {
+      throw new BadRequestException('Call not in initiated state');
     }
 
-    if (status === 'active' && !session.answerTime) {
-      session.answerTime = new Date();
-      session.startTime = new Date();
-      
-      // ✅ Start recording when call becomes active
-      if (session.agoraChannelName && session.agoraUid) {
-        try {
-          await this.recordingService.startRecording(
-            sessionId,
-            session.agoraChannelName,
-            session.agoraUid
-          );
-          this.logger.log(`Recording started for session: ${sessionId}`);
-        } catch (error: any) {
-          this.logger.error(`Failed to start recording: ${error.message}`);
-          // Don't fail the call if recording fails
-        }
-      }
+    if (this.sessionTimers.has(sessionId)) {
+      clearTimeout(this.sessionTimers.get(sessionId)!);
+      this.sessionTimers.delete(sessionId);
+    }
 
-      // ✅ Update order status to ongoing
-      await this.ordersService.updateOrderStatus(session.orderId, 'ongoing');
+    session.status = 'waiting';
+    session.acceptedAt = new Date();
+    await session.save();
+
+    this.logger.log(`Call accepted: ${sessionId}`);
+
+    return {
+      success: true,
+      message: 'Call accepted',
+      status: 'waiting'
+    };
+  }
+
+  // ===== REJECT CALL =====
+  async rejectCall(
+    sessionId: string,
+    astrologerId: string,
+    reason: string
+  ): Promise<any> {
+    const session = await this.sessionModel.findOne({ sessionId });
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    if (session.status !== 'initiated' && session.status !== 'waiting') {
+      throw new BadRequestException('Call cannot be rejected at this stage');
+    }
+
+    if (this.sessionTimers.has(sessionId)) {
+      clearTimeout(this.sessionTimers.get(sessionId)!);
+      this.sessionTimers.delete(sessionId);
+    }
+
+    // Refund hold
+    await this.orderPaymentService.refundHold(
+      session.orderId,
+      session.userId.toString(),
+      `Rejected: ${reason}`
+    );
+
+    session.status = 'rejected';
+    session.endedBy = astrologerId;
+    session.endReason = reason;
+    session.endTime = new Date();
+    await session.save();
+
+    // Update order
+    await this.ordersService.cancelOrder(
+      session.orderId,
+      session.userId.toString(),
+      reason,
+      'astrologer'
+    );
+
+    this.logger.log(`Call rejected: ${sessionId}`);
+
+    return {
+      success: true,
+      message: 'Call rejected and refunded'
+    };
+  }
+
+  // ===== START CALL SESSION =====
+  async startSession(sessionId: string): Promise<any> {
+    const session = await this.sessionModel.findOne({ sessionId });
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    if (session.status !== 'waiting' && session.status !== 'waiting_in_queue') {
+      throw new BadRequestException('Session not in valid state to start');
+    }
+
+    // Calculate max duration (full minutes only)
+    const walletBalance = await this.walletService.getBalance(session.userId.toString());
+    const maxDurationMinutes = Math.floor(walletBalance / session.ratePerMinute);
+    const maxDurationSeconds = maxDurationMinutes * 60;
+
+    if (maxDurationMinutes < 1) {
+      throw new BadRequestException('Insufficient balance to start call');
+    }
+
+    // Transition to ACTIVE
+    session.status = 'active';
+    session.startTime = new Date();
+    session.maxDurationMinutes = maxDurationMinutes;
+    session.maxDurationSeconds = maxDurationSeconds;
+    session.timerStatus = 'running';
+    session.timerMetrics.elapsedSeconds = 0;
+    session.timerMetrics.remainingSeconds = maxDurationSeconds;
+    session.timerMetrics.lastUpdatedAt = new Date();
+
+    // Update participant status
+    if (session.userStatus) {
+      session.userStatus.isOnline = true;
+      session.userStatus.connectionQuality = 'good';
+    }
+    if (session.astrologerStatus) {
+      session.astrologerStatus.isOnline = true;
+      session.astrologerStatus.connectionQuality = 'good';
     }
 
     await session.save();
-    return session;
+
+    // Update order status
+    await this.ordersService.updateOrderStatus(session.orderId, 'active');
+
+    // Start auto-end timer
+    this.setAutoEndTimer(sessionId, maxDurationSeconds);
+
+    this.logger.log(
+      `Call session started: ${sessionId} | Type: ${session.callType} | Max Duration: ${maxDurationMinutes} mins`
+    );
+
+    return {
+      success: true,
+      message: 'Call session started',
+      data: {
+        status: 'active',
+        maxDurationMinutes,
+        maxDurationSeconds,
+        ratePerMinute: session.ratePerMinute,
+        callType: session.callType
+      }
+    };
   }
 
-  // ✅ ENHANCED: End session with recording and billing
+  // ===== END CALL SESSION =====
   async endSession(
     sessionId: string,
     endedBy: string,
-    reason: string
-  ): Promise<CallSessionDocument> {
+    reason: string,
+    recordingUrl?: string,
+    recordingS3Key?: string,
+    recordingDuration?: number
+  ): Promise<any> {
     const session = await this.sessionModel.findOne({ sessionId });
     if (!session) {
       throw new NotFoundException('Session not found');
     }
 
-    const endTime = new Date();
-    let duration = 0;
-
-    // Calculate duration only if call was active
-    if (session.startTime && session.status === 'active') {
-      duration = Math.floor((endTime.getTime() - session.startTime.getTime()) / 1000);
+    // Clear timeout
+    if (this.sessionTimers.has(sessionId)) {
+      clearTimeout(this.sessionTimers.get(sessionId)!);
+      this.sessionTimers.delete(sessionId);
     }
 
-    // ✅ Stop recording if active
-    let recordingUrl = '';
-    let recordingS3Key = '';
-    if (session.isRecorded && session.agoraResourceId && session.agoraSid) {
-      try {
-        const recordingResult = await this.recordingService.stopRecording(sessionId);
-        recordingUrl = recordingResult.recordingUrl || '';
-        recordingS3Key = recordingResult.recordingS3Key || '';
-        
-        this.logger.log(`Recording stopped for session: ${sessionId}`);
-      } catch (error: any) {
-        this.logger.error(`Failed to stop recording: ${error.message}`);
+    let actualDurationSeconds = 0;
+
+    // Calculate actual duration only if session was ACTIVE
+    if (session.status === 'active' && session.startTime) {
+      const endTime = new Date();
+      actualDurationSeconds = Math.floor(
+        (endTime.getTime() - session.startTime.getTime()) / 1000
+      );
+
+      // Cap to max duration if timeout
+      if (reason === 'timeout' && actualDurationSeconds > session.maxDurationSeconds) {
+        actualDurationSeconds = session.maxDurationSeconds;
       }
-    }
 
-    // Calculate billing
-    const billedMinutes = Math.ceil(duration / 60);
-    const totalAmount = billedMinutes * session.ratePerMinute;
-    const platformCommission = (totalAmount * 20) / 100; // 20% commission
-    const astrologerEarning = totalAmount - platformCommission;
+      session.duration = actualDurationSeconds;
+      session.billedMinutes = Math.ceil(actualDurationSeconds / 60);
+      session.totalAmount = session.billedMinutes * session.ratePerMinute;
+      session.platformCommission = (session.totalAmount * 20) / 100;
+      session.astrologerEarning = session.totalAmount - session.platformCommission;
 
-    // Update session
-    session.status = 'ended';
-    session.endTime = endTime;
-    session.duration = duration;
-    session.billedDuration = billedMinutes * 60;
-    session.totalAmount = totalAmount;
-    session.platformCommission = platformCommission;
-    session.astrologerEarning = astrologerEarning;
-    session.endedBy = endedBy;
-    session.endReason = reason;
-
-    if (recordingUrl) {
-      session.recordingUrl = recordingUrl;
-      session.recordingS3Key = recordingS3Key;
-      session.recordingDuration = duration;
-    }
-
-    await session.save();
-
-    // ✅ Complete order with recording details
-    await this.ordersService.completeOrder(session.orderId, {
-      duration,
-      totalAmount,
-      endTime,
-      recordingUrl,
-      recordingS3Key,
-      recordingDuration: duration
-    });
-
-    // ✅ Process payment from wallet
-    if (totalAmount > 0) {
+      // CHARGE from hold
       try {
-        await this.walletService.deductFromWallet(
-          session.userId.toString(),
-          totalAmount,
+        await this.orderPaymentService.chargeFromHold(
           session.orderId,
-          `${session.callType} call with astrologer - ${billedMinutes} min(s)`
+          session.userId.toString(),
+          actualDurationSeconds,
+          session.ratePerMinute
         );
 
         session.isPaid = true;
         session.paidAt = new Date();
-        await session.save();
 
-        this.logger.log(`Payment processed: ${sessionId} | Amount: ₹${totalAmount}`);
+        this.logger.log(
+          `Call charged: ${sessionId} | Actual: ${actualDurationSeconds}s | Billed: ${session.billedMinutes}m | Amount: ₹${session.totalAmount}`
+        );
       } catch (error: any) {
-        this.logger.error(`Payment failed for session ${sessionId}: ${error.message}`);
-        // Handle payment failure - maybe mark order for manual review
+        this.logger.error(`Payment failed for call ${sessionId}: ${error.message}`);
+        throw error;
       }
     }
 
-    this.logger.log(`Call ended: ${sessionId} | Duration: ${duration}s | Amount: ₹${totalAmount}`);
+    session.status = 'ended';
+    session.endTime = new Date();
+    session.endedBy = endedBy;
+    session.endReason = reason;
+    session.timerStatus = 'ended';
 
-    return session;
+    // Add recording if available
+    if (recordingUrl) {
+      session.hasRecording = true;
+      session.recordingUrl = recordingUrl;
+      session.recordingS3Key = recordingS3Key;
+      session.recordingDuration = recordingDuration;
+      session.recordingType = session.callType === 'audio' ? 'voice_note' : 'video';
+      session.recordingStartedAt = session.startTime;
+      session.recordingEndedAt = new Date();
+    }
+
+    // Update participant status
+    if (session.userStatus) {
+      session.userStatus.isOnline = false;
+      session.userStatus.connectionQuality = 'offline';
+    }
+    if (session.astrologerStatus) {
+      session.astrologerStatus.isOnline = false;
+      session.astrologerStatus.connectionQuality = 'offline';
+    }
+
+    await session.save();
+
+    // Complete session in orders
+    await this.ordersService.completeSession(session.orderId, {
+      sessionId,
+      sessionType: session.callType === 'audio' ? 'audio_call' : 'video_call',
+      actualDurationSeconds,
+      recordingUrl,
+      recordingS3Key,
+      recordingDuration
+    });
+
+    this.logger.log(`Call session ended: ${sessionId} | Duration: ${actualDurationSeconds}s | Type: ${session.callType}`);
+
+    return {
+      success: true,
+      message: 'Call session ended',
+      data: {
+        sessionId,
+        actualDuration: actualDurationSeconds,
+        billedMinutes: session.billedMinutes,
+        chargeAmount: session.totalAmount,
+        recordingUrl: recordingUrl,
+        status: 'ended'
+      }
+    };
   }
 
-  // Get session details
+  // ===== REQUEST TIMEOUT (3 mins) =====
+  private setRequestTimeout(sessionId: string, orderId: string, userId: string) {
+    const timeout = setTimeout(async () => {
+      try {
+        const session = await this.sessionModel.findOne({ sessionId });
+        if (!session || (session.status !== 'initiated' && session.status !== 'waiting')) {
+          return;
+        }
+
+        // Refund hold on timeout
+        await this.orderPaymentService.refundHold(
+          orderId,
+          userId,
+          'timeout - astrologer no response'
+        );
+
+        session.status = 'cancelled';
+        session.endReason = 'astrologer_no_response';
+        session.endTime = new Date();
+        await session.save();
+
+        // Update order
+        await this.ordersService.handleOrderTimeout(orderId);
+
+        this.logger.log(`Call request timeout: ${sessionId}`);
+        this.sessionTimers.delete(sessionId);
+      } catch (error: any) {
+        this.logger.error(`Timeout handler error for ${sessionId}: ${error.message}`);
+      }
+    }, 3 * 60 * 1000);
+
+    this.sessionTimers.set(sessionId, timeout);
+  }
+
+  // ===== AUTO-END TIMER =====
+  private setAutoEndTimer(sessionId: string, maxDurationSeconds: number) {
+    const timeout = setTimeout(async () => {
+      try {
+        await this.endSession(sessionId, 'system', 'timeout');
+        this.sessionTimers.delete(sessionId);
+      } catch (error: any) {
+        this.logger.error(`Auto-end error for ${sessionId}: ${error.message}`);
+      }
+    }, maxDurationSeconds * 1000);
+
+    this.sessionTimers.set(sessionId, timeout);
+  }
+
+  // ===== GET SESSION =====
   async getSession(sessionId: string): Promise<CallSessionDocument | null> {
     return this.sessionModel.findOne({ sessionId });
   }
 
-  // Get active sessions
+  // ===== GET ACTIVE SESSIONS =====
   async getUserActiveSessions(userId: string): Promise<CallSessionDocument[]> {
-    return this.sessionModel.find({
-      userId,
-      status: { $in: ['initiated', 'ringing', 'active'] }
-    }).sort({ createdAt: -1 });
+    return this.sessionModel
+      .find({
+        userId: this.toObjectId(userId),
+        status: { $in: ['initiated', 'waiting', 'waiting_in_queue', 'active'] }
+      })
+      .populate('astrologerId', 'name profilePicture isOnline')
+      .sort({ createdAt: -1 })
+      .lean();
   }
 
-  async getAstrologerActiveSessions(astrologerId: string): Promise<CallSessionDocument[]> {
-    return this.sessionModel.find({
-      astrologerId,
-      status: { $in: ['initiated', 'ringing', 'active'] }
-    }).sort({ createdAt: -1 });
-  }
-
-  // Regenerate token
-  async regenerateToken(sessionId: string): Promise<string> {
-    const session = await this.sessionModel.findOne({ sessionId });
-    if (!session) {
-      throw new NotFoundException('Session not found');
-    }
-
-    if (!session.agoraChannelName || !session.agoraUid) {
-      throw new BadRequestException('Invalid session data');
-    }
-
-    const newToken = this.agoraService.generateRtcToken(
-      session.agoraChannelName,
-      session.agoraUid,
-      'publisher',
-      3600
-    );
-
-    session.agoraToken = newToken;
-    await session.save();
-
-    return newToken;
-  }
-
-  // ✅ NEW: Get call history with recordings
+  // ===== GET CALL HISTORY =====
   async getCallHistory(
     userId: string,
     page: number = 1,
@@ -281,19 +454,17 @@ export class CallSessionService {
     const [sessions, total] = await Promise.all([
       this.sessionModel
         .find({
-          $or: [{ userId }, { astrologerId: userId }],
-          status: { $in: ['ended', 'missed', 'rejected', 'cancelled'] }
+          userId: this.toObjectId(userId),
+          status: { $in: ['ended', 'cancelled', 'rejected'] }
         })
-        .populate('userId', 'name profileImage')
         .populate('astrologerId', 'name profilePicture')
-        .select('sessionId callType status duration totalAmount recordingUrl recordingType hasRecording createdAt endTime')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
       this.sessionModel.countDocuments({
-        $or: [{ userId }, { astrologerId: userId }],
-        status: { $in: ['ended', 'missed', 'rejected', 'cancelled'] }
+        userId: this.toObjectId(userId),
+        status: { $in: ['ended', 'cancelled', 'rejected'] }
       })
     ]);
 
@@ -308,30 +479,136 @@ export class CallSessionService {
     };
   }
 
-  // ✅ NEW: Get recording URL (voice note or video)
-  async getRecording(sessionId: string, userId: string): Promise<any> {
+  // ===== UPDATE PARTICIPANT STATUS =====
+  async updateParticipantStatus(
+    sessionId: string,
+    userId: string,
+    role: 'user' | 'astrologer',
+    statusUpdate: {
+      isOnline?: boolean;
+      isMuted?: boolean;
+      isVideoOn?: boolean;
+      connectionQuality?: string;
+    }
+  ): Promise<void> {
+    const updateField = role === 'user' ? 'userStatus' : 'astrologerStatus';
+
+    const updateObj: any = {};
+    if (statusUpdate.isOnline !== undefined) {
+      updateObj[`${updateField}.isOnline`] = statusUpdate.isOnline;
+    }
+    if (statusUpdate.isMuted !== undefined) {
+      updateObj[`${updateField}.isMuted`] = statusUpdate.isMuted;
+    }
+    if (statusUpdate.isVideoOn !== undefined) {
+      updateObj[`${updateField}.isVideoOn`] = statusUpdate.isVideoOn;
+    }
+    if (statusUpdate.connectionQuality) {
+      updateObj[`${updateField}.connectionQuality`] = statusUpdate.connectionQuality;
+    }
+
+    await this.sessionModel.findOneAndUpdate(
+      { sessionId },
+      { $set: updateObj }
+    );
+  }
+
+  // ===== CONTINUE CALL =====
+  async continueCall(
+    sessionId: string,
+    userId: string
+  ): Promise<any> {
     const session = await this.sessionModel.findOne({
       sessionId,
-      $or: [{ userId }, { astrologerId: userId }]
-    }).select('sessionId recordingUrl recordingDuration callType isRecorded');
+      userId: this.toObjectId(userId),
+      isActive: true
+    });
 
     if (!session) {
-      throw new NotFoundException('Session not found');
+      throw new NotFoundException('Call not found or not available for continuation');
     }
 
-    if (!session.isRecorded || !session.recordingUrl) {
-      throw new NotFoundException('Recording not available');
+    // Recalculate max duration based on current wallet
+    const maxDurationInfo = await this.orderPaymentService.calculateMaxDuration(
+      userId,
+      session.ratePerMinute
+    );
+
+    if (maxDurationInfo.maxDurationMinutes < 5) {
+      throw new BadRequestException(
+        `Insufficient balance. Need at least ₹${session.ratePerMinute * 5} to continue.`
+      );
     }
+
+    // HOLD new payment for continuation
+    await this.orderPaymentService.holdPayment(
+      session.orderId,
+      userId,
+      session.ratePerMinute,
+      maxDurationInfo.maxDurationMinutes
+    );
+
+    // Update session for continuation
+    session.maxDurationMinutes = maxDurationInfo.maxDurationMinutes;
+    session.status = 'waiting';
+
+    await session.save();
+
+    this.logger.log(`Call continued: ${sessionId} | New max duration: ${maxDurationInfo.maxDurationMinutes} mins`);
 
     return {
       success: true,
-      data: {
-        sessionId: session.sessionId,
-        recordingUrl: session.recordingUrl,
-        recordingType: session.callType === 'audio' ? 'voice_note' : 'video',
-        duration: session.recordingDuration,
-        callType: session.callType
+      message: 'Call ready to continue',
+      sessionId,
+      maxDurationMinutes: maxDurationInfo.maxDurationMinutes,
+      previousSessions: session.sessionHistory.length,
+      totalPreviouslySpent: session.totalAmount,
+      callType: session.callType
+    };
+  }
+
+  // ===== CANCEL CALL =====
+  async cancelCall(
+    sessionId: string,
+    userId: string,
+    reason: string,
+    cancelledBy: 'user' | 'astrologer' | 'system' | 'admin'
+  ): Promise<any> {
+    const session = await this.sessionModel.findOne({
+      sessionId,
+      userId: this.toObjectId(userId),
+      status: { $in: ['initiated', 'waiting', 'waiting_in_queue'] }
+    });
+
+    if (!session) {
+      throw new NotFoundException('Call not found or cannot be cancelled at this stage');
+    }
+
+    // Refund hold if payment is still on hold
+    if (await this.orderPaymentService.hasHold(session.orderId)) {
+      try {
+        await this.orderPaymentService.refundHold(
+          session.orderId,
+          userId,
+          `Cancellation: ${reason}`
+        );
+      } catch (error) {
+        this.logger.warn(`Could not refund hold: ${error}`);
       }
+    }
+
+    session.status = 'cancelled';
+    session.endReason = reason;
+    session.endedBy = cancelledBy;
+    session.endTime = new Date();
+
+    await session.save();
+
+    this.logger.log(`Call cancelled: ${sessionId}`);
+
+    return {
+      success: true,
+      message: 'Call cancelled successfully'
     };
   }
 }

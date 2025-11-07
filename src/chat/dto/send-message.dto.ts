@@ -1,21 +1,34 @@
-import { IsString, IsNotEmpty, IsEnum, IsOptional, MaxLength } from 'class-validator';
+// src/chat/dto/send-message.dto.ts
+
+import { IsString, IsNotEmpty, IsOptional, IsEnum, MaxLength } from 'class-validator';
 
 export class SendMessageDto {
-  @IsString({ message: 'Session ID must be a string' })
-  @IsNotEmpty({ message: 'Session ID is required' })
+  @IsString()
+  @IsNotEmpty()
   sessionId: string;
 
-  @IsEnum(['text', 'image', 'audio', 'video', 'document'], {
-    message: 'Invalid message type'
+  @IsString()
+  @IsNotEmpty()
+  receiverId: string;
+
+  @IsEnum(['text', 'image', 'audio', 'video', 'file'], {
+    message: 'Type must be: text, image, audio, video, or file'
   })
   type: string;
 
-  @IsString({ message: 'Content must be a string' })
-  @IsNotEmpty({ message: 'Content is required' })
-  @MaxLength(5000, { message: 'Content cannot exceed 5000 characters' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(5000, { message: 'Message cannot exceed 5000 characters' })
   content: string;
 
   @IsOptional()
   @IsString()
   fileUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  fileS3Key?: string;
+
+  @IsOptional()
+  replyTo?: string;
 }

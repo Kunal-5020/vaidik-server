@@ -11,13 +11,6 @@ export class WalletTransaction {
   @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
   userId: Types.ObjectId;
 
-  @Prop({ 
-    required: true,
-    enum: ['recharge', 'deduction', 'refund', 'bonus', 'gift'],
-    index: true
-  })
-  type: string;
-
   @Prop({ required: true })
   amount: number;
 
@@ -49,6 +42,26 @@ export class WalletTransaction {
 
   @Prop()
   failureReason?: string;
+
+  @Prop({ enum: ['recharge', 'deduction', 'refund', 'hold', 'charge', 'bonus', 'reward'] })
+type: string;
+
+// ===== FOR HOLD TRANSACTIONS =====
+@Prop()
+holdReleaseableAt?: Date; // Auto-release time
+
+@Prop()
+releasedAt?: Date; // When hold was released
+
+@Prop()
+convertedAt?: Date; // When hold was converted to charge
+
+// ===== FOR LINKED TRANSACTIONS =====
+@Prop()
+linkedTransactionId?: string; // Link to charge/refund when hold is converted/released
+
+@Prop()
+linkedHoldTransactionId?: string; // Link back to original hold transaction
 
   @Prop({ default: Date.now })
   createdAt: Date;

@@ -19,7 +19,6 @@ export class AdminOrdersService {
     private notificationService: NotificationService,
   ) {}
 
-  // Helper: Convert to ObjectId
   private toObjectId(id: string): Types.ObjectId {
     try {
       return new Types.ObjectId(id);
@@ -107,7 +106,7 @@ export class AdminOrdersService {
       completed,
       cancelled,
       pending,
-      ongoing,
+      active,
       refundRequested,
       totalRevenue,
       ordersByType,
@@ -117,7 +116,7 @@ export class AdminOrdersService {
       this.orderModel.countDocuments({ status: 'completed', isDeleted: false }),
       this.orderModel.countDocuments({ status: 'cancelled', isDeleted: false }),
       this.orderModel.countDocuments({ status: 'pending', isDeleted: false }),
-      this.orderModel.countDocuments({ status: 'ongoing', isDeleted: false }),
+      this.orderModel.countDocuments({ status: 'active', isDeleted: false }),
       this.orderModel.countDocuments({ status: 'refund_requested', isDeleted: false }),
       this.orderModel.aggregate([
         { $match: { status: 'completed', isDeleted: false } },
@@ -140,7 +139,7 @@ export class AdminOrdersService {
         completed,
         cancelled,
         pending,
-        ongoing,
+        active,
         refundRequested,
         todayOrders,
         totalRevenue: totalRevenue[0]?.total || 0,
@@ -210,8 +209,8 @@ export class AdminOrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    if (!['pending', 'ongoing'].includes(order.status)) {
-      throw new BadRequestException('Only pending or ongoing orders can be cancelled');
+    if (!['pending', 'waiting', 'waiting_in_queue', 'active'].includes(order.status)) {
+      throw new BadRequestException('Only pending, waiting, or active orders can be cancelled');
     }
 
     order.status = 'cancelled';
@@ -219,22 +218,23 @@ export class AdminOrdersService {
     order.cancelledBy = 'admin';
     order.cancelledAt = new Date();
 
-    // Process automatic refund if payment was made
-    if (order.payment?.paymentStatus === 'paid' && order.totalAmount > 0) {
+    // ✅ FIXED: Use correct property names
+    // Process automatic refund if payment is on hold
+    if (order.payment?.status === 'hold' && order.payment?.heldAmount > 0) {
       try {
-        const refundTxn = await this.walletService.creditToWallet(
+        // Release the hold
+        await this.walletService.releaseHold(
           order.userId.toString(),
-          order.totalAmount,
+          order.payment.heldAmount,
           orderId,
-          `Automatic refund for admin-cancelled order ${orderId}`
+          `Admin cancelled order: ${reason}`
         );
 
-        order.payment.paymentStatus = 'refunded';
+        order.payment.status = 'refunded';
+        order.payment.refundedAmount = order.payment.heldAmount;
         order.payment.refundedAt = new Date();
-        order.payment.refundAmount = order.totalAmount;
-        order.payment.refundTransactionId = refundTxn.transactionId;
       } catch (error: any) {
-        this.logger.error(`Failed to process refund for cancelled order ${orderId}: ${error.message}`);
+        this.logger.error(`Failed to release hold for cancelled order ${orderId}: ${error.message}`);
       }
     }
 
@@ -248,7 +248,10 @@ export class AdminOrdersService {
       targetId: orderId,
       targetType: 'Order',
       status: 'success',
-      details: { reason, refunded: order.payment?.paymentStatus === 'refunded' },
+      details: { 
+        reason, 
+        refunded: order.payment?.status === 'refunded' 
+      },
     });
 
     // Notify user
@@ -258,7 +261,7 @@ export class AdminOrdersService {
       type: 'order_cancelled',
       title: 'Order Cancelled',
       message: `Your order ${orderId} has been cancelled by admin. ${
-        order.payment?.paymentStatus === 'refunded' ? 'Refund has been processed.' : ''
+        order.payment?.status === 'refunded' ? 'Hold amount has been released.' : ''
       }`,
       priority: 'high',
     });
@@ -270,8 +273,8 @@ export class AdminOrdersService {
       message: 'Order cancelled successfully',
       data: {
         orderId: order.orderId,
-        refunded: order.payment?.paymentStatus === 'refunded',
-        refundAmount: order.payment?.refundAmount
+        refunded: order.payment?.status === 'refunded',
+        refundedAmount: order.payment?.refundedAmount
       }
     };
   }
@@ -387,14 +390,14 @@ export class AdminOrdersService {
         {
           $match: {
             status: 'refunded',
-            'payment.refundAmount': { $exists: true },
+            'refundRequest.refundAmount': { $exists: true },
             isDeleted: false
           }
         },
         {
           $group: {
             _id: null,
-            total: { $sum: '$payment.refundAmount' }
+            total: { $sum: '$refundRequest.refundAmount' }
           }
         }
       ])
@@ -457,13 +460,11 @@ export class AdminOrdersService {
           `Refund approved for order ${orderId} - ${refundPercentage}% refund`
         );
 
-        // Update payment details
-        if (!order.payment) {
-          order.payment = { paymentStatus: 'refunded' };
-        }
-        order.payment.paymentStatus = 'refunded';
+        // ✅ FIXED: Use correct property names
+        order.payment = order.payment || {};
+        order.payment.status = 'refunded';
+        order.payment.refundedAmount = refundAmount;
         order.payment.refundedAt = new Date();
-        order.payment.refundAmount = refundAmount;
         order.payment.refundTransactionId = refundTxn.transactionId;
 
         order.status = 'refunded';
@@ -586,14 +587,12 @@ export class AdminOrdersService {
       `Direct refund by admin: ${refundDto.reason || 'No reason provided'}`
     );
 
-    // Update order
+    // ✅ FIXED: Use correct property names
     order.status = 'refunded';
-    if (!order.payment) {
-      order.payment = { paymentStatus: 'refunded' };
-    }
-    order.payment.paymentStatus = 'refunded';
+    order.payment = order.payment || {};
+    order.payment.status = 'refunded';
+    order.payment.refundedAmount = refundAmount;
     order.payment.refundedAt = new Date();
-    order.payment.refundAmount = refundAmount;
     order.payment.refundTransactionId = refundTxn.transactionId;
 
     await order.save();

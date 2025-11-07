@@ -17,9 +17,11 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { OrdersService } from '../services/orders.service';
+import { OrderPaymentService } from '../services/order-payment.service';
 import { AddReviewDto } from '../dto/add-review.dto';
 import { CancelOrderDto } from '../dto/cancel-order.dto';
 import { RequestRefundDto } from '../dto/request-refund.dto';
+import { ExtendSessionDto } from '../dto/extend-session.dto';
 
 interface AuthenticatedRequest extends Request {
   user: { _id: string; role?: string };
@@ -28,15 +30,20 @@ interface AuthenticatedRequest extends Request {
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
 export class OrdersController {
-  constructor(private ordersService: OrdersService) {}
+  constructor(
+    private ordersService: OrdersService,
+    private orderPaymentService: OrderPaymentService
+  ) {}
 
-  // Get order statistics
+  // ===== STATISTICS =====
+
   @Get('stats/summary')
   async getOrderStats(@Req() req: AuthenticatedRequest) {
     return this.ordersService.getUserOrderStats(req.user._id);
   }
 
-  // Get user's orders
+  // ===== GET ORDERS =====
+
   @Get()
   async getOrders(
     @Req() req: AuthenticatedRequest,
@@ -55,7 +62,8 @@ export class OrdersController {
     );
   }
 
-  // Get single order details
+  // ===== GET SINGLE ORDER =====
+
   @Get(':orderId')
   async getOrderDetails(
     @Param('orderId') orderId: string,
@@ -64,7 +72,18 @@ export class OrdersController {
     return this.ordersService.getOrderDetails(orderId, req.user._id);
   }
 
-  // ✅ NEW: Get order recording (voice note or video)
+  // ===== GET CONSULTATION SPACE (All sessions in order) =====
+
+  @Get(':orderId/consultation-space')
+  async getConsultationSpace(
+    @Param('orderId') orderId: string,
+    @Req() req: AuthenticatedRequest
+  ) {
+    return this.ordersService.getConsultationSpace(orderId, req.user._id);
+  }
+
+  // ===== GET RECORDING =====
+
   @Get(':orderId/recording')
   async getOrderRecording(
     @Param('orderId') orderId: string,
@@ -73,7 +92,8 @@ export class OrdersController {
     return this.ordersService.getOrderRecording(orderId, req.user._id);
   }
 
-  // Add review to order
+  // ===== ADD REVIEW =====
+
   @Post(':orderId/review')
   async addReview(
     @Param('orderId') orderId: string,
@@ -88,7 +108,8 @@ export class OrdersController {
     );
   }
 
-  // Cancel order
+  // ===== CANCEL ORDER =====
+
   @Patch(':orderId/cancel')
   async cancelOrder(
     @Param('orderId') orderId: string,
@@ -103,7 +124,8 @@ export class OrdersController {
     );
   }
 
-   // ✅ NEW: Request refund
+  // ===== REQUEST REFUND =====
+
   @Post(':orderId/refund/request')
   async requestRefund(
     @Param('orderId') orderId: string,
@@ -117,7 +139,8 @@ export class OrdersController {
     );
   }
 
-  // ✅ NEW: Get refund status
+  // ===== GET REFUND STATUS =====
+
   @Get(':orderId/refund/status')
   async getRefundStatus(
     @Param('orderId') orderId: string,
@@ -126,4 +149,39 @@ export class OrdersController {
     return this.ordersService.getRefundStatus(orderId, req.user._id);
   }
 
+  // ===== EXTEND SESSION (Continue consultation) =====
+
+  @Post(':orderId/extend')
+  async extendSession(
+    @Param('orderId') orderId: string,
+    @Req() req: AuthenticatedRequest,
+    @Body(ValidationPipe) extendDto: ExtendSessionDto
+  ) {
+    return this.ordersService.continueConsultation(orderId, req.user._id);
+  }
+
+  // ===== CALCULATE MAX DURATION (For frontend) =====
+
+  @Get(':orderId/max-duration')
+  async getMaxDuration(
+    @Param('orderId') orderId: string,
+    @Req() req: AuthenticatedRequest
+  ) {
+    const order = await this.ordersService.getOrderDetails(orderId, req.user._id);
+    const maxDurationInfo = await this.orderPaymentService.calculateMaxDuration(
+      req.user._id,
+      order.data.ratePerMinute
+    );
+
+    return {
+      success: true,
+      data: {
+        orderId,
+        maxDurationMinutes: maxDurationInfo.maxDurationMinutes,
+        maxDurationSeconds: maxDurationInfo.maxDurationSeconds,
+        walletBalance: maxDurationInfo.walletBalance,
+        ratePerMinute: order.data.ratePerMinute
+      }
+    };
+  }
 }

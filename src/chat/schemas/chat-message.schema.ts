@@ -10,31 +10,35 @@ export class ChatMessage {
   @Prop({ required: true, unique: true, index: true })
   messageId: string;
 
-  @Prop({ required: true, index: true })
-  sessionId: string;
+  @Prop({ required: true, type: Types.ObjectId, ref: 'ChatSession', index: true })
+  sessionId: Types.ObjectId;
 
-  @Prop({ required: true, type: Types.ObjectId, refPath: 'senderModel' })
+  @Prop({ required: true })
+  orderId: string;
+
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
   senderId: Types.ObjectId;
 
   @Prop({ required: true, enum: ['User', 'Astrologer'] })
   senderModel: string;
 
-  @Prop({ required: true, type: Types.ObjectId, refPath: 'receiverModel' })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
   receiverId: Types.ObjectId;
 
   @Prop({ required: true, enum: ['User', 'Astrologer'] })
   receiverModel: string;
 
+  // ===== MESSAGE TYPE =====
   @Prop({ 
-    required: true,
-    enum: ['text', 'image', 'audio', 'video', 'document', 'voice_note'],
-    default: 'text'
+    required: true, 
+    enum: ['text', 'image', 'audio', 'video', 'file', 'voice_note', 'kundli_details'] 
   })
   type: string;
 
   @Prop({ required: true, maxlength: 5000 })
   content: string;
 
+  // ===== FILE HANDLING =====
   @Prop()
   fileUrl?: string;
 
@@ -42,102 +46,150 @@ export class ChatMessage {
   fileS3Key?: string;
 
   @Prop()
-  fileSize?: number;
-
-  @Prop()
   fileName?: string;
 
   @Prop()
-  thumbnailUrl?: string; // ✅ ADD
+  fileSize?: number;
 
   @Prop()
-  duration?: number; // ✅ ADD
+  fileDuration?: number; // For audio/video/voice_note
 
-  @Prop({ 
-    type: String,
-    enum: ['sent', 'delivered', 'read'],
-    default: 'sent'
+  @Prop()
+  mimeType?: string; // image/png, audio/mp3, etc
+
+  // ===== KUNDLI DETAILS (Auto message) =====
+  @Prop({
+    type: {
+      name: String,
+      dob: String,
+      birthTime: String,
+      birthPlace: String,
+      gender: String
+    }
   })
-  deliveryStatus: string; // ✅ ADD
+  kundliDetails?: {
+    name: string;
+    dob: string;
+    birthTime: string;
+    birthPlace: string;
+    gender: string;
+  };
 
-  @Prop({ default: Date.now })
-  sentAt: Date;
-
+  // ===== REPLY =====
   @Prop()
-  deliveredAt?: Date; // ✅ ADD
-
-  @Prop({ default: false })
-  isRead: boolean;
-
-  @Prop()
-  readAt?: Date;
-
-  @Prop({ type: Types.ObjectId, ref: 'ChatMessage' })
-  replyTo?: Types.ObjectId; // ✅ ADD
+  replyToId?: string;
 
   @Prop({
     type: {
       messageId: String,
       content: String,
-      type: String,
-      senderName: String
+      senderName: String,
+      type: String
     }
   })
-  quotedMessage?: { // ✅ ADD
+  replyTo?: {
     messageId: string;
     content: string;
-    type: string;
     senderName: string;
+    type: string;
   };
 
+  // ===== REACTIONS =====
   @Prop({
     type: [{
-      userId: { type: Types.ObjectId, refPath: 'userModel' },
-      userModel: { type: String, enum: ['User', 'Astrologer'] },
+      userId: Types.ObjectId,
       emoji: String,
-      reactedAt: Date
+      userModel: { enum: ['User', 'Astrologer'] },
+      addedAt: Date
     }],
     default: []
   })
-  reactions: Array<{ // ✅ ADD
+  reactions: Array<{
     userId: Types.ObjectId;
-    userModel: string;
     emoji: string;
-    reactedAt: Date;
+    userModel: string;
+    addedAt: Date;
   }>;
 
-  @Prop({ type: [{ type: Types.ObjectId }], default: [] })
-  starredBy: Types.ObjectId[]; // ✅ ADD
-
+  // ===== STAR/FAVORITE =====
   @Prop({ default: false })
-  isForwarded: boolean; // ✅ ADD
+  isStarred: boolean;
+
+  @Prop({ type: [Types.ObjectId], default: [] })
+  starredBy: Types.ObjectId[]; // Array of users who starred this
 
   @Prop()
-  originalMessageId?: string; // ✅ ADD
+  starredAt?: Date;
 
+  // ===== EDITING =====
   @Prop({ default: false })
-  isEdited: boolean; // ✅ ADD
+  isEdited: boolean;
 
   @Prop()
-  editedAt?: Date; // ✅ ADD
+  editedAt?: Date;
 
+  @Prop({
+    type: [{
+      content: String,
+      editedAt: Date
+    }],
+    default: []
+  })
+  editHistory?: Array<{ content: string; editedAt: Date }>;
+
+  // ===== DELETION =====
   @Prop({ default: false })
   isDeleted: boolean;
 
   @Prop()
   deletedAt?: Date;
 
-  @Prop({ enum: ['sender', 'everyone'], default: 'sender' })
-  deletedFor?: string; // ✅ ADD
+  @Prop({ 
+    enum: ['visible', 'deleted_for_sender', 'deleted_for_receiver', 'deleted_for_everyone'],
+    default: 'visible'
+  })
+  deleteStatus: string;
+
+  // ===== DELIVERY STATUS (Double/Blue Tick) =====
+  @Prop({ 
+    default: 'sending', 
+    enum: ['sending', 'sent', 'delivered', 'read', 'failed'] 
+  })
+  deliveryStatus: string; // sending (grey), sent (grey), delivered (grey), read (blue)
+
+  @Prop()
+  sentAt: Date;
+
+  @Prop()
+  deliveredAt?: Date; // When receiver got it
+
+  @Prop()
+  readAt?: Date; // When receiver read it
+
+  @Prop()
+  failureReason?: string;
+
+  // ===== VISIBILITY =====
+  @Prop({ default: true })
+  isVisibleToUser: boolean;
+
+  @Prop({ default: true })
+  isVisibleToAstrologer: boolean;
+
+  // ===== METADATA =====
+  @Prop({ default: Date.now, index: true })
+  createdAt: Date;
 }
 
 export const ChatMessageSchema = SchemaFactory.createForClass(ChatMessage);
 
 // Indexes
 ChatMessageSchema.index({ messageId: 1 }, { unique: true });
-ChatMessageSchema.index({ sessionId: 1, sentAt: 1 });
+ChatMessageSchema.index({ sessionId: 1, sentAt: -1 });
+ChatMessageSchema.index({ orderId: 1, sentAt: -1 });
 ChatMessageSchema.index({ senderId: 1, sentAt: -1 });
-ChatMessageSchema.index({ receiverId: 1, isRead: 1 });
 ChatMessageSchema.index({ receiverId: 1, deliveryStatus: 1 });
-ChatMessageSchema.index({ replyTo: 1 }, { sparse: true });
 ChatMessageSchema.index({ createdAt: -1 });
+ChatMessageSchema.index({ isDeleted: 1, deleteStatus: 1 });
+ChatMessageSchema.index({ isStarred: 1, sentAt: -1 });
+ChatMessageSchema.index({ type: 1, sentAt: -1 });

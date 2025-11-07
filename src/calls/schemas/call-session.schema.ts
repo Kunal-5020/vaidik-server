@@ -1,3 +1,5 @@
+// src/calls/schemas/call-session.schema.ts
+
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
@@ -17,53 +19,48 @@ export class CallSession {
   @Prop({ required: true })
   orderId: string;
 
-  @Prop({ required: true, enum: ['audio', 'video'], default: 'audio' })
+  // ===== CALL TYPE =====
+  @Prop({ required: true, enum: ['audio', 'video'] })
   callType: string;
 
-  @Prop({ 
+  // ===== STATUS FLOW =====
+  @Prop({
     required: true,
-    enum: ['initiated', 'ringing', 'active', 'ended', 'cancelled', 'missed', 'rejected'],
+    enum: ['initiated', 'ringing', 'waiting', 'waiting_in_queue', 'active', 'ended', 'cancelled', 'rejected', 'failed'],
     default: 'initiated',
     index: true
   })
   status: string;
 
-  // Agora Details
+  // ===== TIMING =====
   @Prop()
-  agoraChannelName?: string;
+  requestCreatedAt: Date;
 
   @Prop()
-  agoraToken?: string;
+  acceptedAt?: Date;
 
   @Prop()
-  agoraUid?: number;
+  ringTime?: Date;
 
-  @Prop()
-  agoraResourceId?: string; // For recording
-
-  @Prop()
-  agoraSid?: string; // Recording session ID
-
-  // Timing Details
   @Prop()
   startTime?: Date;
 
   @Prop()
   endTime?: Date;
 
-  @Prop()
-  ringTime?: Date;
-
-  @Prop()
-  answerTime?: Date;
+  @Prop({ default: 0 })
+  maxDurationMinutes: number;
 
   @Prop({ default: 0 })
-  duration: number; // Total talk time in seconds
+  maxDurationSeconds: number;
 
   @Prop({ default: 0 })
-  billedDuration: number; // Rounded duration for billing (seconds)
+  duration: number;
 
-  // Billing Details
+  @Prop({ default: 0 })
+  billedMinutes: number;
+
+  // ===== RATE & PRICING =====
   @Prop({ required: true })
   ratePerMinute: number;
 
@@ -82,40 +79,31 @@ export class CallSession {
   @Prop()
   paidAt?: Date;
 
-  // ✅ Call Quality & Metrics
+  // ===== TIMER STATE =====
+  @Prop({ 
+    enum: ['not_started', 'running', 'paused', 'ended'],
+    default: 'not_started'
+  })
+  timerStatus: string;
+
   @Prop({
     type: {
-      averageQuality: { type: Number, default: 0 }, // 0-5
-      userNetworkQuality: { type: Number, default: 0 }, // 0-5
-      astrologerNetworkQuality: { type: Number, default: 0 }, // 0-5
-      reconnectionCount: { type: Number, default: 0 },
-      totalFreezeDuration: { type: Number, default: 0 }, // seconds
-      videoDisabledDuration: { type: Number, default: 0 }, // seconds (if video call)
-      audioDisabledDuration: { type: Number, default: 0 } // seconds
-    },
-    default: () => ({
-      averageQuality: 0,
-      userNetworkQuality: 0,
-      astrologerNetworkQuality: 0,
-      reconnectionCount: 0,
-      totalFreezeDuration: 0,
-      videoDisabledDuration: 0,
-      audioDisabledDuration: 0
-    })
+      elapsedSeconds: { type: Number, default: 0 },
+      remainingSeconds: { type: Number, default: 0 },
+      lastUpdatedAt: Date,
+      warningShownAt1Min: { type: Boolean, default: false }
+    }
   })
-  callMetrics: {
-    averageQuality: number;
-    userNetworkQuality: number;
-    astrologerNetworkQuality: number;
-    reconnectionCount: number;
-    totalFreezeDuration: number;
-    videoDisabledDuration: number;
-    audioDisabledDuration: number;
+  timerMetrics: {
+    elapsedSeconds: number;
+    remainingSeconds: number;
+    lastUpdatedAt?: Date;
+    warningShownAt1Min?: boolean;
   };
 
-  // Recording Details
+  // ===== RECORDING =====
   @Prop({ default: false })
-  isRecorded: boolean;
+  hasRecording: boolean;
 
   @Prop()
   recordingUrl?: string;
@@ -126,26 +114,187 @@ export class CallSession {
   @Prop()
   recordingDuration?: number;
 
+  @Prop({ enum: ['voice_note', 'video'], default: 'voice_note' })
+  recordingType?: string;
+
   @Prop()
   recordingStartedAt?: Date;
 
   @Prop()
-  recordingStoppedAt?: Date;
+  recordingEndedAt?: Date;
 
-  // End Details
+  // ===== PARTICIPANTS STATUS =====
+  @Prop({
+    type: {
+      userId: { type: Types.ObjectId },
+      isOnline: { type: Boolean, default: false },
+      isMuted: { type: Boolean, default: false },
+      isVideoOn: { type: Boolean, default: true },
+      lastSeen: Date,
+      connectionQuality: { type: String, enum: ['excellent', 'good', 'fair', 'poor', 'offline'], default: 'offline' }
+    }
+  })
+  userStatus?: {
+    userId: Types.ObjectId;
+    isOnline: boolean;
+    isMuted: boolean;
+    isVideoOn: boolean;
+    lastSeen?: Date;
+    connectionQuality?: string;
+  };
+
+  @Prop({
+    type: {
+      astrologerId: { type: Types.ObjectId },
+      isOnline: { type: Boolean, default: false },
+      isMuted: { type: Boolean, default: false },
+      isVideoOn: { type: Boolean, default: true },
+      lastSeen: Date,
+      connectionQuality: { type: String, enum: ['excellent', 'good', 'fair', 'poor', 'offline'], default: 'offline' }
+    }
+  })
+  astrologerStatus?: {
+    astrologerId: Types.ObjectId;
+    isOnline: boolean;
+    isMuted: boolean;
+    isVideoOn: boolean;
+    lastSeen?: Date;
+    connectionQuality?: string;
+  };
+
+  // ===== QUEUE INFO =====
+  @Prop()
+  expectedWaitTime?: number; // seconds
+
+  @Prop()
+  estimatedStartTime?: Date;
+
+  @Prop()
+  queuePosition?: number;
+
+  // ===== END DETAILS =====
   @Prop()
   endedBy?: string;
 
   @Prop()
   endReason?: string;
 
-  @Prop()
-  userRating?: number; // 1-5
+  // ===== CALL HISTORY (for continuation) =====
+  @Prop({
+    type: [{
+      sessionId: String,
+      startedAt: Date,
+      endedAt: Date,
+      durationSeconds: Number,
+      billedMinutes: Number,
+      chargedAmount: Number,
+      recordingUrl: String
+    }],
+    default: []
+  })
+  sessionHistory: Array<{
+    sessionId: string;
+    startedAt: Date;
+    endedAt: Date;
+    durationSeconds: number;
+    billedMinutes: number;
+    chargedAmount: number;
+    recordingUrl?: string;
+  }>;
+
+  @Prop({ default: 0 })
+  totalUsedDurationSeconds: number;
+
+  @Prop({ default: 0 })
+  totalBilledMinutes: number;
+
+  // ===== CONSULTATION STATE =====
+  @Prop({ default: true })
+  isActive: boolean;
 
   @Prop()
-  userFeedback?: string;
+  lastSessionEndTime?: Date;
 
-  @Prop({ default: Date.now })
+  // ===== REVIEW & RATING =====
+  @Prop({ min: 1, max: 5 })
+  rating?: number;
+
+  @Prop({ maxlength: 500 })
+  review?: string;
+
+  @Prop({ default: false })
+  reviewSubmitted: boolean;
+
+  @Prop()
+  reviewSubmittedAt?: Date;
+
+  // ===== REFUND REQUEST =====
+  @Prop({
+    type: {
+      requestedAt: Date,
+      requestedBy: { type: Types.ObjectId, ref: 'User' },
+      reason: String,
+      status: { 
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending'
+      },
+      processedAt: Date,
+      processedBy: { type: Types.ObjectId, ref: 'User' },
+      adminNotes: String,
+      rejectionReason: String,
+      refundAmount: Number,
+      refundPercentage: { type: Number, default: 100 }
+    }
+  })
+  refundRequest?: {
+    requestedAt: Date;
+    requestedBy: Types.ObjectId;
+    reason: string;
+    status: string;
+    processedAt?: Date;
+    processedBy?: Types.ObjectId;
+    adminNotes?: string;
+    rejectionReason?: string;
+    refundAmount?: number;
+    refundPercentage?: number;
+  };
+
+  // ===== BILLING =====
+@Prop({ default: 0 })
+billedDuration: number; // In seconds (round up to nearest minute, then convert)
+
+// Add to existing billing section:
+@Prop({ default: 0 })
+estimatedAmount: number;
+
+// Add AGORA fields
+@Prop()
+agoraChannelName?: string;
+
+@Prop()
+agoraUserToken?: string; // Token for user
+
+@Prop()
+agoraAstrologerToken?: string; // Token for astrologer
+
+@Prop({ type: Number })
+agoraUserUid?: number; // UID for user
+
+@Prop({ type: Number })
+agoraAstrologerUid?: number; // UID for astrologer
+
+@Prop()
+recordingStarted: Date; // Agora recording start time
+
+  // ===== METADATA =====
+  @Prop({ default: false, index: true })
+  isDeleted: boolean;
+
+  @Prop()
+  deletedAt?: Date;
+
+  @Prop({ default: Date.now, index: true })
   createdAt: Date;
 }
 
@@ -157,6 +306,7 @@ CallSessionSchema.index({ userId: 1, createdAt: -1 });
 CallSessionSchema.index({ astrologerId: 1, createdAt: -1 });
 CallSessionSchema.index({ orderId: 1 });
 CallSessionSchema.index({ status: 1 });
-CallSessionSchema.index({ agoraChannelName: 1 }, { sparse: true });
-CallSessionSchema.index({ isPaid: 1, status: 1 });
+CallSessionSchema.index({ callType: 1 });
+CallSessionSchema.index({ userId: 1, status: 1 });
+CallSessionSchema.index({ astrologerId: 1, status: 1 });
 CallSessionSchema.index({ createdAt: -1 });

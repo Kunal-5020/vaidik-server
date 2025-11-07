@@ -2,12 +2,12 @@ import {
   IsEnum,
   IsString,
   IsOptional,
-  MaxLength
+  MaxLength,
 } from 'class-validator';
 
 export class UpdateRemedyStatusDto {
   @IsEnum(['accepted', 'rejected'], {
-    message: 'Status must be either accepted or rejected'
+    message: 'Status must be either accepted or rejected',
   })
   status: 'accepted' | 'rejected';
 

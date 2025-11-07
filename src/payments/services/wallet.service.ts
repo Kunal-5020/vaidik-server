@@ -421,4 +421,312 @@ async getPaymentLogs(
   };
 }
 
+// ===== PAYMENT HOLD SYSTEM (for Orders) =====
+
+/**
+ * ✅ HOLD amount (temporary - not charged yet)
+ * Called when: User initiates chat/call
+ * Held for: 3-5 minutes (waiting for astrologer response)
+ * Released if: Rejected, Timeout, or User cancels
+ * Converted to: Charge (if session actually happens)
+ */
+async holdAmount(
+  userId: string,
+  amount: number,
+  orderId: string,
+  description: string
+): Promise<any> {
+  if (amount <= 0) {
+    throw new BadRequestException('Amount must be greater than 0');
+  }
+
+  const user = await this.userModel.findById(userId);
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+
+  // ✅ Verify balance before holding
+  if (user.wallet.balance < amount) {
+    throw new BadRequestException(
+      `Insufficient balance. Need ₹${amount}, have ₹${user.wallet.balance}`
+    );
+  }
+
+  const transactionId = this.generateTransactionId('HOLD');
+
+  // ✅ Create hold transaction
+  const transaction = new this.transactionModel({
+    transactionId,
+    userId,
+    type: 'hold',
+    amount,
+    orderId,
+    status: 'pending', // Hold is pending (not completed)
+    balanceBefore: user.wallet.balance,
+    balanceAfter: user.wallet.balance, // Hold doesn't reduce actual balance yet
+    description: `HOLD: ${description}`,
+    holdReleaseableAt: new Date(Date.now() + 5 * 60 * 1000), // Auto-release after 5 mins if not converted
+    createdAt: new Date()
+  });
+
+  await transaction.save();
+
+  this.logger.log(`Amount held: ₹${amount} for order ${orderId} | Transaction: ${transactionId}`);
+
+  return {
+    transactionId: transaction.transactionId,
+    holdAmount: amount,
+    message: 'Amount held successfully'
+  };
+}
+
+/**
+ * ✅ CHARGE from HOLD (convert hold to actual charge)
+ * Called when: Session ends and billing is calculated
+ * Converts: HOLD transaction to CHARGE transaction
+ * Deducts: From actual balance
+ * Refunds: Unused hold amount
+ */
+async chargeFromHold(
+  userId: string,
+  chargeAmount: number,
+  orderId: string,
+  description: string
+): Promise<any> {
+  const user = await this.userModel.findById(userId);
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+
+  // ✅ Find the hold transaction
+  const holdTransaction = await this.transactionModel.findOne({
+    userId,
+    orderId,
+    type: 'hold',
+    status: 'pending'
+  });
+
+  if (!holdTransaction) {
+    throw new BadRequestException('No hold transaction found for this order');
+  }
+
+  const heldAmount = holdTransaction.amount;
+
+  if (chargeAmount > heldAmount) {
+    throw new BadRequestException(
+      `Charge amount (₹${chargeAmount}) exceeds held amount (₹${heldAmount})`
+    );
+  }
+
+  // ✅ Verify wallet still has balance
+  if (user.wallet.balance < chargeAmount) {
+    throw new BadRequestException('Insufficient wallet balance to charge');
+  }
+
+  try {
+    const chargeTransactionId = this.generateTransactionId('CHARGE');
+
+    // ✅ Mark hold as completed
+    holdTransaction.status = 'converted_to_charge';
+    holdTransaction.convertedAt = new Date();
+    holdTransaction.linkedTransactionId = chargeTransactionId;
+    await holdTransaction.save();
+
+    // ✅ Create charge transaction
+    const chargeTransaction = new this.transactionModel({
+      transactionId: chargeTransactionId,
+      userId,
+      type: 'charge',
+      amount: chargeAmount,
+      orderId,
+      status: 'completed',
+      balanceBefore: user.wallet.balance,
+      balanceAfter: user.wallet.balance - chargeAmount,
+      description: `CHARGE: ${description}`,
+      linkedHoldTransactionId: holdTransaction.transactionId,
+      createdAt: new Date()
+    });
+
+    // ✅ Deduct from wallet
+    user.wallet.balance -= chargeAmount;
+    user.wallet.totalSpent += chargeAmount;
+    user.wallet.lastTransactionAt = new Date();
+
+    await chargeTransaction.save();
+    await user.save();
+
+    this.logger.log(
+      `Charged from hold: ₹${chargeAmount} for order ${orderId} | Balance: ₹${user.wallet.balance}`
+    );
+
+    return {
+      transactionId: chargeTransaction.transactionId,
+      chargedAmount: chargeAmount,
+      balanceAfter: user.wallet.balance,
+      message: 'Charged successfully'
+    };
+  } catch (error: any) {
+    this.logger.error(`Charge from hold failed: ${error.message}`);
+    throw new BadRequestException(`Charge failed: ${error.message}`);
+  }
+}
+
+/**
+ * ✅ RELEASE HOLD (refund held amount)
+ * Called when: Astrologer rejects, Timeout, User cancels (before session starts)
+ * Action: Marks hold as released (no actual transaction, just state change)
+ * Result: User gets full held amount back automatically
+ */
+async releaseHold(
+  userId: string,
+  releaseAmount: number,
+  orderId: string,
+  description: string
+): Promise<any> {
+  const user = await this.userModel.findById(userId);
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+
+  // ✅ Find the hold transaction
+  const holdTransaction = await this.transactionModel.findOne({
+    userId,
+    orderId,
+    type: 'hold',
+    status: 'pending'
+  });
+
+  if (!holdTransaction) {
+    throw new BadRequestException('No hold transaction found to release');
+  }
+
+  try {
+    const refundTransactionId = this.generateTransactionId('REFUND');
+
+    // ✅ Mark hold as released
+    holdTransaction.status = 'released';
+    holdTransaction.releasedAt = new Date();
+    holdTransaction.linkedTransactionId = refundTransactionId;
+    await holdTransaction.save();
+
+    // ✅ Create refund transaction (record only - balance already untouched)
+    const refundTransaction = new this.transactionModel({
+      transactionId: refundTransactionId,
+      userId,
+      type: 'refund',
+      amount: releaseAmount,
+      orderId,
+      status: 'completed',
+      balanceBefore: user.wallet.balance,
+      balanceAfter: user.wallet.balance, // No actual deduction
+      description: `REFUND (Hold released): ${description}`,
+      linkedHoldTransactionId: holdTransaction.transactionId,
+      createdAt: new Date()
+    });
+
+    user.wallet.lastTransactionAt = new Date();
+
+    await refundTransaction.save();
+    await user.save();
+
+    this.logger.log(`Hold released: ₹${releaseAmount} for order ${orderId}`);
+
+    return {
+      transactionId: refundTransaction.transactionId,
+      refundedAmount: releaseAmount,
+      balanceAfter: user.wallet.balance,
+      message: 'Hold released and amount refunded'
+    };
+  } catch (error: any) {
+    this.logger.error(`Release hold failed: ${error.message}`);
+    throw new BadRequestException(`Release failed: ${error.message}`);
+  }
+}
+
+/**
+ * ✅ REFUND UNUSED AMOUNT (after session charged)
+ * Called when: Charge from hold leaves unused balance
+ * Example: Held ₹100, charged ₹60, refund ₹40
+ */
+async refundUnusedAmount(
+  userId: string,
+  refundAmount: number,
+  orderId: string,
+  description: string
+): Promise<any> {
+  const user = await this.userModel.findById(userId);
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+
+  try {
+    const refundTransactionId = this.generateTransactionId('REFUND');
+
+    // ✅ Create refund transaction
+    const refundTransaction = new this.transactionModel({
+      transactionId: refundTransactionId,
+      userId,
+      type: 'refund',
+      amount: refundAmount,
+      orderId,
+      status: 'completed',
+      balanceBefore: user.wallet.balance,
+      balanceAfter: user.wallet.balance + refundAmount,
+      description: `REFUND (Unused): ${description}`,
+      createdAt: new Date()
+    });
+
+    // ✅ Credit back to wallet
+    user.wallet.balance += refundAmount;
+    user.wallet.lastTransactionAt = new Date();
+
+    await refundTransaction.save();
+    await user.save();
+
+    this.logger.log(`Refunded unused amount: ₹${refundAmount} to user ${userId}`);
+
+    return {
+      transactionId: refundTransaction.transactionId,
+      refundedAmount: refundAmount,
+      balanceAfter: user.wallet.balance,
+      message: 'Unused amount refunded'
+    };
+  } catch (error: any) {
+    this.logger.error(`Refund unused failed: ${error.message}`);
+    throw new BadRequestException(`Refund failed: ${error.message}`);
+  }
+}
+
+/**
+ * ✅ GET WALLET WITH HOLD STATUS
+ * Shows: Current balance + held amount + available balance
+ */
+async getWalletWithHold(userId: string): Promise<any> {
+  const user = await this.userModel.findById(userId).select('wallet').lean();
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+
+  // ✅ Calculate total held amount
+  const [heldTransactions] = await Promise.all([
+    this.transactionModel.aggregate([
+      { $match: { userId: userId, type: 'hold', status: 'pending' } },
+      { $group: { _id: null, totalHeld: { $sum: '$amount' } } }
+    ])
+  ]);
+
+  const totalHeld = heldTransactions[0]?.totalHeld || 0;
+  const availableBalance = user.wallet.balance - totalHeld;
+
+  return {
+    success: true,
+    data: {
+      currentBalance: user.wallet.balance,
+      totalHeld: totalHeld,
+      availableBalance: Math.max(0, availableBalance), // Never negative
+      canStartSession: availableBalance >= 0
+    }
+  };
+}
+
 }
