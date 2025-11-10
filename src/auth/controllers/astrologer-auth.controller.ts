@@ -103,14 +103,15 @@ export class AstrologerAuthController {
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async logout(@Request() req) {
+  async logout(@Request() req, @Body() body?: { deviceId?: string }) {
     try {
       const userId = req.user.userId;
       const astrologerId = req.user.astrologerId;
+      const deviceId = body?.deviceId;
 
-      this.logger.log('🚪 Logging out astrologer', { userId, astrologerId });
+      this.logger.log('🚪 Logging out astrologer', { userId, astrologerId, deviceId });
 
-      const result = await this.astrologerAuthService.logout(userId, astrologerId);
+      const result = await this.astrologerAuthService.logout(userId, astrologerId, deviceId);
       
       return result;
     } catch (error) {

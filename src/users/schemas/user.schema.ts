@@ -226,7 +226,7 @@ export class User {
       {
         fcmToken: { type: String, required: true },
         deviceId: String,
-        deviceType: { type: String, enum: ['android', 'ios', 'web'] },
+        deviceType: { type: String, enum: ['android', 'ios', 'web', 'phone', 'tablet'] },
         deviceName: String,
         lastActive: { type: Date, default: Date.now },
         isActive: { type: Boolean, default: true },
@@ -237,7 +237,7 @@ export class User {
   devices: {
     fcmToken: string;
     deviceId?: string;
-    deviceType?: 'android' | 'ios' | 'web';
+    deviceType?: 'android' | 'ios' | 'web' | 'phone' | 'tablet';
     deviceName?: string;
     lastActive: Date;
     isActive: boolean;

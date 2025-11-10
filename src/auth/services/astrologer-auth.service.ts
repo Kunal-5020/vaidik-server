@@ -119,12 +119,19 @@ export class AstrologerAuthService {
   }
 
   /**
-   * Verify OTP and login astrologer
-   */
-  async verifyLoginOtp(verifyOtpDto: VerifyOtpDto) {
-  const { phoneNumber, countryCode, otp } = verifyOtpDto;
+ * Verify OTP and login astrologer
+ */
+async verifyLoginOtp(verifyOtpDto: VerifyOtpDto) {
+  const { phoneNumber, countryCode, otp, fcmToken, deviceId, deviceType, deviceName } = verifyOtpDto;
 
-  this.logger.log('🔍 Starting astrologer OTP verification');
+  this.logger.log('🔍 [AstrologerAuth] Verifying OTP with device info:', {
+    phoneNumber,
+    otp: '****',
+    fcmToken: fcmToken ? `${fcmToken.substring(0, 15)}...` : 'N/A',
+    deviceId,
+    deviceType,
+    deviceName
+  });
 
   const isOtpValid = await this.otpService.verifyOTP(phoneNumber, countryCode, otp);
 
@@ -151,7 +158,6 @@ export class AstrologerAuthService {
     throw new UnauthorizedException('Astrologer profile not found');
   }
 
-  // ✅ Check accountStatus (not account.status)
   if (astrologer.accountStatus === 'suspended') {
     throw new UnauthorizedException(
       `Your account is suspended. Reason: ${astrologer.suspensionReason || 'Please contact support'}`
@@ -160,20 +166,99 @@ export class AstrologerAuthService {
 
   this.logger.log('✅ Astrologer found', { astrologerId: astrologer._id });
 
-  // ✅ REACTIVATE deleted/inactive astrologers (use accountStatus)
+  // Reactivate if needed
   if (astrologer.accountStatus === 'deleted' || astrologer.accountStatus === 'inactive') {
     this.logger.log(`♻️ Reactivating ${astrologer.accountStatus} astrologer`);
     astrologer.accountStatus = 'active';
   }
 
-  // ✅ REACTIVATE deleted/inactive users
   if (user.status === 'deleted' || user.status === 'inactive') {
     this.logger.log(`♻️ Reactivating ${user.status} user`);
     user.status = 'active';
   }
 
+  // ✅ SAVE DEVICE TOKEN (FIXED VERSION)
+  if (fcmToken && deviceId) {
+    this.logger.log('📱 [AstrologerAuth] Processing device token...', {
+      deviceId,
+      deviceType: deviceType || 'phone',
+      deviceName: deviceName || 'Unknown Device'
+    });
+
+    try {
+      // Initialize devices array if it doesn't exist
+      if (!astrologer.devices) {
+        astrologer.devices = [];
+      }
+
+      // Check if device already exists (by deviceId)
+      const existingDeviceIndex = astrologer.devices.findIndex(
+        (d) => d.deviceId === deviceId
+      );
+
+      if (existingDeviceIndex !== -1) {
+        // ✅ Update existing device using .set() method
+        this.logger.log(`🔄 Updating existing device at index ${existingDeviceIndex}`);
+        
+       astrologer.devices[existingDeviceIndex] = {
+  fcmToken,
+  deviceId,
+  deviceType: (deviceType || 'phone') as 'android' | 'ios' | 'web',
+  deviceName: deviceName || 'Unknown Device',
+  lastActive: new Date(),
+  isActive: true,
+};
+      } else {
+        // ✅ Add new device using .push()
+        this.logger.log(`➕ Adding new device: ${deviceId}`);
+        
+        astrologer.devices.push({
+          fcmToken,
+          deviceId,
+          deviceType: (deviceType || 'phone') as 'android' | 'ios' | 'web',
+          deviceName: deviceName || 'Unknown Device',
+          lastActive: new Date(),
+          isActive: true,
+        });
+      }
+
+      // ✅ CRITICAL: Mark the array as modified
+      astrologer.markModified('devices');
+
+      // Keep only last 5 devices
+      if (astrologer.devices.length > 5) {
+        this.logger.log('🧹 Trimming to 5 most recent devices');
+        astrologer.devices = astrologer.devices
+          .sort((a, b) => 
+            new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime()
+          )
+          .slice(0, 5);
+        
+        // ✅ Mark modified again after sorting/slicing
+        astrologer.markModified('devices');
+      }
+
+      this.logger.log(`✅ Device token prepared for saving:`, {
+        fcmToken: `${fcmToken.substring(0, 20)}...`,
+        totalDevices: astrologer.devices.length,
+        deviceIds: astrologer.devices.map(d => d.deviceId)
+      });
+    } catch (deviceError) {
+      this.logger.error('❌ Device processing failed:', {
+        error: (deviceError as any).message,
+        stack: (deviceError as any).stack?.substring(0, 200)
+      });
+      // Don't fail login if device storage fails
+    }
+  } else {
+    this.logger.warn('⚠️ Device info missing (fcmToken or deviceId not provided)');
+  }
+
   astrologer.availability.lastActive = new Date();
+  
+  // ✅ Save astrologer document (this will now save devices array)
   await astrologer.save();
+  this.logger.log('✅ Astrologer document saved with devices');
 
   user.lastLoginAt = new Date();
   await user.save();
@@ -191,7 +276,7 @@ export class AstrologerAuthService {
     7 * 24 * 60 * 60
   );
 
-  this.logger.log('✅ Astrologer login successful');
+  this.logger.log('✅ Astrologer login successful with device registered');
 
   return {
     success: true,
@@ -248,36 +333,71 @@ export class AstrologerAuthService {
     }
   }
 
-  /**
-   * Logout astrologer
-   */
-  async logout(userId: string, astrologerId: string) {
-    try {
-      this.logger.log('🚪 Logging out astrologer', { userId, astrologerId });
+ /**
+ * Logout astrologer and remove device token
+ */
+async logout(userId: string, astrologerId: string, deviceId?: string) {
+  try {
+    this.logger.log('🚪 Logging out astrologer', { userId, astrologerId, deviceId });
 
-      // Remove refresh token from cache
-      await this.cacheService.del(`astrologer_refresh_${userId}`);
+    // Remove refresh token from cache
+    await this.cacheService.del(`astrologer_refresh_${userId}`);
 
-      // Update astrologer availability to offline
-      await this.astrologerModel.findByIdAndUpdate(
-        astrologerId,
-        {
-          'availability.isOnline': false,
-          'availability.isAvailable': false,
-          'availability.isLive': false,
-          'availability.lastActive': new Date()
+    const astrologer = await this.astrologerModel.findById(astrologerId);
+    
+    if (astrologer && astrologer.devices && astrologer.devices.length > 0) {
+      if (deviceId) {
+        // ✅ Remove specific device
+        const initialCount = astrologer.devices.length;
+        astrologer.devices = astrologer.devices.filter(
+          (device) => device.deviceId !== deviceId
+        );
+        
+        if (astrologer.devices.length < initialCount) {
+          // ✅ Mark as modified after reassignment
+          astrologer.markModified('devices');
+          this.logger.log(`📱 Removed device ${deviceId} from astrologer`);
         }
-      );
-
-      this.logger.log('✅ Logout successful');
-
-      return {
-        success: true,
-        message: 'Logged out successfully'
-      };
-    } catch (error) {
-      this.logger.error('❌ Logout failed', { error: error.message });
-      throw new BadRequestException('Logout failed');
+      } else {
+        // ✅ Mark all devices as inactive (FIXED VERSION)
+        this.logger.log('📱 Marking all devices as inactive');
+        
+        // Option 1: Reassign entire array with updated values
+        astrologer.devices = astrologer.devices.map(device => ({
+          ...device,
+          isActive: false,
+          lastActive: device.lastActive
+        }));
+        
+        astrologer.markModified('devices');
+      }
+      
+      // Save astrologer document with device changes
+      await astrologer.save();
+      this.logger.log('✅ Device changes saved');
     }
+
+    // Update astrologer availability to offline
+    await this.astrologerModel.findByIdAndUpdate(
+      astrologerId,
+      {
+        'availability.isOnline': false,
+        'availability.isAvailable': false,
+        'availability.isLive': false,
+        'availability.lastActive': new Date()
+      }
+    );
+
+    this.logger.log('✅ Logout successful');
+
+    return {
+      success: true,
+      message: 'Logged out successfully'
+    };
+  } catch (error) {
+    this.logger.error('❌ Logout failed', { error: error.message });
+    throw new BadRequestException('Logout failed');
   }
+}
+
 }
