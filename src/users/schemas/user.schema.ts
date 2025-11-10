@@ -152,6 +152,7 @@ export class User {
   @Prop({ 
     type: {
       balance: { type: Number, default: 0, min: 0 },
+      currency: { type: String, default: 'INR' },
       totalRecharged: { type: Number, default: 0 },
       totalSpent: { type: Number, default: 0 },
       lastRechargeAt: { type: Date, default: null },
@@ -165,6 +166,7 @@ export class User {
   })
   wallet: {
     balance: number;
+    currency: string;
     totalRecharged: number;
     totalSpent: number;
     lastRechargeAt?: Date;

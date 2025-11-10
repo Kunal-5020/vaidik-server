@@ -5,12 +5,6 @@ export class RechargeWalletDto {
   @Min(100, { message: 'Minimum recharge amount is ₹100' })
   amount: number;
 
-  @IsEnum(['razorpay', 'stripe', 'paypal'], {
-    message: 'Payment gateway must be razorpay, stripe, or paypal'
-  })
-  @IsNotEmpty({ message: 'Payment gateway is required' })
-  paymentGateway: string;
-
   @IsOptional()
   @IsString()
   currency?: string; // 'INR', 'USD', 'EUR', etc.

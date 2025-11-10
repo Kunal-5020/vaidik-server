@@ -219,16 +219,18 @@ export class AdminOrdersService {
     order.cancelledAt = new Date();
 
     // ✅ FIXED: Use correct property names
-    // Process automatic refund if payment is on hold
     if (order.payment?.status === 'hold' && order.payment?.heldAmount > 0) {
-      try {
-        // Release the hold
-        await this.walletService.releaseHold(
-          order.userId.toString(),
-          order.payment.heldAmount,
-          orderId,
-          `Admin cancelled order: ${reason}`
-        );
+  try {
+    const refundAmount = order.payment.heldAmount; // ✅ Declare variable
+    
+    // Release the hold
+    await this.walletService.refundToWallet(
+      order.userId.toString(),
+      refundAmount, // ✅ Now properly declared
+      orderId,
+      `Admin cancelled order: ${reason}`,
+      undefined,
+    );
 
         order.payment.status = 'refunded';
         order.payment.refundedAmount = order.payment.heldAmount;

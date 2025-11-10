@@ -7,8 +7,6 @@ import { PaymentWebhookController } from './controllers/payment-webhook.controll
 import { WalletService } from './services/wallet.service';
 import { PayoutService } from './services/payout.service';
 import { RazorpayService } from './services/razorpay.service';
-import { StripeService } from './services/stripe.service';
-import { PayPalService } from './services/paypal.service';
 import { WalletTransaction, WalletTransactionSchema } from './schemas/wallet-transaction.schema';
 import { PayoutRequest, PayoutRequestSchema } from './schemas/payout-request.schema';
 import { UsersModule } from '../users/users.module'; 
@@ -33,8 +31,6 @@ import { AstrologersModule } from '../astrologers/astrologers.module';
     WalletService,
     PayoutService,
     RazorpayService,
-    StripeService,
-    PayPalService,
   ],
   exports: [WalletService, PayoutService],
 })

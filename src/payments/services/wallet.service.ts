@@ -1,181 +1,259 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  Logger,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types, ClientSession } from 'mongoose';
 import { WalletTransaction, WalletTransactionDocument } from '../schemas/wallet-transaction.schema';
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { RazorpayService } from './razorpay.service';
-import { StripeService } from './stripe.service';
-import { PayPalService } from './paypal.service';
-import { PaymentGatewayService } from './payment-gateway.service';
-
 
 @Injectable()
 export class WalletService {
   private readonly logger = new Logger(WalletService.name);
+
   constructor(
-    @InjectModel(WalletTransaction.name) 
+    @InjectModel(WalletTransaction.name)
     private transactionModel: Model<WalletTransactionDocument>,
     @InjectModel(User.name)
     private userModel: Model<UserDocument>,
-    private razorpayService: RazorpayService,
-    private stripeService: StripeService,
-    private paypalService: PayPalService,
+    private razorpayService: RazorpayService, // ✅ Only Razorpay
   ) {}
 
+  // ===== UTILITY METHODS =====
+
+  /**
+   * Generate unique transaction ID
+   */
   private generateTransactionId(prefix: string = 'TXN'): string {
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 8).toUpperCase();
     return `${prefix}_${timestamp}_${random}`;
   }
 
-  // ✅ Gateway Factory
-  private getPaymentGateway(gateway: string): PaymentGatewayService {
-  const normalizedGateway = gateway?.toLowerCase(); // ✅ Normalize
-  
-  switch (normalizedGateway) {
-    case 'razorpay':
-      return this.razorpayService;
-    case 'stripe':
-      return this.stripeService;
-    case 'paypal':
-      return this.paypalService;
-    default:
-      throw new BadRequestException(
-        `Unsupported payment gateway: ${gateway}. Supported: razorpay, stripe, paypal`
-      );
+  /**
+   * Start MongoDB session helper
+   */
+  private async startSession(): Promise<ClientSession> {
+    return this.transactionModel.db.startSession();
   }
-}
 
-  // ✅ UPDATED: Create recharge with gateway integration
+  // ===== CREATE RECHARGE TRANSACTION (RAZORPAY ONLY) =====
+
   async createRechargeTransaction(
     userId: string,
     amount: number,
-    paymentGateway: string,
-    currency?: string
+    currency: string = 'INR',
   ): Promise<any> {
+    // ✅ Validate user exists
     const user = await this.userModel.findById(userId);
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    // Then use it:
+    // ✅ Validate amount
+    if (amount < 100) {
+      throw new BadRequestException('Minimum recharge amount is ₹100');
+    }
+
     const transactionId = this.generateTransactionId('TXN');
 
-    // Create transaction record
-    const transaction = new this.transactionModel({
-      transactionId,
-      userId,
-      type: 'recharge',
-      amount,
-      balanceBefore: user.wallet.balance,
-      balanceAfter: user.wallet.balance,
-      description: `Wallet recharge of ${currency || 'INR'} ${amount}`,
-      paymentGateway,
-      status: 'pending',
-      createdAt: new Date()
-    });
+    try {
+      // ✅ Create pending transaction record
+      const transaction = new this.transactionModel({
+        transactionId,
+        userId: new Types.ObjectId(userId),
+        type: 'recharge',
+        amount,
+        balanceBefore: user.wallet?.balance || 0,
+        balanceAfter: user.wallet?.balance || 0, // Will update on success
+        description: `Wallet recharge of ${currency} ${amount}`,
+        paymentGateway: 'razorpay',
+        status: 'pending',
+        createdAt: new Date(),
+      });
 
-    await transaction.save();
+      await transaction.save();
 
-    // ✅ Create order in payment gateway
-    const gateway = this.getPaymentGateway(paymentGateway);
-    const gatewayResponse = await gateway.createOrder(
-      amount,
-      currency || 'INR',
-      userId,
-      transactionId
-    );
+      // ✅ Create Razorpay order
+      const razorpayOrder = await this.razorpayService.createOrder(
+        amount,
+        currency,
+        userId,
+        transactionId,
+      );
 
-    return {
-      success: true,
-      message: 'Recharge transaction created',
-      data: {
-        transactionId: transaction.transactionId,
-        amount: transaction.amount,
-        currency: gatewayResponse.currency,
-        status: transaction.status,
-        gateway: paymentGateway,
-        gatewayOrderId: gatewayResponse.gatewayOrderId,
-        clientSecret: gatewayResponse.clientSecret, // For Stripe
-        paymentUrl: gatewayResponse.paymentUrl, // For PayPal
-      }
-    };
+      this.logger.log(
+        `Recharge transaction created: ${transactionId} | Amount: ${currency} ${amount}`,
+      );
+
+      return {
+        success: true,
+        message: 'Recharge transaction created successfully',
+        data: {
+          transactionId: transaction.transactionId,
+          amount: transaction.amount,
+          currency: razorpayOrder.currency,
+          status: transaction.status,
+          razorpay: {
+            orderId: razorpayOrder.gatewayOrderId,
+            amount: razorpayOrder.amount,
+            currency: razorpayOrder.currency,
+            key: this.razorpayService.getKeyId(), // For frontend
+          },
+        },
+      };
+    } catch (error: any) {
+      this.logger.error(`Recharge creation failed: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to create recharge transaction: ${error.message}`,
+      );
+    }
   }
+
+  // ===== VERIFY PAYMENT (WITH TRANSACTION) =====
 
   async verifyPayment(
     transactionId: string,
     paymentId: string,
-    status: 'completed' | 'failed'
+    status: 'completed' | 'failed',
   ): Promise<any> {
-    const transaction = await this.transactionModel.findOne({ transactionId });
-    if (!transaction) {
-      throw new NotFoundException('Transaction not found');
-    }
+    const session = await this.startSession();
+    session.startTransaction();
 
-    if (transaction.status !== 'pending') {
-      throw new BadRequestException('Transaction already processed');
-    }
+    try {
+      // ✅ Find transaction
+      const transaction = await this.transactionModel
+        .findOne({ transactionId })
+        .session(session);
 
-    transaction.paymentId = paymentId;
-    transaction.status = status;
+      if (!transaction) {
+        throw new NotFoundException('Transaction not found');
+      }
 
-    if (status === 'completed') {
-      // Update user wallet
-      const user = await this.userModel.findById(transaction.userId);
+      if (transaction.status !== 'pending') {
+        throw new BadRequestException(
+          `Transaction already ${transaction.status}`,
+        );
+      }
+
+      // ✅ Find user
+      const user = await this.userModel
+        .findById(transaction.userId)
+        .session(session);
+
       if (!user) {
         throw new NotFoundException('User not found');
       }
 
-      user.wallet.balance += transaction.amount;
-      user.wallet.totalRecharged += transaction.amount;
-      user.wallet.lastRechargeAt = new Date();
-      user.wallet.lastTransactionAt = new Date();
+      // ✅ Update transaction
+      transaction.paymentId = paymentId;
+      transaction.status = status;
 
-      transaction.balanceAfter = user.wallet.balance;
+      if (status === 'completed') {
+        // ✅ Update user wallet balance atomically
+        const currentBalance = user.wallet?.balance || 0;
+        const newBalance = currentBalance + transaction.amount;
 
-      await user.save();
-    }
+        if (!user.wallet) {
+          user.wallet = {
+            balance: 0,
+            currency: 'INR',
+            totalRecharged: 0,
+            totalSpent: 0,
+          };
+        }
 
-    await transaction.save();
+        user.wallet.balance = newBalance;
+        user.wallet.totalRecharged =
+          (user.wallet.totalRecharged || 0) + transaction.amount;
+        user.wallet.lastRechargeAt = new Date();
+        user.wallet.lastTransactionAt = new Date();
 
-    return {
-      success: true,
-      message: status === 'completed' ? 'Payment verified successfully' : 'Payment failed',
-      data: {
-        transactionId: transaction.transactionId,
-        status: transaction.status,
-        balanceAfter: transaction.balanceAfter
+        transaction.balanceAfter = newBalance;
+        transaction.description = `Wallet recharged successfully with ₹${transaction.amount}`;
+
+        this.logger.log(
+          `Payment verified: ${transactionId} | New balance: ₹${newBalance}`,
+        );
+      } else {
+        transaction.failureReason = 'Payment failed or cancelled by user';
+        this.logger.warn(`Payment failed: ${transactionId}`);
       }
-    };
+
+      // ✅ Save changes atomically
+      await user.save({ session });
+      await transaction.save({ session });
+
+      await session.commitTransaction();
+
+      return {
+        success: true,
+        message:
+          status === 'completed'
+            ? 'Payment verified and wallet updated successfully'
+            : 'Payment verification failed',
+        data: {
+          transactionId: transaction.transactionId,
+          amount: transaction.amount,
+          status: transaction.status,
+          newBalance: status === 'completed' ? user.wallet.balance : null,
+        },
+      };
+    } catch (error: any) {
+      await session.abortTransaction();
+      this.logger.error(`Payment verification failed: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Payment verification failed: ${error.message}`,
+      );
+    } finally {
+      session.endSession();
+    }
   }
 
-  // ===== DEDUCT FROM WALLET =====
+  // ===== DEDUCT FROM WALLET (WITH TRANSACTION) =====
 
   async deductFromWallet(
-    userId: string,
-    amount: number,
-    orderId: string,
-    description: string
-  ): Promise<WalletTransactionDocument> {
-
-    if (amount <= 0) {
+  userId: string,
+  amount: number,
+  orderId: string,
+  description: string,
+  session: ClientSession | undefined = undefined, // ✅ Fixed: Explicit default
+): Promise<WalletTransactionDocument> {
+  if (amount <= 0) {
     throw new BadRequestException('Amount must be greater than 0');
   }
 
-    const user = await this.userModel.findById(userId);
+  const useExternalSession = !!session;
+  const localSession = session || (await this.startSession());
+
+  if (!useExternalSession) {
+    localSession.startTransaction();
+  }
+
+  try {
+    const user = await this.userModel
+      .findById(userId)
+      .session(localSession);
+
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    if (user.wallet.balance < amount) {
-      throw new BadRequestException('Insufficient wallet balance');
+    if (!user.wallet || user.wallet.balance < amount) {
+      throw new BadRequestException(
+        `Insufficient wallet balance. Required: ₹${amount}, Available: ₹${user.wallet?.balance || 0}`,
+      );
     }
 
-    const transactionId = `TXN_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
+    const transactionId = this.generateTransactionId('TXN');
 
     const transaction = new this.transactionModel({
       transactionId,
-      userId,
+      userId: new Types.ObjectId(userId),
       type: 'deduction',
       amount,
       balanceBefore: user.wallet.balance,
@@ -183,55 +261,195 @@ export class WalletService {
       description,
       orderId,
       status: 'completed',
-      createdAt: new Date()
+      createdAt: new Date(),
     });
 
     user.wallet.balance -= amount;
-    user.wallet.totalSpent += amount;
+    user.wallet.totalSpent = (user.wallet.totalSpent || 0) + amount;
     user.wallet.lastTransactionAt = new Date();
 
-    await Promise.all([transaction.save(), user.save()]);
+    await transaction.save({ session: localSession });
+    await user.save({ session: localSession });
 
-    this.logger.log(`Deducted ₹${amount} from user ${userId}`);
+    if (!useExternalSession) {
+      await localSession.commitTransaction();
+    }
+
+    this.logger.log(`Deducted ₹${amount} from user ${userId} for order ${orderId}`);
 
     return transaction;
+  } catch (error: any) {
+    if (!useExternalSession) {
+      await localSession.abortTransaction();
+    }
+    this.logger.error(`Deduction failed: ${error.message}`);
+    throw error;
+  } finally {
+    if (!useExternalSession) {
+      localSession.endSession();
+    }
   }
+}
 
-  // ===== REFUND TO WALLET =====
+
+  // ===== REFUND TO WALLET (WITH TRANSACTION) =====
 
   async refundToWallet(
-    userId: string,
-    amount: number,
-    orderId: string,
-    description: string
-  ): Promise<WalletTransactionDocument> {
-    const user = await this.userModel.findById(userId);
+  userId: string,
+  amount: number,
+  orderId: string,
+  description: string,
+  session: ClientSession | undefined = undefined, // ✅ Fixed: Explicit default
+): Promise<WalletTransactionDocument> {
+  if (amount <= 0) {
+    throw new BadRequestException('Amount must be greater than 0');
+  }
+
+  const useExternalSession = !!session;
+  const localSession = session || (await this.startSession());
+
+  if (!useExternalSession) {
+    localSession.startTransaction();
+  }
+
+  try {
+    const user = await this.userModel
+      .findById(userId)
+      .session(localSession);
+
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    const transactionId = `TXN_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
+    const transactionId = this.generateTransactionId('REFUND');
 
     const transaction = new this.transactionModel({
       transactionId,
-      userId,
+      userId: new Types.ObjectId(userId),
       type: 'refund',
       amount,
-      balanceBefore: user.wallet.balance,
-      balanceAfter: user.wallet.balance + amount,
+      balanceBefore: user.wallet?.balance || 0,
+      balanceAfter: (user.wallet?.balance || 0) + amount,
       description,
       orderId,
       status: 'completed',
-      createdAt: new Date()
+      createdAt: new Date(),
     });
+
+    if (!user.wallet) {
+      user.wallet = {
+        balance: 0,
+        currency: 'INR', // ✅ Now valid after schema update
+        totalRecharged: 0,
+        totalSpent: 0,
+      };
+    }
 
     user.wallet.balance += amount;
     user.wallet.lastTransactionAt = new Date();
 
-    await Promise.all([transaction.save(), user.save()]);
+    await transaction.save({ session: localSession });
+    await user.save({ session: localSession });
+
+    if (!useExternalSession) {
+      await localSession.commitTransaction();
+    }
+
+    this.logger.log(`Refunded ₹${amount} to user ${userId} for order ${orderId}`);
 
     return transaction;
+  } catch (error: any) {
+    if (!useExternalSession) {
+      await localSession.abortTransaction();
+    }
+    this.logger.error(`Refund failed: ${error.message}`);
+    throw error;
+  } finally {
+    if (!useExternalSession) {
+      localSession.endSession();
+    }
   }
+}
+
+  // ===== CREDIT TO WALLET (WITH TRANSACTION) =====
+
+ async creditToWallet(
+  userId: string,
+  amount: number,
+  orderId: string,
+  description: string,
+  type: 'refund' | 'bonus' | 'reward' = 'refund',
+  session: ClientSession | undefined = undefined, // ✅ Fixed: Explicit default
+): Promise<WalletTransactionDocument> {
+  if (amount <= 0) {
+    throw new BadRequestException('Amount must be greater than 0');
+  }
+
+  const useExternalSession = !!session;
+  const localSession = session || (await this.startSession());
+
+  if (!useExternalSession) {
+    localSession.startTransaction();
+  }
+
+  try {
+    const user = await this.userModel
+      .findById(userId)
+      .session(localSession);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const transactionId = this.generateTransactionId(type.toUpperCase());
+
+    const transaction = new this.transactionModel({
+      transactionId,
+      userId: new Types.ObjectId(userId),
+      type,
+      amount,
+      balanceBefore: user.wallet?.balance || 0,
+      balanceAfter: (user.wallet?.balance || 0) + amount,
+      description,
+      orderId,
+      status: 'completed',
+      createdAt: new Date(),
+    });
+
+    if (!user.wallet) {
+      user.wallet = {
+        balance: 0,
+        currency: 'INR', // ✅ Now valid after schema update
+        totalRecharged: 0,
+        totalSpent: 0,
+      };
+    }
+
+    user.wallet.balance += amount;
+    user.wallet.lastTransactionAt = new Date();
+
+    await transaction.save({ session: localSession });
+    await user.save({ session: localSession });
+
+    if (!useExternalSession) {
+      await localSession.commitTransaction();
+    }
+
+    this.logger.log(`Credited ₹${amount} to user ${userId} | Type: ${type}`);
+
+    return transaction;
+  } catch (error: any) {
+    if (!useExternalSession) {
+      await localSession.abortTransaction();
+    }
+    this.logger.error(`Credit failed: ${error.message}`);
+    throw error;
+  } finally {
+    if (!useExternalSession) {
+      localSession.endSession();
+    }
+  }
+}
 
   // ===== GET TRANSACTIONS =====
 
@@ -239,10 +457,10 @@ export class WalletService {
     userId: string,
     page: number = 1,
     limit: number = 20,
-    filters?: { type?: string; status?: string }
+    filters?: { type?: string; status?: string },
   ): Promise<any> {
     const skip = (page - 1) * limit;
-    const query: any = { userId };
+    const query: any = { userId: new Types.ObjectId(userId) };
 
     if (filters?.type) query.type = filters.type;
     if (filters?.status) query.status = filters.status;
@@ -254,7 +472,7 @@ export class WalletService {
         .skip(skip)
         .limit(limit)
         .lean(),
-      this.transactionModel.countDocuments(query)
+      this.transactionModel.countDocuments(query),
     ]);
 
     return {
@@ -265,15 +483,23 @@ export class WalletService {
           page,
           limit,
           total,
-          pages: Math.ceil(total / limit)
-        }
-      }
+          pages: Math.ceil(total / limit),
+        },
+      },
     };
   }
 
-  async getTransactionDetails(transactionId: string, userId: string): Promise<any> {
+  // ===== GET TRANSACTION DETAILS =====
+
+  async getTransactionDetails(
+    transactionId: string,
+    userId: string,
+  ): Promise<any> {
     const transaction = await this.transactionModel
-      .findOne({ transactionId, userId })
+      .findOne({
+        transactionId,
+        userId: new Types.ObjectId(userId),
+      })
       .lean();
 
     if (!transaction) {
@@ -282,390 +508,411 @@ export class WalletService {
 
     return {
       success: true,
-      data: transaction
+      data: transaction,
     };
   }
 
-  // ===== STATISTICS =====
+  // ===== GET WALLET STATISTICS =====
 
   async getWalletStats(userId: string): Promise<any> {
-    const user = await this.userModel.findById(userId).select('wallet').lean();
+    const user = await this.userModel
+      .findById(userId)
+      .select('wallet')
+      .lean();
+
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
     const [totalTransactions, rechargeTotal, spentTotal] = await Promise.all([
-      this.transactionModel.countDocuments({ userId }),
+      this.transactionModel.countDocuments({
+        userId: new Types.ObjectId(userId),
+      }),
       this.transactionModel.aggregate([
-        { $match: { userId: userId, type: 'recharge', status: 'completed' } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
+        {
+          $match: {
+            userId: new Types.ObjectId(userId),
+            type: 'recharge',
+            status: 'completed',
+          },
+        },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       this.transactionModel.aggregate([
-        { $match: { userId: userId, type: 'deduction', status: 'completed' } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ])
+        {
+          $match: {
+            userId: new Types.ObjectId(userId),
+            type: { $in: ['deduction', 'charge'] },
+            status: 'completed',
+          },
+        },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
     ]);
 
     return {
       success: true,
       data: {
-        currentBalance: user.wallet.balance,
+        currentBalance: user.wallet?.balance || 0,
+        currency: user.wallet?.currency || 'INR',
         totalRecharged: rechargeTotal[0]?.total || 0,
         totalSpent: spentTotal[0]?.total || 0,
         totalTransactions,
-        lastRechargeAt: user.wallet.lastRechargeAt,
-        lastTransactionAt: user.wallet.lastTransactionAt
-      }
+        lastRechargeAt: user.wallet?.lastRechargeAt || null,
+        lastTransactionAt: user.wallet?.lastTransactionAt || null,
+      },
     };
   }
 
-  async creditToWallet(
+  // ===== GET PAYMENT LOGS =====
+
+  async getPaymentLogs(
+    userId: string,
+    page: number = 1,
+    limit: number = 20,
+    status?: string,
+  ): Promise<any> {
+    const skip = (page - 1) * limit;
+    const query: any = {
+      userId: new Types.ObjectId(userId),
+      type: 'recharge',
+    };
+
+    if (status) {
+      query.status = status;
+    }
+
+    const [logs, total] = await Promise.all([
+      this.transactionModel
+        .find(query)
+        .select(
+          'transactionId amount paymentGateway paymentId status description createdAt',
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.transactionModel.countDocuments(query),
+    ]);
+
+    return {
+      success: true,
+      data: {
+        logs,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
+      },
+    };
+  }
+
+  // ===== CHECK BALANCE =====
+
+  async checkBalance(userId: string, requiredAmount: number): Promise<boolean> {
+    const user = await this.userModel
+      .findById(userId)
+      .select('wallet.balance')
+      .lean();
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return (user.wallet?.balance || 0) >= requiredAmount;
+  }
+
+  // ===== GET BALANCE =====
+
+  async getBalance(userId: string): Promise<number> {
+    const user = await this.userModel
+      .findById(userId)
+      .select('wallet.balance')
+      .lean();
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return user.wallet?.balance || 0;
+  }
+
+  // ===== PAYMENT HOLD SYSTEM =====
+
+  /**
+   * ✅ HOLD AMOUNT (Temporary - Not Charged Yet)
+   * Called when: User initiates chat/call
+   * Held for: 3-5 minutes (waiting for astrologer response)
+   */
+  async holdAmount(
     userId: string,
     amount: number,
     orderId: string,
     description: string,
-    type: 'refund' | 'bonus' | 'reward' = 'refund'
-  ): Promise<WalletTransactionDocument> {
+  ): Promise<any> {
     if (amount <= 0) {
       throw new BadRequestException('Amount must be greater than 0');
     }
 
-    const user = await this.userModel.findById(userId);
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+    const session = await this.startSession();
+    session.startTransaction();
 
-    const transactionId = `TXN_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
+    try {
+      const user = await this.userModel.findById(userId).session(session);
 
-    const transaction = new this.transactionModel({
-      transactionId,
-      userId,
-      type,
-      amount,
-      balanceBefore: user.wallet.balance,
-      balanceAfter: user.wallet.balance + amount,
-      description,
-      orderId,
-      status: 'completed',
-      createdAt: new Date()
-    });
-
-    user.wallet.balance += amount;
-    user.wallet.lastTransactionAt = new Date();
-
-    // ✅ Save sequentially (no transactions for now)
-    await transaction.save();
-    await user.save();
-
-    this.logger.log(`Credited ₹${amount} to user ${userId} | Type: ${type}`);
-
-    return transaction;
-  }
-  // Check balance
-  async checkBalance(userId: string, requiredAmount: number): Promise<boolean> {
-    const user = await this.userModel.findById(userId).select('wallet.balance');
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-    return user.wallet.balance >= requiredAmount;
-  }
-
-  // Get balance
-  async getBalance(userId: string): Promise<number> {
-    const user = await this.userModel.findById(userId).select('wallet.balance');
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-    return user.wallet.balance;
-  }
-
-  // ✅ ADD: Get payment logs (recharge transactions with gateway details)
-async getPaymentLogs(
-  userId: string,
-  page: number = 1,
-  limit: number = 20,
-  status?: string
-): Promise<any> {
-  const skip = (page - 1) * limit;
-  const query: any = {
-    userId,
-    type: 'recharge' // Only recharge transactions
-  };
-
-  if (status) {
-    query.status = status;
-  }
-
-  const [logs, total] = await Promise.all([
-    this.transactionModel
-      .find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .select('transactionId amount paymentGateway paymentId status description createdAt')
-      .lean(),
-    this.transactionModel.countDocuments(query)
-  ]);
-
-  return {
-    success: true,
-    data: {
-      logs,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
+      if (!user) {
+        throw new NotFoundException('User not found');
       }
+
+      // ✅ Verify balance before holding
+      const currentBalance = user.wallet?.balance || 0;
+      if (currentBalance < amount) {
+        throw new BadRequestException(
+          `Insufficient balance. Need ₹${amount}, have ₹${currentBalance}`,
+        );
+      }
+
+      const transactionId = this.generateTransactionId('HOLD');
+
+      // ✅ Create hold transaction
+      const transaction = new this.transactionModel({
+        transactionId,
+        userId: new Types.ObjectId(userId),
+        type: 'hold',
+        amount,
+        orderId,
+        status: 'pending',
+        balanceBefore: currentBalance,
+        balanceAfter: currentBalance, // Hold doesn't reduce balance yet
+        description: `HOLD: ${description}`,
+        holdReleaseableAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
+        createdAt: new Date(),
+      });
+
+      await transaction.save({ session });
+      await session.commitTransaction();
+
+      this.logger.log(
+        `Amount held: ₹${amount} for order ${orderId} | Transaction: ${transactionId}`,
+      );
+
+      return {
+        success: true,
+        transactionId: transaction.transactionId,
+        holdAmount: amount,
+        message: 'Amount held successfully',
+      };
+    } catch (error: any) {
+      await session.abortTransaction();
+      this.logger.error(`Hold amount failed: ${error.message}`);
+      throw error;
+    } finally {
+      session.endSession();
     }
-  };
-}
-
-// ===== PAYMENT HOLD SYSTEM (for Orders) =====
-
-/**
- * ✅ HOLD amount (temporary - not charged yet)
- * Called when: User initiates chat/call
- * Held for: 3-5 minutes (waiting for astrologer response)
- * Released if: Rejected, Timeout, or User cancels
- * Converted to: Charge (if session actually happens)
- */
-async holdAmount(
-  userId: string,
-  amount: number,
-  orderId: string,
-  description: string
-): Promise<any> {
-  if (amount <= 0) {
-    throw new BadRequestException('Amount must be greater than 0');
   }
 
-  const user = await this.userModel.findById(userId);
-  if (!user) {
-    throw new NotFoundException('User not found');
+  /**
+   * ✅ CHARGE FROM HOLD (Convert Hold to Actual Charge)
+   * Called when: Session ends and billing is calculated
+   */
+  async chargeFromHold(
+    userId: string,
+    chargeAmount: number,
+    orderId: string,
+    description: string,
+  ): Promise<any> {
+    const session = await this.startSession();
+    session.startTransaction();
+
+    try {
+      const user = await this.userModel.findById(userId).session(session);
+
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      // ✅ Find the hold transaction
+      const holdTransaction = await this.transactionModel
+        .findOne({
+          userId: new Types.ObjectId(userId),
+          orderId,
+          type: 'hold',
+          status: 'pending',
+        })
+        .session(session);
+
+      if (!holdTransaction) {
+        throw new BadRequestException(
+          'No hold transaction found for this order',
+        );
+      }
+
+      const heldAmount = holdTransaction.amount;
+
+      if (chargeAmount > heldAmount) {
+        throw new BadRequestException(
+          `Charge amount (₹${chargeAmount}) exceeds held amount (₹${heldAmount})`,
+        );
+      }
+
+      // ✅ Verify wallet still has balance
+      const currentBalance = user.wallet?.balance || 0;
+      if (currentBalance < chargeAmount) {
+        throw new BadRequestException('Insufficient wallet balance to charge');
+      }
+
+      const chargeTransactionId = this.generateTransactionId('CHARGE');
+
+      // ✅ Mark hold as converted
+      holdTransaction.status = 'completed';
+      holdTransaction.convertedAt = new Date();
+      holdTransaction.linkedTransactionId = chargeTransactionId;
+      await holdTransaction.save({ session });
+
+      // ✅ Create charge transaction
+      const chargeTransaction = new this.transactionModel({
+        transactionId: chargeTransactionId,
+        userId: new Types.ObjectId(userId),
+        type: 'charge',
+        amount: chargeAmount,
+        orderId,
+        status: 'completed',
+        balanceBefore: currentBalance,
+        balanceAfter: currentBalance - chargeAmount,
+        description: `CHARGE: ${description}`,
+        linkedHoldTransactionId: holdTransaction.transactionId,
+        createdAt: new Date(),
+      });
+
+      // ✅ Deduct from wallet
+      user.wallet.balance -= chargeAmount;
+      user.wallet.totalSpent =
+        (user.wallet.totalSpent || 0) + chargeAmount;
+      user.wallet.lastTransactionAt = new Date();
+
+      await chargeTransaction.save({ session });
+      await user.save({ session });
+
+      // ✅ Refund unused amount if any
+      const unusedAmount = heldAmount - chargeAmount;
+      if (unusedAmount > 0) {
+        await this.refundUnusedAmount(
+          userId,
+          unusedAmount,
+          orderId,
+          `Refund unused amount from order ${orderId}`,
+          session,
+        );
+      }
+
+      await session.commitTransaction();
+
+      this.logger.log(
+        `Charged from hold: ₹${chargeAmount} for order ${orderId} | Balance: ₹${user.wallet.balance}`,
+      );
+
+      return {
+        success: true,
+        transactionId: chargeTransaction.transactionId,
+        chargedAmount: chargeAmount,
+        refundedAmount: unusedAmount,
+        balanceAfter: user.wallet.balance,
+        message: 'Charged successfully',
+      };
+    } catch (error: any) {
+      await session.abortTransaction();
+      this.logger.error(`Charge from hold failed: ${error.message}`);
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }
 
-  // ✅ Verify balance before holding
-  if (user.wallet.balance < amount) {
-    throw new BadRequestException(
-      `Insufficient balance. Need ₹${amount}, have ₹${user.wallet.balance}`
-    );
+  /**
+   * ✅ RELEASE HOLD (Refund Held Amount)
+   * Called when: Astrologer rejects, Timeout, User cancels
+   */
+  async releaseHold(
+    userId: string,
+    orderId: string,
+    description: string,
+  ): Promise<any> {
+    const session = await this.startSession();
+    session.startTransaction();
+
+    try {
+      const user = await this.userModel.findById(userId).session(session);
+
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      // ✅ Find the hold transaction
+      const holdTransaction = await this.transactionModel
+        .findOne({
+          userId: new Types.ObjectId(userId),
+          orderId,
+          type: 'hold',
+          status: 'pending',
+        })
+        .session(session);
+
+      if (!holdTransaction) {
+        throw new BadRequestException('No hold transaction found to release');
+      }
+
+      const releaseAmount = holdTransaction.amount;
+
+      // ✅ Mark hold as released
+      holdTransaction.status = 'cancelled';
+      holdTransaction.releasedAt = new Date();
+      await holdTransaction.save({ session });
+
+      user.wallet.lastTransactionAt = new Date();
+      await user.save({ session });
+
+      await session.commitTransaction();
+
+      this.logger.log(`Hold released: ₹${releaseAmount} for order ${orderId}`);
+
+      return {
+        success: true,
+        releasedAmount: releaseAmount,
+        balanceAfter: user.wallet.balance,
+        message: 'Hold released successfully',
+      };
+    } catch (error: any) {
+      await session.abortTransaction();
+      this.logger.error(`Release hold failed: ${error.message}`);
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }
 
-  const transactionId = this.generateTransactionId('HOLD');
+  /**
+   * ✅ REFUND UNUSED AMOUNT (Internal - After Session Charged)
+   */
+  private async refundUnusedAmount(
+    userId: string,
+    refundAmount: number,
+    orderId: string,
+    description: string,
+    session: ClientSession,
+  ): Promise<void> {
+    const user = await this.userModel.findById(userId).session(session);
 
-  // ✅ Create hold transaction
-  const transaction = new this.transactionModel({
-    transactionId,
-    userId,
-    type: 'hold',
-    amount,
-    orderId,
-    status: 'pending', // Hold is pending (not completed)
-    balanceBefore: user.wallet.balance,
-    balanceAfter: user.wallet.balance, // Hold doesn't reduce actual balance yet
-    description: `HOLD: ${description}`,
-    holdReleaseableAt: new Date(Date.now() + 5 * 60 * 1000), // Auto-release after 5 mins if not converted
-    createdAt: new Date()
-  });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
 
-  await transaction.save();
-
-  this.logger.log(`Amount held: ₹${amount} for order ${orderId} | Transaction: ${transactionId}`);
-
-  return {
-    transactionId: transaction.transactionId,
-    holdAmount: amount,
-    message: 'Amount held successfully'
-  };
-}
-
-/**
- * ✅ CHARGE from HOLD (convert hold to actual charge)
- * Called when: Session ends and billing is calculated
- * Converts: HOLD transaction to CHARGE transaction
- * Deducts: From actual balance
- * Refunds: Unused hold amount
- */
-async chargeFromHold(
-  userId: string,
-  chargeAmount: number,
-  orderId: string,
-  description: string
-): Promise<any> {
-  const user = await this.userModel.findById(userId);
-  if (!user) {
-    throw new NotFoundException('User not found');
-  }
-
-  // ✅ Find the hold transaction
-  const holdTransaction = await this.transactionModel.findOne({
-    userId,
-    orderId,
-    type: 'hold',
-    status: 'pending'
-  });
-
-  if (!holdTransaction) {
-    throw new BadRequestException('No hold transaction found for this order');
-  }
-
-  const heldAmount = holdTransaction.amount;
-
-  if (chargeAmount > heldAmount) {
-    throw new BadRequestException(
-      `Charge amount (₹${chargeAmount}) exceeds held amount (₹${heldAmount})`
-    );
-  }
-
-  // ✅ Verify wallet still has balance
-  if (user.wallet.balance < chargeAmount) {
-    throw new BadRequestException('Insufficient wallet balance to charge');
-  }
-
-  try {
-    const chargeTransactionId = this.generateTransactionId('CHARGE');
-
-    // ✅ Mark hold as completed
-    holdTransaction.status = 'converted_to_charge';
-    holdTransaction.convertedAt = new Date();
-    holdTransaction.linkedTransactionId = chargeTransactionId;
-    await holdTransaction.save();
-
-    // ✅ Create charge transaction
-    const chargeTransaction = new this.transactionModel({
-      transactionId: chargeTransactionId,
-      userId,
-      type: 'charge',
-      amount: chargeAmount,
-      orderId,
-      status: 'completed',
-      balanceBefore: user.wallet.balance,
-      balanceAfter: user.wallet.balance - chargeAmount,
-      description: `CHARGE: ${description}`,
-      linkedHoldTransactionId: holdTransaction.transactionId,
-      createdAt: new Date()
-    });
-
-    // ✅ Deduct from wallet
-    user.wallet.balance -= chargeAmount;
-    user.wallet.totalSpent += chargeAmount;
-    user.wallet.lastTransactionAt = new Date();
-
-    await chargeTransaction.save();
-    await user.save();
-
-    this.logger.log(
-      `Charged from hold: ₹${chargeAmount} for order ${orderId} | Balance: ₹${user.wallet.balance}`
-    );
-
-    return {
-      transactionId: chargeTransaction.transactionId,
-      chargedAmount: chargeAmount,
-      balanceAfter: user.wallet.balance,
-      message: 'Charged successfully'
-    };
-  } catch (error: any) {
-    this.logger.error(`Charge from hold failed: ${error.message}`);
-    throw new BadRequestException(`Charge failed: ${error.message}`);
-  }
-}
-
-/**
- * ✅ RELEASE HOLD (refund held amount)
- * Called when: Astrologer rejects, Timeout, User cancels (before session starts)
- * Action: Marks hold as released (no actual transaction, just state change)
- * Result: User gets full held amount back automatically
- */
-async releaseHold(
-  userId: string,
-  releaseAmount: number,
-  orderId: string,
-  description: string
-): Promise<any> {
-  const user = await this.userModel.findById(userId);
-  if (!user) {
-    throw new NotFoundException('User not found');
-  }
-
-  // ✅ Find the hold transaction
-  const holdTransaction = await this.transactionModel.findOne({
-    userId,
-    orderId,
-    type: 'hold',
-    status: 'pending'
-  });
-
-  if (!holdTransaction) {
-    throw new BadRequestException('No hold transaction found to release');
-  }
-
-  try {
     const refundTransactionId = this.generateTransactionId('REFUND');
 
-    // ✅ Mark hold as released
-    holdTransaction.status = 'released';
-    holdTransaction.releasedAt = new Date();
-    holdTransaction.linkedTransactionId = refundTransactionId;
-    await holdTransaction.save();
-
-    // ✅ Create refund transaction (record only - balance already untouched)
     const refundTransaction = new this.transactionModel({
       transactionId: refundTransactionId,
-      userId,
-      type: 'refund',
-      amount: releaseAmount,
-      orderId,
-      status: 'completed',
-      balanceBefore: user.wallet.balance,
-      balanceAfter: user.wallet.balance, // No actual deduction
-      description: `REFUND (Hold released): ${description}`,
-      linkedHoldTransactionId: holdTransaction.transactionId,
-      createdAt: new Date()
-    });
-
-    user.wallet.lastTransactionAt = new Date();
-
-    await refundTransaction.save();
-    await user.save();
-
-    this.logger.log(`Hold released: ₹${releaseAmount} for order ${orderId}`);
-
-    return {
-      transactionId: refundTransaction.transactionId,
-      refundedAmount: releaseAmount,
-      balanceAfter: user.wallet.balance,
-      message: 'Hold released and amount refunded'
-    };
-  } catch (error: any) {
-    this.logger.error(`Release hold failed: ${error.message}`);
-    throw new BadRequestException(`Release failed: ${error.message}`);
-  }
-}
-
-/**
- * ✅ REFUND UNUSED AMOUNT (after session charged)
- * Called when: Charge from hold leaves unused balance
- * Example: Held ₹100, charged ₹60, refund ₹40
- */
-async refundUnusedAmount(
-  userId: string,
-  refundAmount: number,
-  orderId: string,
-  description: string
-): Promise<any> {
-  const user = await this.userModel.findById(userId);
-  if (!user) {
-    throw new NotFoundException('User not found');
-  }
-
-  try {
-    const refundTransactionId = this.generateTransactionId('REFUND');
-
-    // ✅ Create refund transaction
-    const refundTransaction = new this.transactionModel({
-      transactionId: refundTransactionId,
-      userId,
+      userId: new Types.ObjectId(userId),
       type: 'refund',
       amount: refundAmount,
       orderId,
@@ -673,60 +920,58 @@ async refundUnusedAmount(
       balanceBefore: user.wallet.balance,
       balanceAfter: user.wallet.balance + refundAmount,
       description: `REFUND (Unused): ${description}`,
-      createdAt: new Date()
+      createdAt: new Date(),
     });
 
-    // ✅ Credit back to wallet
     user.wallet.balance += refundAmount;
     user.wallet.lastTransactionAt = new Date();
 
-    await refundTransaction.save();
-    await user.save();
+    await refundTransaction.save({ session });
+    await user.save({ session });
 
     this.logger.log(`Refunded unused amount: ₹${refundAmount} to user ${userId}`);
+  }
+
+  /**
+   * ✅ GET WALLET WITH HOLD STATUS
+   * Shows: Current balance + held amount + available balance
+   */
+  async getWalletWithHold(userId: string): Promise<any> {
+    const user = await this.userModel
+      .findById(userId)
+      .select('wallet')
+      .lean();
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // ✅ Calculate total held amount
+    const [heldTransactions] = await Promise.all([
+      this.transactionModel.aggregate([
+        {
+          $match: {
+            userId: new Types.ObjectId(userId),
+            type: 'hold',
+            status: 'pending',
+          },
+        },
+        { $group: { _id: null, totalHeld: { $sum: '$amount' } } },
+      ]),
+    ]);
+
+    const currentBalance = user.wallet?.balance || 0;
+    const totalHeld = heldTransactions[0]?.totalHeld || 0;
+    const availableBalance = currentBalance - totalHeld;
 
     return {
-      transactionId: refundTransaction.transactionId,
-      refundedAmount: refundAmount,
-      balanceAfter: user.wallet.balance,
-      message: 'Unused amount refunded'
+      success: true,
+      data: {
+        currentBalance,
+        totalHeld,
+        availableBalance: Math.max(0, availableBalance),
+        canStartSession: availableBalance >= 0,
+      },
     };
-  } catch (error: any) {
-    this.logger.error(`Refund unused failed: ${error.message}`);
-    throw new BadRequestException(`Refund failed: ${error.message}`);
   }
-}
-
-/**
- * ✅ GET WALLET WITH HOLD STATUS
- * Shows: Current balance + held amount + available balance
- */
-async getWalletWithHold(userId: string): Promise<any> {
-  const user = await this.userModel.findById(userId).select('wallet').lean();
-  if (!user) {
-    throw new NotFoundException('User not found');
-  }
-
-  // ✅ Calculate total held amount
-  const [heldTransactions] = await Promise.all([
-    this.transactionModel.aggregate([
-      { $match: { userId: userId, type: 'hold', status: 'pending' } },
-      { $group: { _id: null, totalHeld: { $sum: '$amount' } } }
-    ])
-  ]);
-
-  const totalHeld = heldTransactions[0]?.totalHeld || 0;
-  const availableBalance = user.wallet.balance - totalHeld;
-
-  return {
-    success: true,
-    data: {
-      currentBalance: user.wallet.balance,
-      totalHeld: totalHeld,
-      availableBalance: Math.max(0, availableBalance), // Never negative
-      canStartSession: availableBalance >= 0
-    }
-  };
-}
-
 }

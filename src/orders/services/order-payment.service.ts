@@ -127,14 +127,16 @@ export class OrderPaymentService {
       const refundAmount = order.payment.heldAmount - finalCharge;
 
       // Refund unused amount if any
-      let refundTransaction = null;
+      let refundTransaction: WalletTransactionDocument | null = null;
       if (refundAmount > 0) {
-        refundTransaction = await this.walletService.releaseHold(
+        refundTransaction = await this.walletService.refundToWallet(
           userId,
           refundAmount,
           orderId,
-          'Refund: Unused balance'
+          'Refund: Unused balance',
+          undefined, // ✅ Add optional session parameter
         );
+
       }
 
       // Update order
@@ -197,12 +199,14 @@ export class OrderPaymentService {
 
     try {
       // Release hold (refund)
-      const refundTransaction = await this.walletService.releaseHold(
-        userId,
-        holdAmount,
-        orderId,
-        `Refund: ${reason}`
-      );
+      let refundTransaction: WalletTransactionDocument | null = null;
+      refundTransaction = await this.walletService.refundToWallet(
+          userId,
+          holdAmount,
+          orderId,
+          `Refund: ${reason}`,
+          undefined, // ✅ Add optional session parameter
+        );
 
       // Update order
       order.payment.status = 'refunded';
