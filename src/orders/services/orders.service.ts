@@ -32,70 +32,81 @@ export class OrdersService {
 
   // ===== CREATE ORDER =====
   async createOrder(orderData: {
-    userId: string;
-    astrologerId: string;
-    astrologerName: string;
-    type: 'call' | 'chat';
-    callType?: 'audio' | 'video';
-    ratePerMinute: number;
-    sessionId: string;
-  }): Promise<OrderDocument> {
-    const orderId = this.generateOrderId();
+  userId: string;
+  astrologerId: string;
+  astrologerName: string;
+  type: 'call' | 'chat';
+  callType?: 'audio' | 'video';
+  ratePerMinute: number;
+  sessionId: string;
+}): Promise<OrderDocument> {
+  const orderId = this.generateOrderId();
+  this.logger.log(`Generating new order with orderId: ${orderId}`);
 
-    // ✅ HOLD payment (minimum 5 mins)
-    await this.orderPaymentService.holdPayment(
-      orderId,
-      orderData.userId,
-      orderData.ratePerMinute,
-      5
-    );
+  // Prepare order payload without payment yet
+  const orderPayload: any = {
+    orderId,
+    userId: this.toObjectId(orderData.userId),
+    astrologerId: this.toObjectId(orderData.astrologerId),
+    astrologerName: orderData.astrologerName,
+    type: orderData.type,
+    ratePerMinute: orderData.ratePerMinute,
+    maxDurationMinutes: 0, // will update after calculating max duration
+    status: 'pending', // Initial state
+    requestCreatedAt: new Date(),
+    isActive: true,
+    sessionHistory: [],
+    totalUsedDurationSeconds: 0,
+    totalBilledMinutes: 0,
+    totalAmount: 0,
+    reviewSubmitted: false,
+    isDeleted: false,
+  };
 
-    // ✅ Calculate max duration based on wallet
-    const maxDurationInfo = await this.orderPaymentService.calculateMaxDuration(
-      orderData.userId,
-      orderData.ratePerMinute
-    );
-
-    const orderPayload: any = {
-      orderId,
-      userId: this.toObjectId(orderData.userId),
-      astrologerId: this.toObjectId(orderData.astrologerId),
-      astrologerName: orderData.astrologerName,
-      type: orderData.type,
-      ratePerMinute: orderData.ratePerMinute,
-      maxDurationMinutes: maxDurationInfo.maxDurationMinutes,
-      status: 'pending', // ✅ Initial state
-      requestCreatedAt: new Date(),
-      isActive: true,
-      sessionHistory: [],
-      totalUsedDurationSeconds: 0,
-      totalBilledMinutes: 0,
-      totalAmount: 0,
-      reviewSubmitted: false,
-      isDeleted: false,
-      payment: {
-        status: 'hold',
-        heldAmount: orderData.ratePerMinute * 5,
-        chargedAmount: 0,
-        refundedAmount: 0
-      }
-    };
-
-    if (orderData.type === 'call') {
-      orderPayload.callSessionId = orderData.sessionId;
-      orderPayload.callType = orderData.callType || 'audio';
-      orderPayload.hasRecording = false;
-    } else {
-      orderPayload.chatSessionId = orderData.sessionId;
-    }
-
-    const order = new this.orderModel(orderPayload);
-    await order.save();
-
-    this.logger.log(`Order created: ${orderId} | Type: ${orderData.type} | Max Duration: ${maxDurationInfo.maxDurationMinutes} mins`);
-
-    return order;
+  if (orderData.type === 'call') {
+    orderPayload.callSessionId = orderData.sessionId;
+    orderPayload.callType = orderData.callType || 'audio';
+    orderPayload.hasRecording = false;
+  } else {
+    orderPayload.chatSessionId = orderData.sessionId;
   }
+
+  // Create and save order first WITHOUT payment info
+  const order = new this.orderModel(orderPayload);
+  await order.save();
+  this.logger.log(`Order saved without payment: ${orderId}`);
+
+  // HOLD payment (minimum 5 minutes)
+  await this.orderPaymentService.holdPayment(
+    orderId,
+    orderData.userId,
+    orderData.ratePerMinute,
+    5
+  );
+  this.logger.log(`Payment hold successful for orderId: ${orderId}`);
+
+  // Calculate max duration based on wallet
+  const maxDurationInfo = await this.orderPaymentService.calculateMaxDuration(
+    orderData.userId,
+    orderData.ratePerMinute
+  );
+
+  // Update order with payment info and maxDurationMinutes
+  order.maxDurationMinutes = maxDurationInfo.maxDurationMinutes;
+  order.payment = {
+    status: 'hold',
+    heldAmount: orderData.ratePerMinute * 5,
+    chargedAmount: 0,
+    refundedAmount: 0,
+    heldAt: new Date(),
+  };
+
+  await order.save();
+  this.logger.log(`Order updated with payment info and max duration: ${orderId} | Max duration: ${maxDurationInfo.maxDurationMinutes}`);
+
+  return order;
+}
+
 
   // ===== UPDATE ORDER STATUS =====
   async updateOrderStatus(

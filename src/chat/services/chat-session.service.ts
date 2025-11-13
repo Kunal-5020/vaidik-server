@@ -52,6 +52,7 @@ export class ChatSessionService {
     }
 
     const sessionId = this.generateSessionId();
+    console.log(sessionId,"generated session id")
 
     // Create order with HOLD payment
     const order = await this.ordersService.createOrder({
@@ -62,6 +63,16 @@ export class ChatSessionService {
       ratePerMinute: sessionData.ratePerMinute,
       sessionId: sessionId
     });
+    
+    if (!order) {
+  this.logger.error(`Order creation returned null or undefined`);
+  throw new Error('Order creation failed');
+}
+if (!order.orderId) {
+  this.logger.error(`Order missing orderId: ${JSON.stringify(order)}`);
+  throw new Error('Order missing orderId');
+}
+this.logger.log(`Order created with orderId: ${order.orderId}`);
 
     // Create chat session (INITIATED)
     const session = new this.sessionModel({
