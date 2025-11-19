@@ -3,6 +3,7 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import * as bodyParser from 'body-parser';
 
 import { AppModule } from './app.module';
 
@@ -44,6 +45,17 @@ async function bootstrap() {
     })
   );
 
+  // ✅ CRITICAL: Raw body for Shopify webhook verification
+  // This MUST be registered BEFORE global validation pipe
+  app.use(
+    '/api/v1/shopify/webhooks',
+    bodyParser.json({
+      verify: (req: any, res, buf) => {
+        req.rawBody = buf; // Save raw buffer for HMAC verification
+      },
+    })
+  );
+
   // Global validation pipe
   app.useGlobalPipes(
     new ValidationPipe({
@@ -59,12 +71,13 @@ async function bootstrap() {
 
   // ✅ CRITICAL: Use PORT from environment (Render provides this)
   const port = process.env.PORT || 3001;
-  
+
   // ✅ Listen on 0.0.0.0 (required for Render)
   await app.listen(port, '0.0.0.0');
-  
+
   logger.log(`🚀 Server running on port ${port}`);
   logger.log(`🌍 CORS enabled for: https://vaidik-admin.netlify.app`);
+  logger.log(`📍 Webhook endpoint: https://your-app.onrender.com/api/v1/shopify/webhooks/orders/create`);
 }
 
 bootstrap().catch((error) => {

@@ -74,6 +74,9 @@ importers:
       bcryptjs:
         specifier: ^3.0.2
         version: 3.0.2
+      body-parser:
+        specifier: ^2.2.0
+        version: 2.2.0
       cache-manager:
         specifier: ^7.2.0
         version: 7.2.0
@@ -131,6 +134,9 @@ importers:
       sharp:
         specifier: ^0.34.4
         version: 0.34.4
+      shopify-buy:
+        specifier: ^3.0.7
+        version: 3.0.7
       socket.io:
         specifier: ^4.8.1
         version: 4.8.1
@@ -162,6 +168,9 @@ importers:
       '@types/bcryptjs':
         specifier: ^3.0.0
         version: 3.0.0
+      '@types/body-parser':
+        specifier: ^1.19.6
+        version: 1.19.6
       '@types/express':
         specifier: ^5.0.0
         version: 5.0.3
@@ -4293,6 +4302,9 @@ packages:
   shebang-regex@3.0.0:
     resolution: {integrity: sha512-7++dFhtcx3353uBaq8DDR4NuxBetBzC7ZQOhmTQInHEd6bSrXdiEyzCvG07Z44UYdLShWUyXt5M/yhz8ekcb1A==}
     engines: {node: '>=8'}
+
+  shopify-buy@3.0.7:
+    resolution: {integrity: sha512-HTuC8SSaVSFJRToXbrn54TSjxNt5d4GN//xfHXfHBJYSuHzGouF97CFapjdM+Pz5HjcGST6ife4B64GNo7taYw==}
 
   side-channel-list@1.0.0:
     resolution: {integrity: sha512-FCLHtRD/gnpCiCHEiJLOwdmFP+wzCmDEkc9y7NsYxeF4u7Btsn1ZuwgwJGxImImHicJArLP4R0yX4c2KCrMrTA==}
@@ -10032,6 +10044,8 @@ snapshots:
       shebang-regex: 3.0.0
 
   shebang-regex@3.0.0: {}
+
+  shopify-buy@3.0.7: {}
 
   side-channel-list@1.0.0:
     dependencies:

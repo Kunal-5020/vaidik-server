@@ -69,6 +69,15 @@ export class ShopifyOrderEntity {
   @Prop({ required: true, type: String })
   currency: string;
 
+  @Prop({ type: String, default: null })
+  shopifyProductId?: string; // Shopify product ID if it's a product remedy
+
+  @Prop({ type: Date, default: null })
+  purchasedAt?: Date; // When user purchased from Shopify
+
+  @Prop({ type: Boolean, default: false })
+  isPurchased: boolean; // Track if user bought it
+
   // Shopify timestamps
   @Prop({ required: true, type: Date })
   shopifyCreatedAt: Date;

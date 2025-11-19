@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common'; // ✅ Import forwardRef
 import { MongooseModule } from '@nestjs/mongoose';
 import { RemediesController } from './controllers/remedies.controller';
 import { AstrologerRemediesController } from './controllers/astrologer-remedies.controller';
@@ -11,10 +11,10 @@ import { ShopifyModule } from '../shopify/shopify.module';
     MongooseModule.forFeature([
       { name: Remedy.name, schema: RemedySchema },
     ]),
-    ShopifyModule,
+    forwardRef(() => ShopifyModule), // ✅ FIX: Wrap with forwardRef
   ],
   controllers: [RemediesController, AstrologerRemediesController],
   providers: [RemediesService],
-  exports: [RemediesService],
+  exports: [RemediesService], // ✅ IMPORTANT: Export RemediesService
 })
 export class RemediesModule {}

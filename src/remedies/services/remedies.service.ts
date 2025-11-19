@@ -585,4 +585,223 @@ export class RemediesService {
   async getRemediesByOrderId(orderId: string): Promise<RemedyDocument[]> {
     return this.remedyModel.find({ orderId, isDeleted: false });
   }
+
+  // ============= NEW METHODS FOR TABS =============
+
+/**
+ * Get suggested remedies (Tab 1: Suggested)
+ * Shows products suggested but NOT purchased
+ */
+async getSuggestedRemedies(
+  userId: string,
+  page: number = 1,
+  limit: number = 20,
+): Promise<any> {
+  const skip = (page - 1) * limit;
+  const userObjectId = this.toObjectId(userId);
+
+  const query = {
+    userId: userObjectId,
+    remedySource: 'shopify_product', // Only Shopify products
+    isPurchased: false, // Not purchased yet
+    status: { $in: ['suggested', 'accepted'] }, // Only suggested/accepted
+    isDeleted: false,
+  };
+
+  const [remedies, total] = await Promise.all([
+    this.remedyModel
+      .find(query)
+      .populate(
+        'astrologerId',
+        'name profilePicture experienceYears specializations',
+      )
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    this.remedyModel.countDocuments(query),
+  ]);
+
+  return {
+    success: true,
+    data: {
+      remedies,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1,
+      },
+    },
+  };
+}
+
+/**
+ * Get purchased remedies (Tab 2: Purchased)
+ * Shows products that were suggested AND purchased
+ */
+async getPurchasedRemedies(
+  userId: string,
+  page: number = 1,
+  limit: number = 20,
+): Promise<any> {
+  const skip = (page - 1) * limit;
+  const userObjectId = this.toObjectId(userId);
+
+  const query = {
+    userId: userObjectId,
+    remedySource: 'shopify_product', // Only Shopify products
+    isPurchased: true, // Purchased
+    isDeleted: false,
+  };
+
+  const [remedies, total] = await Promise.all([
+    this.remedyModel
+      .find(query)
+      .populate(
+        'astrologerId',
+        'name profilePicture experienceYears specializations',
+      )
+      .sort({ 'purchaseDetails.purchasedAt': -1 }) // Latest purchase first
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    this.remedyModel.countDocuments(query),
+  ]);
+
+  return {
+    success: true,
+    data: {
+      remedies,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1,
+      },
+    },
+  };
+}
+
+/**
+ * Get orders with remedies (Tab 3: Remedy Chat)
+ * Shows list of orders that have remedy suggestions
+ */
+async getOrdersWithRemedies(userId: string): Promise<any> {
+  const userObjectId = this.toObjectId(userId);
+
+  const ordersWithRemedies = await this.remedyModel.aggregate([
+    {
+      $match: {
+        userId: userObjectId,
+        remedySource: 'shopify_product',
+        isDeleted: false,
+      },
+    },
+    {
+      $group: {
+        _id: '$orderId', // Group by order
+        orderId: { $first: '$orderId' },
+        astrologerId: { $first: '$astrologerId' },
+        astrologerName: { $first: '$astrologerName' },
+        totalRemedies: { $sum: 1 },
+        purchasedCount: {
+          $sum: { $cond: ['$isPurchased', 1, 0] },
+        },
+        suggestedCount: {
+          $sum: { $cond: [{ $eq: ['$isPurchased', false] }, 1, 0] },
+        },
+        latestSuggestion: { $max: '$createdAt' },
+        firstSuggestion: { $min: '$createdAt' },
+      },
+    },
+    {
+      $sort: { latestSuggestion: -1 }, // Latest first
+    },
+  ]);
+
+  this.logger.log(
+    `Found ${ordersWithRemedies.length} orders with remedies for user ${userId}`,
+  );
+
+  return {
+    success: true,
+    data: {
+      orders: ordersWithRemedies,
+      total: ordersWithRemedies.length,
+    },
+  };
+}
+
+/**
+ * Suggest multiple products at once (Bulk suggestion)
+ * Used when astrologer selects multiple products
+ */
+async suggestBulkProducts(
+  astrologerId: string,
+  astrologerName: string,
+  orderId: string,
+  userId: string,
+  products: Array<{
+    shopifyProductId: number;
+    shopifyVariantId?: number;
+    recommendationReason: string;
+    usageInstructions?: string;
+    suggestedInChannel?: 'call' | 'chat';
+  }>,
+): Promise<any> {
+  try {
+    this.logger.log(
+      `Suggesting ${products.length} products to user ${userId} in order ${orderId}`,
+    );
+
+    const createdRemedies: any[] = [];
+
+    for (const product of products) {
+      const dto = {
+        shopifyProductId: product.shopifyProductId,
+        shopifyVariantId: product.shopifyVariantId,
+        recommendationReason: product.recommendationReason,
+        usageInstructions: product.usageInstructions,
+        suggestedInChannel: product.suggestedInChannel,
+      };
+
+      const remedy = await this.suggestProductRemedy(
+        astrologerId,
+        astrologerName,
+        orderId,
+        userId,
+        dto,
+      );
+
+      createdRemedies.push(remedy.data);
+    }
+
+    this.logger.log(
+      `Successfully suggested ${createdRemedies.length} products`,
+    );
+
+    return {
+      success: true,
+      message: `${createdRemedies.length} remedies suggested successfully`,
+      data: {
+        remedies: createdRemedies,
+        count: createdRemedies.length,
+      },
+    };
+  } catch (error: any) {
+    this.logger.error(
+      `Error in bulk suggestion: ${error.message}`,
+      error.stack,
+    );
+    throw new BadRequestException(
+      `Failed to suggest products: ${error.message}`,
+    );
+  }
+}
+
 }

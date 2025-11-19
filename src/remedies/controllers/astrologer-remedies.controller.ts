@@ -17,6 +17,7 @@ import { RemediesService } from '../services/remedies.service';
 import { SuggestManualRemedyDto } from '../dto/suggest-manual-remedy.dto';
 import { SuggestProductRemedyDto } from '../dto/suggest-product-remedy.dto';
 import { ShopifyOrdersService } from '../../shopify/services/shopify-orders.service';
+import { SuggestBulkRemediesDto } from '../dto/suggest-bulk-remedies.dto';
 
 interface AuthenticatedRequest extends Request {
   user: { _id: string; astrologerId?: string; name?: string };
@@ -135,4 +136,33 @@ export class AstrologerRemediesController {
 
     return this.shopifyOrdersService.getUserOrders(userId, 1, 100);
   }
+
+  /**
+ * POST /api/v1/astrologer/remedies/suggest-bulk/:userId/:orderId
+ * Suggest multiple Shopify products at once
+ */
+// Update the endpoint:
+@Post('suggest-bulk/:userId/:orderId')
+async suggestBulkProducts(
+  @Param('userId') userId: string,
+  @Param('orderId') orderId: string,
+  @Req() req: AuthenticatedRequest,
+  @Body(ValidationPipe) dto: SuggestBulkRemediesDto, // ✅ Use proper DTO
+) {
+  const astrologerId = req.user.astrologerId || req.user._id;
+  const astrologerName = req.user.name || 'Astrologer';
+
+  this.logger.log(
+    `${astrologerName} suggesting ${dto.products.length} products to user ${userId}`,
+  );
+
+  return this.remediesService.suggestBulkProducts(
+    astrologerId,
+    astrologerName,
+    orderId,
+    userId,
+    dto.products,
+  );
+}
+
 }
