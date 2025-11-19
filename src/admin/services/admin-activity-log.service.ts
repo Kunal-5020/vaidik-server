@@ -10,7 +10,7 @@ export class AdminActivityLogService {
   ) {}
 
   async log(logData: {
-    adminId: string;
+    adminId?: string;
     action: string;
     module: string;
     targetId?: string;
@@ -23,6 +23,10 @@ export class AdminActivityLogService {
     errorMessage?: string;
   }): Promise<void> {
     try {
+      if (!logData.adminId) {
+        console.warn('Skipping admin activity log as adminId is missing', logData.action);
+        return;
+      }
       const log = new this.logModel({
         ...logData,
         status: logData.status || 'success',

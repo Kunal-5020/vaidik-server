@@ -13,6 +13,31 @@ import { Server, Socket } from 'socket.io';
 import { Logger, BadRequestException } from '@nestjs/common';
 import { ChatSessionService } from '../services/chat-session.service';
 import { ChatMessageService } from '../services/chat-message.service';
+import { NotificationService } from '../../notifications/services/notification.service';
+
+interface AuthSocket extends Socket {
+  handshake: Socket['handshake'] & {
+    auth?: {
+      token?: string;
+      userId?: string;
+      role?: string;
+    };
+  };
+}
+
+// Shared shape for incoming chat requests (new + continuation)
+export interface IncomingChatRequestPayload {
+  sessionId: string;
+  orderId: string;
+  userId: string;
+  ratePerMinute: number;
+  requestExpiresIn: number; // e.g. 3 * 60 * 1000
+  sound?: string;
+  vibration?: boolean;
+  // Continuation-specific fields
+  isContinuation?: boolean;
+  previousSessionId?: string;
+}
 
 @WebSocketGateway({
   cors: {
@@ -32,14 +57,24 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   constructor(
     private chatSessionService: ChatSessionService,
-    private chatMessageService: ChatMessageService
+    private chatMessageService: ChatMessageService,
+    private notificationService: NotificationService,
   ) {}
 
-  handleConnection(client: Socket) {
-    this.logger.log(`Chat client connected: ${client.id}`);
+  handleConnection(client: AuthSocket) {
+  this.logger.log(`Chat client connected: ${client.id}`);
+  
+  // ✅ AUTO-REGISTER if role is 'Astrologer'
+  const { userId, role } = client.handshake.auth || {};
+  
+  if (role === 'Astrologer' && userId) {
+    this.astrologerSockets.set(userId, client.id);
+    this.logger.log(`✅ Astrologer auto-registered: ${userId} | Socket: ${client.id}`);
   }
+}
 
-  handleDisconnect(client: Socket) {
+
+  handleDisconnect(client: AuthSocket) {
     this.logger.log(`Chat client disconnected: ${client.id}`);
 
     for (const [userId, userData] of this.activeUsers.entries()) {
@@ -92,26 +127,24 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // ✅ FIXED: Send ONLY to specific astrologer (via their socket)
       const astrologerSocketId = this.astrologerSockets.get(data.astrologerId);
+
+     const payload: IncomingChatRequestPayload = {
+        sessionId: result.data.sessionId,
+        orderId: result.data.orderId,
+        userId: data.userId,
+        ratePerMinute: data.ratePerMinute,
+        requestExpiresIn: 180000,
+        sound: 'ringtone.mp3',
+        vibration: true,
+      };
       
       if (astrologerSocketId) {
-        this.server.to(astrologerSocketId).emit('incoming_chat_request', {
-          sessionId: result.data.sessionId,
-          orderId: result.data.orderId,
-          userId: data.userId,
-          ratePerMinute: data.ratePerMinute,
-          requestExpiresIn: 180000,
-          sound: 'ringtone.mp3',
-          vibration: true
-        });
+        this.server.to(astrologerSocketId).emit('incoming_chat_request', payload);
       } else {
         // If astrologer not online, emit to a global astrologer notification channel
         this.server.emit('incoming_chat_request_to_astrologer', {
           astrologerId: data.astrologerId,
-          sessionId: result.data.sessionId,
-          orderId: result.data.orderId,
-          userId: data.userId,
-          ratePerMinute: data.ratePerMinute,
-          requestExpiresIn: 180000
+          ...payload,
         });
       }
 
@@ -189,6 +222,67 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  // ===== CONTINUE CHAT (behaves like new chat request) =====
+  @SubscribeMessage('continue_chat')
+  async handleContinueChat(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: {
+      userId: string;
+      astrologerId: string;
+      previousSessionId: string;
+      ratePerMinute: number;
+    }
+  ) {
+    try {
+      const result = await this.chatSessionService.continueChat({
+        userId: data.userId,
+        astrologerId: data.astrologerId,
+        previousSessionId: data.previousSessionId,
+        ratePerMinute: data.ratePerMinute,
+      });
+
+      const { sessionId, orderId, ratePerMinute } = result.data;
+
+      const astrologerSocketId = this.astrologerSockets.get(data.astrologerId);
+
+      const payload: IncomingChatRequestPayload = {
+        sessionId,
+        orderId,
+        userId: data.userId,
+        ratePerMinute,
+        requestExpiresIn: 180000,
+        sound: 'ringtone.mp3',
+        vibration: true,
+        isContinuation: true,
+        previousSessionId: data.previousSessionId,
+      };
+
+      if (astrologerSocketId) {
+        // Same event name as initiate_chat, with extra flags
+        this.server.to(astrologerSocketId).emit('incoming_chat_request', payload);
+      } else {
+        // Fallback channel for offline astrologer clients
+        this.server.emit('incoming_chat_request_to_astrologer', {
+          astrologerId: data.astrologerId,
+          ...payload,
+        });
+      }
+
+      // Optional: notify user that continuation request is sent
+      client.emit('chat_continuation_initiated', {
+        sessionId,
+        orderId,
+        previousSessionId: data.previousSessionId,
+        status: result.data.status,
+      });
+
+      return result;
+    } catch (error: any) {
+      this.logger.error(`Continue chat error: ${error.message}`);
+      return { success: false, message: error.message };
+    }
+  }
+
   // ===== REGISTER ASTROLOGER SOCKET =====
   @SubscribeMessage('register_astrologer')
   handleRegisterAstrologer(
@@ -202,95 +296,103 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   // ===== START CHAT SESSION WITH KUNDLI MESSAGE =====
   @SubscribeMessage('start_chat')
-  async handleStartChat(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      sessionId: string;
-      userId: string;
-      role: 'user' | 'astrologer';
-      kundliDetails?: {
-        name: string;
-        dob: string;
-        birthTime: string;
-        birthPlace: string;
-        gender: string;
-      };
+async handleStartChat(
+  @ConnectedSocket() client: Socket,
+  @MessageBody() payload: any
+) {
+  try {
+    const data = Array.isArray(payload) ? payload[0] : payload;
+    
+    this.logger.log(`🚀 start_chat from ${client.id}`);
+    this.logger.log(`🔍 Data: ${JSON.stringify(data)}`);
+
+    if (!data || !data.sessionId || !data.userId || !data.role) {
+      this.logger.error('❌ Missing required start_chat fields');
+      return { success: false, message: 'Missing required fields' };
     }
-  ) {
-    try {
-      const result = await this.chatSessionService.startSession(data.sessionId);
 
-      client.join(data.sessionId);
+    this.logger.log(`⏳ Calling chatSessionService.startSession for ${data.sessionId}`);
+    const result = await this.chatSessionService.startSession(data.sessionId);
+    this.logger.log(`✅ startSession returned: ${JSON.stringify(result)}`);
 
-      this.activeUsers.set(data.userId, {
-        socketId: client.id,
-        userId: data.userId,
-        role: data.role,
-        sessionId: data.sessionId
-      });
+    client.join(data.sessionId);
 
-      // ✅ AWAIT the async operation
-      await this.chatSessionService.updateOnlineStatus(data.sessionId, data.userId, data.role, true);
+    this.activeUsers.set(data.userId, {
+      socketId: client.id,
+      userId: data.userId,
+      role: data.role,
+      sessionId: data.sessionId
+    });
 
-      // ✅ FIXED: Add null check for session
-      if (result.data.sendKundliMessage && data.kundliDetails) {
-        const session = await this.chatSessionService.getSession(data.sessionId);
-        
-        if (!session) {
-          throw new BadRequestException('Session not found');
-        }
-        
-        const kundliMessage = await this.chatMessageService.sendKundliDetailsMessage(
-          data.sessionId,
-          session.astrologerId.toString(),
-          data.userId,
-          session.orderId,
-          data.kundliDetails
-        );
+    await this.chatSessionService.updateOnlineStatus(data.sessionId, data.userId, data.role, true);
 
-        // Emit kundli message only to session room
-        this.server.to(data.sessionId).emit('new_message', {
-          messageId: kundliMessage.messageId,
-          sessionId: kundliMessage.sessionId,
-          senderId: kundliMessage.senderId,
-          senderModel: kundliMessage.senderModel,
-          type: 'kundli_details',
-          content: kundliMessage.content,
-          kundliDetails: kundliMessage.kundliDetails,
-          isVisibleToUser: false,
-          isVisibleToAstrologer: true,
-          deliveryStatus: 'sent',
-          sentAt: kundliMessage.sentAt,
-          automatic: true
-        });
-
-        this.logger.log(`Kundli message sent for session: ${data.sessionId}`);
+    // ✅ Send kundli if user provides details
+    if (result.data.sendKundliMessage && data.kundliDetails) {
+      const session = await this.chatSessionService.getSession(data.sessionId);
+      
+      if (!session) {
+        throw new BadRequestException('Session not found');
       }
+      
+      this.logger.log(`📜 Creating kundli message for session ${data.sessionId}`);
+      
+      const kundliMessage = await this.chatMessageService.sendKundliDetailsMessage(
+        data.sessionId,
+        session.astrologerId.toString(),
+        data.userId,
+        session.orderId,
+        data.kundliDetails
+      );
 
-      this.server.to(data.sessionId).emit('timer_start', {
-        sessionId: data.sessionId,
-        maxDurationMinutes: result.data.maxDurationMinutes,
-        maxDurationSeconds: result.data.maxDurationSeconds,
-        ratePerMinute: result.data.ratePerMinute,
-        chargingStarted: true,
-        timestamp: new Date()
+      this.server.to(data.sessionId).emit('chat_message', {
+        messageId: kundliMessage.messageId,
+        sessionId: kundliMessage.sessionId,
+        senderId: kundliMessage.senderId,
+        senderModel: kundliMessage.senderModel,
+        type: 'kundli_details',
+        content: kundliMessage.content,
+        message: kundliMessage.content,
+        kundliDetails: kundliMessage.kundliDetails,
+        isVisibleToUser: false,
+        isVisibleToAstrologer: true,
+        deliveryStatus: 'sent',
+        sentAt: kundliMessage.sentAt,
+        automatic: true,
+        threadId: data.sessionId,
       });
 
-      this.startTimerTicker(data.sessionId, result.data.maxDurationSeconds);
-
-      client.to(data.sessionId).emit('user_joined', {
-        userId: data.userId,
-        role: data.role,
-        isOnline: true,
-        timestamp: new Date()
-      });
-
-      return { success: true, message: 'Chat started' };
-    } catch (error: any) {
-      this.logger.error(`Start chat error: ${error.message}`);
-      return { success: false, message: error.message };
+      this.logger.log(`✅ Kundli message emitted for session ${data.sessionId}`);
     }
+
+    // ✅ Emit timer_start
+    this.logger.log(`⏰ Emitting timer_start for session ${data.sessionId}`);
+    this.server.to(data.sessionId).emit('timer_start', {
+      sessionId: data.sessionId,
+      maxDurationMinutes: result.data.maxDurationMinutes,
+      maxDurationSeconds: result.data.maxDurationSeconds,
+      ratePerMinute: result.data.ratePerMinute,
+      chargingStarted: true,
+      timestamp: new Date()
+    });
+
+    this.startTimerTicker(data.sessionId, result.data.maxDurationSeconds);
+
+    client.to(data.sessionId).emit('user_joined', {
+      userId: data.userId,
+      role: data.role,
+      isOnline: true,
+      timestamp: new Date()
+    });
+
+    this.logger.log(`✅ start_chat completed successfully for ${data.sessionId}`);
+    return { success: true, message: 'Chat started' };
+  } catch (error: any) {
+    this.logger.error(`❌ Start chat error: ${error.message}`);
+    this.logger.error(`❌ Stack: ${error.stack}`);
+    return { success: false, message: error.message };
   }
+}
+
 
   // ===== REAL-TIME TIMER TICKER =====
   private startTimerTicker(sessionId: string, maxDurationSeconds: number) {
@@ -382,65 +484,108 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   // ===== SEND MESSAGE (Text, Image, Video, Voice Note) =====
-  @SubscribeMessage('send_message')
-  async handleSendMessage(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      sessionId: string;
-      senderId: string;
-      senderModel: 'User' | 'Astrologer';
-      receiverId: string;
-      receiverModel: 'User' | 'Astrologer';
-      orderId: string;
-      type: 'text' | 'image' | 'audio' | 'video' | 'file' | 'voice_note';
-      content: string;
-      fileUrl?: string;
-      fileS3Key?: string;
-      fileSize?: number;
-      fileName?: string;
-      fileDuration?: number;
-      mimeType?: string;
-      replyTo?: string;
+// ===== SEND MESSAGE - BROADCAST TO ALL IN ROOM =====
+@SubscribeMessage('send_message')
+async handleSendMessage(
+  @ConnectedSocket() client: Socket,
+  @MessageBody() payload: any
+) {
+  try {
+    const data = Array.isArray(payload) ? payload[0] : payload;
+    
+    this.logger.log(`📤 send_message from ${client.id}`);
+    this.logger.log(`🔍 SessionId: ${data.sessionId}`);
+    this.logger.log(`🔍 Content: ${data.content?.substring(0, 50)}`);
+    
+    // Validate
+    if (!data?.sessionId || !data?.senderId || !data?.receiverId) {
+      this.logger.error('❌ Missing required fields');
+      return { success: false, message: 'Missing required fields' };
     }
-  ) {
-    try {
-      const message = await this.chatMessageService.sendMessage(data);
 
-      await this.chatSessionService.updateLastMessage(
-        data.sessionId,
-        data.type === 'text' ? data.content : `[${data.type}]`,
-        data.type,
-        data.senderId
-      );
-
-      // ✅ EMIT message with status: 'sending'
-      this.server.to(data.sessionId).emit('new_message', {
-        messageId: message.messageId,
-        sessionId: message.sessionId,
-        senderId: message.senderId,
-        senderModel: message.senderModel,
-        receiverId: message.receiverId,
-        type: message.type,
-        content: message.content,
-        fileUrl: message.fileUrl,
-        fileDuration: message.fileDuration,
-        fileName: message.fileName,
-        deliveryStatus: 'sending',
-        sentAt: message.sentAt,
-        replyTo: data.replyTo
-      });
-
-      return { 
-        success: true, 
-        message: 'Message sent', 
-        messageId: message.messageId,
-        deliveryStatus: 'sending'
-      };
-    } catch (error: any) {
-      this.logger.error(`Send message error: ${error.message}`);
-      return { success: false, message: error.message };
+    const messageContent = data.content || data.message || '';
+    if (!messageContent.trim()) {
+      this.logger.error('❌ Empty message content');
+      return { success: false, message: 'Message content is required' };
     }
+
+    // Save to database
+    const message = await this.chatMessageService.sendMessage({
+      sessionId: data.sessionId,
+      senderId: data.senderId,
+      senderModel: data.senderModel || 'User',
+      receiverId: data.receiverId,
+      receiverModel: data.receiverModel || 'Astrologer',
+      orderId: data.orderId,
+      type: data.type || 'text',
+      content: messageContent,
+      fileUrl: data.fileUrl,
+      fileDuration: data.fileDuration,
+      fileName: data.fileName,
+    });
+
+    // ✅ CRITICAL: Check who's in the room
+    const socketsInRoom = await this.server.in(data.sessionId).allSockets();
+    this.logger.log(`📊 Room ${data.sessionId} has ${socketsInRoom.size} sockets`);
+    this.logger.log(`📊 Socket IDs: ${Array.from(socketsInRoom).join(', ')}`);
+
+    // ✅ INTERNAL NOTIFICATION: if receiver is not in this chat room, send push/in-app
+    const receiverActive = this.activeUsers.get(data.receiverId);
+    const receiverInRoom = receiverActive && socketsInRoom.has(receiverActive.socketId);
+
+    if (!receiverInRoom) {
+      this.notificationService
+        .sendNotification({
+          recipientId: data.receiverId,
+          recipientModel: (data.receiverModel || 'Astrologer') as 'User' | 'Astrologer',
+          type: 'chat_message',
+          title: 'New chat message',
+          message: messageContent.substring(0, 80),
+          data: {
+            mode: 'chat',
+            sessionId: data.sessionId,
+            orderId: data.orderId,
+            senderId: data.senderId,
+            receiverId: data.receiverId,
+          },
+          priority: 'high',
+        })
+        .catch(err =>
+          this.logger.error(`Internal chat notification error: ${err.message}`),
+        );
+    }
+
+    // ✅ CRITICAL: Broadcast to ALL in room (including sender)
+    this.server.to(data.sessionId).emit('chat_message', {
+      messageId: message.messageId,
+      sessionId: message.sessionId.toString(),
+      senderId: message.senderId.toString(),
+      senderModel: message.senderModel,
+      receiverId: message.receiverId.toString(),
+      receiverModel: message.receiverModel,
+      type: message.type,
+      content: message.content,
+      message: message.content,
+      fileUrl: message.fileUrl,
+      fileDuration: message.fileDuration,
+      deliveryStatus: 'sent',
+      sentAt: message.sentAt,
+      threadId: data.sessionId,
+      tempId: data.tempId,
+    });
+
+    this.logger.log(`✅ Message broadcasted to ${socketsInRoom.size} sockets`);
+
+    return { 
+      success: true, 
+      messageId: message.messageId,
+    };
+  } catch (error: any) {
+    this.logger.error(`❌ Send message error: ${error.message}`);
+    return { success: false, message: error.message };
   }
+}
+
 
   // ===== MESSAGE SENT (Grey double tick) =====
   @SubscribeMessage('message_sent')
@@ -605,39 +750,105 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return { success: true };
   }
 
-  // ===== JOIN SESSION =====
-  @SubscribeMessage('join_session')
-  async handleJoinSession(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { sessionId: string; userId: string; role: 'user' | 'astrologer' }
-  ) {
-    try {
-      client.join(data.sessionId);
+// ===== JOIN SESSION WITH AUTO-KUNDLI =====
+@SubscribeMessage('join_session')
+async handleJoinSession(
+  @ConnectedSocket() client: Socket,
+  @MessageBody() payload: any
+) {
+  try {
+    const data = Array.isArray(payload) ? payload[0] : payload;
+    
+    this.logger.log(`📍 join_session from ${client.id}`);
+    this.logger.log(`🔍 SessionId: ${data.sessionId}, Role: ${data.role}, UserId: ${data.userId}`);
+    
+    // Join room
+    client.join(data.sessionId);
+    
+    // Check room population
+    const socketsInRoom = await this.server.in(data.sessionId).allSockets();
+    this.logger.log(`👥 Room ${data.sessionId} now has ${socketsInRoom.size} sockets`);
 
-      this.activeUsers.set(data.userId, {
-        socketId: client.id,
-        userId: data.userId,
-        role: data.role,
-        sessionId: data.sessionId
-      });
+    // Store user
+    this.activeUsers.set(data.userId, {
+      socketId: client.id,
+      userId: data.userId,
+      role: data.role,
+      sessionId: data.sessionId
+    });
 
-      // ✅ AWAIT the async operation
-      await this.chatSessionService.updateOnlineStatus(data.sessionId, data.userId, data.role, true);
+    await this.chatSessionService.updateOnlineStatus(
+      data.sessionId, 
+      data.userId, 
+      data.role, 
+      true
+    );
 
-      client.to(data.sessionId).emit('user_joined', {
-        userId: data.userId,
-        role: data.role,
-        isOnline: true,
-        timestamp: new Date()
-      });
+    // Emit to others
+    client.to(data.sessionId).emit('user_joined', {
+      userId: data.userId,
+      role: data.role,
+      isOnline: true,
+      timestamp: new Date()
+    });
 
-      this.logger.log(`User ${data.userId} joined session ${data.sessionId}`);
+    // ✅ AUTO-SEND KUNDLI if user joins with kundli details
+    if (data.role === 'user' && data.kundliDetails) {
+      this.logger.log(`📜 User has kundli details, sending to session ${data.sessionId}`);
+      
+      try {
+        const session = await this.chatSessionService.getSession(data.sessionId);
+        
+        if (!session) {
+          this.logger.error('❌ Session not found for kundli');
+          return { success: true, message: 'Joined but session not found' };
+        }
+        
+        // ✅ Save kundli message to database
+        const kundliMessage = await this.chatMessageService.sendKundliDetailsMessage(
+          data.sessionId,
+          session.astrologerId.toString(),
+          data.userId,
+          session.orderId,
+          data.kundliDetails
+        );
 
-      return { success: true, message: 'Joined session successfully' };
-    } catch (error: any) {
-      return { success: false, message: error.message };
+        // ✅ Broadcast to ALL in room (including sender)
+        this.server.to(data.sessionId).emit('chat_message', {
+          messageId: kundliMessage.messageId,
+          sessionId: kundliMessage.sessionId,
+          senderId: data.userId,
+          senderModel: 'User',
+          receiverId: session.astrologerId.toString(),
+          receiverModel: 'Astrologer',
+          type: 'kundli_details',
+          content: '📜 User Kundli Details',
+          message: '📜 User Kundli Details',
+          kundliDetails: {
+            name: data.kundliDetails.name,
+            dob: data.kundliDetails.dob,
+            birthTime: data.kundliDetails.birthTime,
+            birthPlace: data.kundliDetails.birthPlace,
+            gender: data.kundliDetails.gender,
+          },
+          deliveryStatus: 'sent',
+          sentAt: kundliMessage.sentAt || new Date(),
+          threadId: data.sessionId,
+          automatic: true,
+        });
+
+        this.logger.log(`✅ Kundli message broadcasted to ${socketsInRoom.size} sockets`);
+      } catch (kundliError) {
+        this.logger.error(`❌ Kundli send error: ${kundliError.message}`);
+      }
     }
+
+    return { success: true, message: 'Joined session successfully' };
+  } catch (error: any) {
+    this.logger.error(`❌ Join session error: ${error.message}`);
+    return { success: false, message: error.message };
   }
+}
 
   // ===== LEAVE SESSION =====
   @SubscribeMessage('leave_session')
@@ -667,38 +878,46 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   // ===== END SESSION =====
   @SubscribeMessage('end_chat')
-  async handleEndChat(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { sessionId: string; endedBy: string; reason: string }
-  ) {
-    try {
-      const result = await this.chatSessionService.endSession(
-        data.sessionId,
-        data.endedBy,
-        data.reason
-      );
-
-      this.server.to(data.sessionId).emit('session_ended', {
-        sessionId: data.sessionId,
-        endedBy: data.endedBy,
-        endTime: new Date(),
-        actualDuration: result.data.actualDuration,
-        billedMinutes: result.data.billedMinutes,
-        chargeAmount: result.data.chargeAmount,
-        message: 'Chat session ended'
-      });
-
-      if (this.sessionTimers.has(data.sessionId)) {
-        clearInterval(this.sessionTimers.get(data.sessionId)!);
-        this.sessionTimers.delete(data.sessionId);
-      }
-
-      return { success: true, message: 'Chat ended', data: result.data };
-    } catch (error: any) {
-      this.logger.error(`End chat error: ${error.message}`);
-      return { success: false, message: error.message };
+async handleEndChat(
+  @ConnectedSocket() client: Socket,
+  @MessageBody() data: { sessionId: string; endedBy: string; reason: string }
+) {
+  try {
+    this.logger.log(`🔴 end_chat from ${client.id}: ${data.sessionId}`);
+    
+    // ✅ CRITICAL: Stop timer immediately
+    if (this.sessionTimers.has(data.sessionId)) {
+      clearInterval(this.sessionTimers.get(data.sessionId)!);
+      this.sessionTimers.delete(data.sessionId);
+      this.logger.log(`⏹️ Timer stopped for session: ${data.sessionId}`);
     }
+
+    const result = await this.chatSessionService.endSession(
+      data.sessionId,
+      data.endedBy,
+      data.reason
+    );
+
+    // ✅ Broadcast to ALL in room
+    this.server.to(data.sessionId).emit('session_ended', {
+      sessionId: data.sessionId,
+      endedBy: data.endedBy,
+      endTime: new Date(),
+      actualDuration: result.data.actualDuration,
+      billedMinutes: result.data.billedMinutes,
+      chargeAmount: result.data.chargeAmount,
+      message: 'Chat session ended'
+    });
+
+    this.logger.log(`✅ Session ended successfully: ${data.sessionId}`);
+
+    return { success: true, message: 'Chat ended', data: result.data };
+  } catch (error: any) {
+    this.logger.error(`❌ End chat error: ${error.message}`);
+    return { success: false, message: error.message };
   }
+}
+
 
   // ===== REACT TO MESSAGE =====
   @SubscribeMessage('react_message')
@@ -825,4 +1044,5 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return { success: false, message: error.message };
     }
   }
+
 }

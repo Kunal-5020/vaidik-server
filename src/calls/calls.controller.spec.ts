@@ -1,18 +1,11 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { CallsController } from './calls.controller';
+import { CallController } from './controllers/calls.controller';
 
-describe('CallsController', () => {
-  let controller: CallsController;
-
-  beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      controllers: [CallsController],
-    }).compile();
-
-    controller = module.get<CallsController>(CallsController);
-  });
-
+describe('CallController', () => {
   it('should be defined', () => {
+    const controller = new CallController(
+      {} as any, // CallSessionService
+      {} as any, // CallBillingService
+    );
     expect(controller).toBeDefined();
   });
 });

@@ -12,6 +12,8 @@ import { CallSession, CallSessionSchema } from './schemas/call-session.schema';
 import { OrdersModule } from '../orders/orders.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { AstrologersModule } from '../astrologers/astrologers.module';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { ChatModule } from '../chat/chat.module';
 
 @Module({
   imports: [
@@ -21,6 +23,8 @@ import { AstrologersModule } from '../astrologers/astrologers.module';
     OrdersModule,
     PaymentsModule,
     AstrologersModule,
+    NotificationsModule,
+    ChatModule, // ✅ ADD
   ],
   controllers: [CallController],
   providers: [

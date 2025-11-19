@@ -64,7 +64,6 @@ export class ScheduledNotification {
 export const ScheduledNotificationSchema = SchemaFactory.createForClass(ScheduledNotification);
 
 // Indexes
-ScheduledNotificationSchema.index({ scheduleId: 1 }, { unique: true });
+// Unique index for scheduleId is created via @Prop({ unique: true })
 ScheduledNotificationSchema.index({ scheduledFor: 1, status: 1 });
-ScheduledNotificationSchema.index({ status: 1 });
 ScheduledNotificationSchema.index({ createdBy: 1 });

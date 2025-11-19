@@ -7,24 +7,31 @@ export type ChatSessionDocument = ChatSession & Document;
 
 @Schema({ timestamps: true, collection: 'chat_sessions' })
 export class ChatSession {
-  @Prop({ required: true, unique: true, index: true })
+  @Prop({ required: true, unique: true })
   sessionId: string;
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
   userId: Types.ObjectId;
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'Astrologer', index: true })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'Astrologer' })
   astrologerId: Types.ObjectId;
 
   @Prop({ required: true })
   orderId: string;
+
+  // ✅ NEW: Link to conversation thread
+  @Prop()
+  conversationThreadId?: string; // Same as order.conversationThreadId
+
+  // ✅ NEW: Session sequence number (1st chat, 2nd chat, etc.)
+  @Prop({ default: 1 })
+  sessionNumber: number;
 
   // ===== STATUS FLOW =====
   @Prop({
     required: true,
     enum: ['initiated', 'ringing', 'waiting', 'waiting_in_queue', 'active', 'ended', 'cancelled', 'rejected'],
     default: 'initiated',
-    index: true
   })
   status: string;
 
@@ -146,6 +153,9 @@ export class ChatSession {
     lastSeen?: Date;
   };
 
+  @Prop()
+  previousSessionId?: string; // Link to previous session for continuation
+
   // ===== QUEUE INFO =====
   @Prop()
   expectedWaitTime?: number;
@@ -164,18 +174,17 @@ export class ChatSession {
   endReason?: string;
 
   // ===== METADATA =====
-  @Prop({ default: Date.now, index: true })
+  @Prop({ default: Date.now})
   createdAt: Date;
 }
 
 export const ChatSessionSchema = SchemaFactory.createForClass(ChatSession);
 
 // Indexes
-ChatSessionSchema.index({ sessionId: 1 }, { unique: true });
+// Unique index for sessionId is created via @Prop({ unique: true })
 ChatSessionSchema.index({ userId: 1, createdAt: -1 });
 ChatSessionSchema.index({ astrologerId: 1, createdAt: -1 });
+ChatSessionSchema.index({ conversationThreadId: 1 }, { sparse: true });
 ChatSessionSchema.index({ orderId: 1 });
-ChatSessionSchema.index({ status: 1 });
 ChatSessionSchema.index({ userId: 1, status: 1 });
 ChatSessionSchema.index({ astrologerId: 1, status: 1 });
-ChatSessionSchema.index({ createdAt: -1 });

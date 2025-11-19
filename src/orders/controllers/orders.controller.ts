@@ -62,6 +62,25 @@ export class OrdersController {
     );
   }
 
+    // ===== GET ALL USER CONVERSATIONS =====
+@Get('conversations')
+async getUserConversations(
+  @Req() req: AuthenticatedRequest,
+  @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+  @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number
+) {
+  return this.ordersService.getUserConversations(req.user._id, page, limit);
+}
+
+// ===== GET CONVERSATION STATISTICS =====
+@Get('conversations/:orderId/stats')
+async getConversationStats(
+  @Param('orderId') orderId: string,
+  @Req() req: AuthenticatedRequest
+) {
+  return this.ordersService.getConversationStats(orderId, req.user._id);
+}
+
   // ===== GET SINGLE ORDER =====
 
   @Get(':orderId')

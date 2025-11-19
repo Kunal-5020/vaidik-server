@@ -10,6 +10,8 @@ import { Model, Types, ClientSession } from 'mongoose';
 import { WalletTransaction, WalletTransactionDocument } from '../schemas/wallet-transaction.schema';
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { RazorpayService } from './razorpay.service';
+import { GiftCard, GiftCardDocument } from '../schemas/gift-card.schema';
+import { WalletRefundRequest, WalletRefundRequestDocument } from '../schemas/wallet-refund-request.schema';
 
 @Injectable()
 export class WalletService {
@@ -20,6 +22,10 @@ export class WalletService {
     private transactionModel: Model<WalletTransactionDocument>,
     @InjectModel(User.name)
     private userModel: Model<UserDocument>,
+    @InjectModel(GiftCard.name)
+    private giftCardModel: Model<GiftCardDocument>,
+    @InjectModel(WalletRefundRequest.name)
+    private walletRefundModel: Model<WalletRefundRequestDocument>,
     private razorpayService: RazorpayService, // ✅ Only Razorpay
   ) {}
 
@@ -39,6 +45,65 @@ export class WalletService {
    */
   private async startSession(): Promise<ClientSession> {
     return this.transactionModel.db.startSession();
+  }
+
+  /**
+   * Ensure wallet object has split balances (cash/bonus)
+   */
+  private ensureWallet(user: UserDocument): void {
+    if (!user.wallet) {
+      user.wallet = {
+        balance: 0,
+        currency: 'INR',
+        totalRecharged: 0,
+        totalSpent: 0,
+        lastRechargeAt: null,
+        lastTransactionAt: null,
+        cashBalance: 0,
+        bonusBalance: 0,
+        totalBonusReceived: 0,
+        totalBonusSpent: 0,
+      } as any;
+    }
+
+    user.wallet.cashBalance = user.wallet.cashBalance ?? user.wallet.balance ?? 0;
+    user.wallet.bonusBalance = user.wallet.bonusBalance ?? 0;
+    user.wallet.totalBonusReceived = user.wallet.totalBonusReceived ?? 0;
+    user.wallet.totalBonusSpent = user.wallet.totalBonusSpent ?? 0;
+
+    user.wallet.balance = (user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0);
+  }
+
+  /**
+   * Apply debit to wallet using bonus first, then cash
+   */
+  private applyDebit(
+    wallet: any,
+    amount: number,
+  ): { cashDebited: number; bonusDebited: number } {
+    if (amount <= 0) {
+      throw new BadRequestException('Amount must be greater than 0');
+    }
+
+    const totalAvailable = (wallet.cashBalance || 0) + (wallet.bonusBalance || 0);
+    if (totalAvailable < amount) {
+      throw new BadRequestException(
+        `Insufficient wallet balance. Required: ₹${amount}, Available: ₹${totalAvailable}`,
+      );
+    }
+
+    const bonusAvailable = wallet.bonusBalance || 0;
+    const bonusDebited = Math.min(bonusAvailable, amount);
+    const cashDebited = amount - bonusDebited;
+
+    wallet.bonusBalance = bonusAvailable - bonusDebited;
+    wallet.cashBalance = (wallet.cashBalance || 0) - cashDebited;
+    wallet.balance = (wallet.cashBalance || 0) + (wallet.bonusBalance || 0);
+
+    wallet.totalBonusSpent = (wallet.totalBonusSpent || 0) + bonusDebited;
+    wallet.totalSpent = (wallet.totalSpent || 0) + amount;
+
+    return { cashDebited, bonusDebited };
   }
 
   // ===== CREATE RECHARGE TRANSACTION (RAZORPAY ONLY) =====
@@ -120,6 +185,8 @@ export class WalletService {
     transactionId: string,
     paymentId: string,
     status: 'completed' | 'failed',
+    promotionId?: string,
+    bonusPercentage?: number,
   ): Promise<any> {
     const session = await this.startSession();
     session.startTransaction();
@@ -154,34 +221,42 @@ export class WalletService {
       transaction.status = status;
 
       if (status === 'completed') {
-        // ✅ Update user wallet balance atomically
-        const currentBalance = user.wallet?.balance || 0;
-        const newBalance = currentBalance + transaction.amount;
+        // ✅ Ensure wallet structure
+        this.ensureWallet(user as any);
 
-        if (!user.wallet) {
-          user.wallet = {
-            balance: 0,
-            currency: 'INR',
-            totalRecharged: 0,
-            totalSpent: 0,
-          };
+        // Optional promotion/bonus handling
+        let bonusAmount = 0;
+        if (bonusPercentage && bonusPercentage > 0) {
+          bonusAmount = Math.floor((transaction.amount * bonusPercentage) / 100);
         }
 
-        user.wallet.balance = newBalance;
+        if (promotionId) {
+          (transaction as any).promotionId = promotionId;
+        }
+        if (bonusAmount > 0) {
+          transaction.bonusAmount = bonusAmount;
+        }
+
+        // ✅ Update user wallet split balances
+        user.wallet.cashBalance = (user.wallet.cashBalance || 0) + transaction.amount;
+        user.wallet.bonusBalance = (user.wallet.bonusBalance || 0) + bonusAmount;
+        user.wallet.balance = user.wallet.cashBalance + user.wallet.bonusBalance;
         user.wallet.totalRecharged =
           (user.wallet.totalRecharged || 0) + transaction.amount;
+        user.wallet.totalBonusReceived =
+          (user.wallet.totalBonusReceived || 0) + bonusAmount;
         user.wallet.lastRechargeAt = new Date();
         user.wallet.lastTransactionAt = new Date();
 
-        transaction.balanceAfter = newBalance;
-        transaction.description = `Wallet recharged successfully with ₹${transaction.amount}`;
+        transaction.balanceAfter = user.wallet.balance;
+        transaction.description = `Wallet recharged successfully with ₹${transaction.amount}${
+          bonusAmount > 0 ? ` + bonus ₹${bonusAmount}` : ''
+        }`;
 
         this.logger.log(
-          `Payment verified: ${transactionId} | New balance: ₹${newBalance}`,
+          `Payment verified: ${transactionId} | New balance: ₹${user.wallet.balance} (cash=${user.wallet.cashBalance}, bonus=${user.wallet.bonusBalance})`,
         );
       } else {
-        transaction.failureReason = 'Payment failed or cancelled by user';
-        this.logger.warn(`Payment failed: ${transactionId}`);
       }
 
       // ✅ Save changes atomically
@@ -222,6 +297,7 @@ export class WalletService {
   orderId: string,
   description: string,
   session: ClientSession | undefined = undefined, // ✅ Fixed: Explicit default
+  metadata: Record<string, any> = {},
 ): Promise<WalletTransactionDocument> {
   if (amount <= 0) {
     throw new BadRequestException('Amount must be greater than 0');
@@ -243,11 +319,17 @@ export class WalletService {
       throw new NotFoundException('User not found');
     }
 
-    if (!user.wallet || user.wallet.balance < amount) {
+    this.ensureWallet(user as any);
+
+    if ((user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0) < amount) {
       throw new BadRequestException(
-        `Insufficient wallet balance. Required: ₹${amount}, Available: ₹${user.wallet?.balance || 0}`,
+        `Insufficient wallet balance. Required: ₹${amount}, Available: ₹${
+          (user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0)
+        }`,
       );
     }
+
+    const { cashDebited, bonusDebited } = this.applyDebit(user.wallet, amount);
 
     const transactionId = this.generateTransactionId('TXN');
 
@@ -256,16 +338,17 @@ export class WalletService {
       userId: new Types.ObjectId(userId),
       type: 'deduction',
       amount,
-      balanceBefore: user.wallet.balance,
-      balanceAfter: user.wallet.balance - amount,
+      cashAmount: cashDebited,
+      bonusAmount: bonusDebited,
+      balanceBefore: user.wallet.balance + amount,
+      balanceAfter: user.wallet.balance,
       description,
       orderId,
+      metadata,
       status: 'completed',
       createdAt: new Date(),
     });
 
-    user.wallet.balance -= amount;
-    user.wallet.totalSpent = (user.wallet.totalSpent || 0) + amount;
     user.wallet.lastTransactionAt = new Date();
 
     await transaction.save({ session: localSession });
@@ -321,32 +404,30 @@ export class WalletService {
       throw new NotFoundException('User not found');
     }
 
+    this.ensureWallet(user as any);
+
     const transactionId = this.generateTransactionId('REFUND');
+
+    // Order refunds and admin credits are treated as non-withdrawable bonus
+    const beforeBalance = user.wallet.balance;
+    user.wallet.bonusBalance = (user.wallet.bonusBalance || 0) + amount;
+    user.wallet.balance = (user.wallet.cashBalance || 0) + user.wallet.bonusBalance;
+    user.wallet.lastTransactionAt = new Date();
 
     const transaction = new this.transactionModel({
       transactionId,
       userId: new Types.ObjectId(userId),
       type: 'refund',
       amount,
-      balanceBefore: user.wallet?.balance || 0,
-      balanceAfter: (user.wallet?.balance || 0) + amount,
+      bonusAmount: amount,
+      isBonus: true,
+      balanceBefore: beforeBalance,
+      balanceAfter: user.wallet.balance,
       description,
       orderId,
       status: 'completed',
       createdAt: new Date(),
     });
-
-    if (!user.wallet) {
-      user.wallet = {
-        balance: 0,
-        currency: 'INR', // ✅ Now valid after schema update
-        totalRecharged: 0,
-        totalSpent: 0,
-      };
-    }
-
-    user.wallet.balance += amount;
-    user.wallet.lastTransactionAt = new Date();
 
     await transaction.save({ session: localSession });
     await user.save({ session: localSession });
@@ -401,32 +482,37 @@ export class WalletService {
       throw new NotFoundException('User not found');
     }
 
+    this.ensureWallet(user as any);
+
     const transactionId = this.generateTransactionId(type.toUpperCase());
+
+    // For generic creditToWallet, treat as bonus by default (non-withdrawable)
+    const beforeBalance = user.wallet.balance;
+    const isBonus = type === 'bonus' || type === 'reward' || type === 'refund';
+
+    if (isBonus) {
+      user.wallet.bonusBalance = (user.wallet.bonusBalance || 0) + amount;
+    } else {
+      user.wallet.cashBalance = (user.wallet.cashBalance || 0) + amount;
+    }
+    user.wallet.balance = (user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0);
+    user.wallet.lastTransactionAt = new Date();
 
     const transaction = new this.transactionModel({
       transactionId,
       userId: new Types.ObjectId(userId),
       type,
       amount,
-      balanceBefore: user.wallet?.balance || 0,
-      balanceAfter: (user.wallet?.balance || 0) + amount,
+      cashAmount: !isBonus ? amount : undefined,
+      bonusAmount: isBonus ? amount : undefined,
+      isBonus: isBonus || undefined,
+      balanceBefore: beforeBalance,
+      balanceAfter: user.wallet.balance,
       description,
       orderId,
       status: 'completed',
       createdAt: new Date(),
     });
-
-    if (!user.wallet) {
-      user.wallet = {
-        balance: 0,
-        currency: 'INR', // ✅ Now valid after schema update
-        totalRecharged: 0,
-        totalSpent: 0,
-      };
-    }
-
-    user.wallet.balance += amount;
-    user.wallet.lastTransactionAt = new Date();
 
     await transaction.save({ session: localSession });
     await user.save({ session: localSession });
@@ -550,16 +636,20 @@ export class WalletService {
       ]),
     ]);
 
+    const currentBalance = user.wallet?.balance || 0;
+
     return {
       success: true,
       data: {
-        currentBalance: user.wallet?.balance || 0,
+        currentBalance,
         currency: user.wallet?.currency || 'INR',
         totalRecharged: rechargeTotal[0]?.total || 0,
         totalSpent: spentTotal[0]?.total || 0,
         totalTransactions,
         lastRechargeAt: user.wallet?.lastRechargeAt || null,
         lastTransactionAt: user.wallet?.lastTransactionAt || null,
+        cashBalance: (user.wallet as any)?.cashBalance ?? currentBalance,
+        bonusBalance: (user.wallet as any)?.bonusBalance ?? 0,
       },
     };
   }
@@ -733,6 +823,8 @@ export class WalletService {
         throw new NotFoundException('User not found');
       }
 
+      this.ensureWallet(user as any);
+
       // ✅ Find the hold transaction
       const holdTransaction = await this.transactionModel
         .findOne({
@@ -757,10 +849,12 @@ export class WalletService {
         );
       }
 
-      // ✅ Verify wallet still has balance
-      const currentBalance = user.wallet?.balance || 0;
-      if (currentBalance < chargeAmount) {
-        throw new BadRequestException('Insufficient wallet balance to charge');
+      const totalAvailable =
+        (user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0);
+      if (totalAvailable < chargeAmount) {
+        throw new BadRequestException(
+          `Insufficient wallet balance to charge. Required: ₹${chargeAmount}, Available: ₹${totalAvailable}`,
+        );
       }
 
       const chargeTransactionId = this.generateTransactionId('CHARGE');
@@ -771,53 +865,46 @@ export class WalletService {
       holdTransaction.linkedTransactionId = chargeTransactionId;
       await holdTransaction.save({ session });
 
+      const beforeBalance = user.wallet.balance;
+
+      // ✅ Deduct from wallet using bonus first, then cash
+      const { cashDebited, bonusDebited } = this.applyDebit(
+        user.wallet,
+        chargeAmount,
+      );
+
       // ✅ Create charge transaction
       const chargeTransaction = new this.transactionModel({
         transactionId: chargeTransactionId,
         userId: new Types.ObjectId(userId),
         type: 'charge',
         amount: chargeAmount,
+        cashAmount: cashDebited,
+        bonusAmount: bonusDebited,
         orderId,
         status: 'completed',
-        balanceBefore: currentBalance,
-        balanceAfter: currentBalance - chargeAmount,
+        balanceBefore: beforeBalance,
+        balanceAfter: user.wallet.balance,
         description: `CHARGE: ${description}`,
         linkedHoldTransactionId: holdTransaction.transactionId,
         createdAt: new Date(),
       });
 
-      // ✅ Deduct from wallet
-      user.wallet.balance -= chargeAmount;
-      user.wallet.totalSpent =
-        (user.wallet.totalSpent || 0) + chargeAmount;
       user.wallet.lastTransactionAt = new Date();
 
       await chargeTransaction.save({ session });
       await user.save({ session });
 
-      // ✅ Refund unused amount if any
-      const unusedAmount = heldAmount - chargeAmount;
-      if (unusedAmount > 0) {
-        await this.refundUnusedAmount(
-          userId,
-          unusedAmount,
-          orderId,
-          `Refund unused amount from order ${orderId}`,
-          session,
-        );
-      }
-
       await session.commitTransaction();
 
       this.logger.log(
-        `Charged from hold: ₹${chargeAmount} for order ${orderId} | Balance: ₹${user.wallet.balance}`,
+        `Charged from hold: ₹${chargeAmount} for order ${orderId} | Balance: ₹${user.wallet.balance} (cash=${user.wallet.cashBalance}, bonus=${user.wallet.bonusBalance})`,
       );
 
       return {
         success: true,
         transactionId: chargeTransaction.transactionId,
         chargedAmount: chargeAmount,
-        refundedAmount: unusedAmount,
         balanceAfter: user.wallet.balance,
         message: 'Charged successfully',
       };
@@ -893,46 +980,6 @@ export class WalletService {
   }
 
   /**
-   * ✅ REFUND UNUSED AMOUNT (Internal - After Session Charged)
-   */
-  private async refundUnusedAmount(
-    userId: string,
-    refundAmount: number,
-    orderId: string,
-    description: string,
-    session: ClientSession,
-  ): Promise<void> {
-    const user = await this.userModel.findById(userId).session(session);
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    const refundTransactionId = this.generateTransactionId('REFUND');
-
-    const refundTransaction = new this.transactionModel({
-      transactionId: refundTransactionId,
-      userId: new Types.ObjectId(userId),
-      type: 'refund',
-      amount: refundAmount,
-      orderId,
-      status: 'completed',
-      balanceBefore: user.wallet.balance,
-      balanceAfter: user.wallet.balance + refundAmount,
-      description: `REFUND (Unused): ${description}`,
-      createdAt: new Date(),
-    });
-
-    user.wallet.balance += refundAmount;
-    user.wallet.lastTransactionAt = new Date();
-
-    await refundTransaction.save({ session });
-    await user.save({ session });
-
-    this.logger.log(`Refunded unused amount: ₹${refundAmount} to user ${userId}`);
-  }
-
-  /**
    * ✅ GET WALLET WITH HOLD STATUS
    * Shows: Current balance + held amount + available balance
    */
@@ -971,7 +1018,233 @@ export class WalletService {
         totalHeld,
         availableBalance: Math.max(0, availableBalance),
         canStartSession: availableBalance >= 0,
+        // expose split if present
+        cashBalance: (user.wallet as any)?.cashBalance ?? currentBalance,
+        bonusBalance: (user.wallet as any)?.bonusBalance ?? 0,
       },
     };
+  }
+
+  // ===== GIFT CARD REDEMPTION =====
+
+  async redeemGiftCard(userId: string, code: string): Promise<any> {
+    const session = await this.startSession();
+    session.startTransaction();
+    try {
+      const normalizedCode = code.trim().toUpperCase();
+
+      const giftCard = await this.giftCardModel
+        .findOne({ code: normalizedCode })
+        .session(session);
+
+      if (!giftCard || giftCard.status !== 'active') {
+        throw new BadRequestException('Invalid or inactive gift card');
+      }
+
+      if (giftCard.expiresAt && giftCard.expiresAt < new Date()) {
+        giftCard.status = 'expired';
+        await giftCard.save({ session });
+        throw new BadRequestException('Gift card has expired');
+      }
+
+      if (giftCard.redemptionsCount >= giftCard.maxRedemptions) {
+        giftCard.status = 'exhausted';
+        await giftCard.save({ session });
+        throw new BadRequestException('Gift card already redeemed');
+      }
+
+      const user = await this.userModel.findById(userId).session(session);
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      this.ensureWallet(user as any);
+
+      const beforeBalance = user.wallet.balance;
+
+      // As per business rule: gift cards are non-withdrawable bonus
+      user.wallet.bonusBalance = (user.wallet.bonusBalance || 0) + giftCard.amount;
+      user.wallet.balance = (user.wallet.cashBalance || 0) + user.wallet.bonusBalance;
+      user.wallet.lastTransactionAt = new Date();
+
+      const transactionId = this.generateTransactionId('GIFT');
+      const txn = new this.transactionModel({
+        transactionId,
+        userId: user._id,
+        type: 'giftcard',
+        amount: giftCard.amount,
+        bonusAmount: giftCard.amount,
+        isBonus: true,
+        balanceBefore: beforeBalance,
+        balanceAfter: user.wallet.balance,
+        description: `Gift card redemption (${normalizedCode})`,
+        status: 'completed',
+        giftCardCode: normalizedCode,
+        createdAt: new Date(),
+      });
+
+      giftCard.redemptionsCount += 1;
+      giftCard.redeemedBy = user._id as any;
+      giftCard.redeemedAt = new Date();
+      giftCard.redemptionTransactionId = transactionId;
+      if (giftCard.redemptionsCount >= giftCard.maxRedemptions) {
+        giftCard.status = 'exhausted';
+      }
+
+      await Promise.all([
+        user.save({ session }),
+        txn.save({ session }),
+        giftCard.save({ session }),
+      ]);
+
+      await session.commitTransaction();
+
+      return {
+        success: true,
+        message: 'Gift card redeemed successfully',
+        data: {
+          transactionId,
+          amount: giftCard.amount,
+          newBalance: user.wallet.balance,
+          bonusBalance: user.wallet.bonusBalance,
+        },
+      };
+    } catch (error: any) {
+      await session.abortTransaction();
+      this.logger.error(`Gift card redeem failed: ${error.message}`);
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  }
+
+  // ===== WALLET REFUND TO BANK (ADMIN-ONLY HELPERS) =====
+
+  async createWalletRefundRequest(
+    userId: string,
+    amount: number,
+    reason?: string,
+  ): Promise<WalletRefundRequestDocument> {
+    if (amount <= 0) {
+      throw new BadRequestException('Amount must be greater than 0');
+    }
+
+    const user = await this.userModel.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    this.ensureWallet(user as any);
+
+    const cashBalance = user.wallet.cashBalance || 0;
+    if (amount > cashBalance) {
+      throw new BadRequestException(
+        `Cannot refund more than withdrawable balance. Requested: ₹${amount}, Available: ₹${cashBalance}`,
+      );
+    }
+
+    const refundId = this.generateTransactionId('WREF');
+
+    const request = new this.walletRefundModel({
+      refundId,
+      userId: user._id,
+      amountRequested: amount,
+      cashBalanceSnapshot: cashBalance,
+      status: 'pending',
+      reason,
+    });
+
+    await request.save();
+    return request;
+  }
+
+  async processWalletRefund(
+    refundId: string,
+    adminId: string,
+    payload: { amountApproved: number; paymentReference: string },
+  ): Promise<any> {
+    const request = await this.walletRefundModel.findOne({ refundId });
+    if (!request) {
+      throw new NotFoundException('Wallet refund request not found');
+    }
+
+    if (request.status !== 'pending' && request.status !== 'approved') {
+      throw new BadRequestException('Refund request already processed');
+    }
+
+    const user = await this.userModel.findById(request.userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    this.ensureWallet(user as any);
+
+    const amount = payload.amountApproved;
+    if (amount <= 0) {
+      throw new BadRequestException('Approved amount must be greater than 0');
+    }
+
+    if (amount > (user.wallet.cashBalance || 0)) {
+      throw new BadRequestException(
+        `Insufficient cash balance for refund. Approved: ₹${amount}, Cash: ₹${user.wallet.cashBalance || 0}`,
+      );
+    }
+
+    const session = await this.startSession();
+    session.startTransaction();
+
+    try {
+      const beforeBalance = user.wallet.balance;
+
+      // Deduct only from cashBalance
+      user.wallet.cashBalance = (user.wallet.cashBalance || 0) - amount;
+      user.wallet.balance = (user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0);
+      user.wallet.lastTransactionAt = new Date();
+
+      const transactionId = this.generateTransactionId('WDRAW');
+      const txn = new this.transactionModel({
+        transactionId,
+        userId: user._id,
+        type: 'withdrawal',
+        amount,
+        cashAmount: amount,
+        balanceBefore: beforeBalance,
+        balanceAfter: user.wallet.balance,
+        description: 'Wallet refund to bank',
+        status: 'completed',
+        createdAt: new Date(),
+      });
+
+      request.amountApproved = amount;
+      request.status = 'processed';
+      request.processedBy = new Types.ObjectId(adminId);
+      request.processedAt = new Date();
+      request.paymentReference = payload.paymentReference;
+
+      await Promise.all([
+        user.save({ session }),
+        txn.save({ session }),
+        request.save({ session }),
+      ]);
+
+      await session.commitTransaction();
+
+      return {
+        success: true,
+        message: 'Wallet refund processed successfully',
+        data: {
+          refundId: request.refundId,
+          transactionId,
+          amount,
+          balanceAfter: user.wallet.balance,
+        },
+      };
+    } catch (error: any) {
+      await session.abortTransaction();
+      this.logger.error(`Wallet refund process failed: ${error.message}`);
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }
 }

@@ -30,6 +30,94 @@ export class AdminPaymentsController {
     return this.adminPaymentsService.getTransactionStats();
   }
 
+  // Wallet refund-to-bank (user cash-out)
+
+  @Get('wallet-refunds')
+  @RequirePermissions(Permissions.PAYMENTS_VIEW)
+  async listWalletRefunds(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('status') status?: string,
+    @Query('userId') userId?: string,
+  ) {
+    return this.adminPaymentsService.listWalletRefundRequests(page, limit, {
+      status,
+      userId,
+    });
+  }
+
+  @Get('wallet-refunds/:refundId')
+  @RequirePermissions(Permissions.PAYMENTS_VIEW)
+  async getWalletRefundDetails(@Param('refundId') refundId: string) {
+    return this.adminPaymentsService.getWalletRefundDetails(refundId);
+  }
+
+  @Post('wallet-refunds/:refundId/process')
+  @RequirePermissions(Permissions.PAYMENTS_PROCESS)
+  async processWalletRefund(
+    @Param('refundId') refundId: string,
+    @CurrentAdmin() admin: any,
+    @Body('amountApproved') amountApproved: number,
+    @Body('paymentReference') paymentReference: string,
+  ) {
+    return this.adminPaymentsService.processWalletRefund(refundId, admin._id, {
+      amountApproved,
+      paymentReference,
+    });
+  }
+
+  // Gift cards
+
+  @Post('giftcards')
+  @RequirePermissions(Permissions.PAYMENTS_PROCESS)
+  async createGiftCard(
+    @CurrentAdmin() admin: any,
+    @Body('code') code: string,
+    @Body('amount') amount: number,
+    @Body('currency') currency?: string,
+    @Body('maxRedemptions') maxRedemptions?: number,
+    @Body('expiresAt') expiresAt?: string,
+    @Body('metadata') metadata?: Record<string, any>,
+  ) {
+    const expiresDate = expiresAt ? new Date(expiresAt) : undefined;
+    return this.adminPaymentsService.createGiftCard({
+      code,
+      amount,
+      currency,
+      maxRedemptions,
+      expiresAt: expiresDate,
+      metadata,
+      createdBy: admin._id,
+    });
+  }
+
+  @Get('giftcards')
+  @RequirePermissions(Permissions.PAYMENTS_VIEW)
+  async listGiftCards(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.adminPaymentsService.listGiftCards(page, limit, { status, search });
+  }
+
+  @Get('giftcards/:code')
+  @RequirePermissions(Permissions.PAYMENTS_VIEW)
+  async getGiftCard(@Param('code') code: string) {
+    return this.adminPaymentsService.getGiftCard(code);
+  }
+
+  @Post('giftcards/:code/status')
+  @RequirePermissions(Permissions.PAYMENTS_PROCESS)
+  async updateGiftCardStatus(
+    @Param('code') code: string,
+    @CurrentAdmin() admin: any,
+    @Body('status') status: 'active' | 'disabled' | 'expired',
+  ) {
+    return this.adminPaymentsService.updateGiftCardStatus(code, admin._id, status);
+  }
+
   // Payouts
   @Get('payouts')
   @RequirePermissions(Permissions.PAYOUTS_VIEW)

@@ -15,6 +15,8 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { WalletService } from '../services/wallet.service';
 import { RechargeWalletDto } from '../dto/recharge-wallet.dto';
 import { VerifyPaymentDto } from '../dto/verify-payment.dto';
+import { GiftService } from '../services/gift.service';
+import { SendDirectGiftDto } from '../dto/send-direct-gift.dto';
 
 interface AuthenticatedRequest extends Request {
   user: { _id: string };
@@ -23,7 +25,10 @@ interface AuthenticatedRequest extends Request {
 @Controller('wallet')
 @UseGuards(JwtAuthGuard)
 export class WalletController {
-  constructor(private walletService: WalletService) {}
+  constructor(
+    private walletService: WalletService,
+    private giftService: GiftService,
+  ) {}
 
   // Get wallet statistics
   @Get('stats')
@@ -76,7 +81,18 @@ export class WalletController {
       verifyDto.transactionId,
       verifyDto.paymentId,
       verifyDto.status,
+      verifyDto.promotionId,
+      verifyDto.bonusPercentage,
     );
+  }
+
+  // Redeem gift card (adds non-withdrawable bonus balance)
+  @Post('redeem-giftcard')
+  async redeemGiftCard(
+    @Req() req: AuthenticatedRequest,
+    @Body('code') code: string,
+  ) {
+    return this.walletService.redeemGiftCard(req.user._id, code);
   }
 
   // Get wallet transactions
@@ -104,5 +120,30 @@ export class WalletController {
       transactionId,
       req.user._id,
     );
+  }
+
+  @Post('gifts/direct')
+  async sendDirectGift(
+    @Req() req: AuthenticatedRequest,
+    @Body(ValidationPipe) giftDto: SendDirectGiftDto,
+  ) {
+    const result = await this.giftService.sendGift({
+      userId: req.user._id,
+      astrologerId: giftDto.astrologerId,
+      amount: giftDto.amount,
+      giftType: giftDto.giftType,
+      context: 'direct',
+    });
+
+    return {
+      success: true,
+      message: 'Gift sent successfully',
+      data: {
+        transactionId: result.transactionId,
+        newBalance: result.newBalance,
+        astrologerId: result.astrologerId,
+        astrologerName: result.astrologerName,
+      },
+    };
   }
 }

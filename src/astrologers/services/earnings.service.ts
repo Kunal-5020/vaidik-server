@@ -35,6 +35,28 @@ export class EarningsService {
     });
   }
 
+  async recordGiftEarning(
+    astrologerId: string,
+    amount: number,
+  ): Promise<void> {
+    const astrologer = await this.astrologerModel.findById(astrologerId);
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer not found');
+    }
+
+    const commissionRate = astrologer.earnings.platformCommission || 20;
+    const commission = (amount * commissionRate) / 100;
+    const astrologerEarning = amount - commission;
+
+    await this.astrologerModel.findByIdAndUpdate(astrologerId, {
+      $inc: {
+        'earnings.totalEarned': astrologerEarning,
+        'earnings.withdrawableAmount': astrologerEarning,
+        'stats.totalEarnings': astrologerEarning,
+      },
+    });
+  }
+
   async getEarningsSummary(astrologerId: string): Promise<any> {
     const astrologer = await this.astrologerModel
       .findById(astrologerId)

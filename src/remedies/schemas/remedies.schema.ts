@@ -142,7 +142,7 @@ export class Remedy {
 export const RemedySchema = SchemaFactory.createForClass(Remedy);
 
 // === INDEXES ===
-RemedySchema.index({ remedyId: 1 }, { unique: true });
+// Unique index for remedyId is created via @Prop({ unique: true })
 RemedySchema.index({ userId: 1, createdAt: -1 });
 RemedySchema.index({ astrologerId: 1, createdAt: -1 });
 RemedySchema.index({ orderId: 1, isDeleted: 1 });

@@ -11,6 +11,7 @@ import { UsersModule } from '../users/users.module'; // ✅ ADD IF NEEDED
 import { AstrologersModule } from '../astrologers/astrologers.module'; // ✅ ADD IF NEEDED
 import { WalletTransaction, WalletTransactionSchema } from '../payments/schemas/wallet-transaction.schema'; // ✅ IMPORT SCHEMA
 import { User, UserSchema } from '../users/schemas/user.schema'; // ✅ IMPORT SCHEMA
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { User, UserSchema } from '../users/schemas/user.schema'; // ✅ IMPORT S
     PaymentsModule, // ✅ IMPORT PAYMENTS MODULE
     UsersModule, // ✅ IMPORT USERS MODULE
     AstrologersModule, // ✅ IMPORT ASTROLOGERS MODULE
+    NotificationsModule, // ✅ IMPORT NOTIFICATIONS MODULE
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrderPaymentService],

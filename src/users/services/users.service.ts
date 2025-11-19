@@ -214,48 +214,18 @@ async updatePreferences(userId: string, updateDto: UpdatePreferencesDto): Promis
       throw new NotFoundException('User not found');
     }
 
+    const wallet = user.wallet as any;
+    const currentBalance = wallet?.balance || 0;
+
     return {
       success: true,
-      data: user.wallet,
+      data: {
+        ...wallet,
+        balance: currentBalance,
+        cashBalance: wallet?.cashBalance ?? currentBalance,
+        bonusBalance: wallet?.bonusBalance ?? 0,
+      },
     };
-  }
-
-  // Update wallet balance (internal use only)
-  async updateWalletBalance(
-    userId: string,
-    amount: number,
-    type: 'credit' | 'debit',
-    updateStats: boolean = true
-  ): Promise<void> {
-    const user = await this.userModel.findById(userId);
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    if (type === 'debit' && user.wallet.balance < amount) {
-      throw new BadRequestException('Insufficient wallet balance');
-    }
-
-    const newBalance = type === 'credit'
-      ? user.wallet.balance + amount
-      : user.wallet.balance - amount;
-
-    const updateFields: any = {
-      'wallet.balance': newBalance,
-      'wallet.lastTransactionAt': new Date()
-    };
-
-    if (updateStats) {
-      if (type === 'credit') {
-        updateFields['wallet.totalRecharged'] = user.wallet.totalRecharged + amount;
-        updateFields['wallet.lastRechargeAt'] = new Date();
-      } else {
-        updateFields['wallet.totalSpent'] = user.wallet.totalSpent + amount;
-      }
-    }
-
-    await this.userModel.findByIdAndUpdate(userId, { $set: updateFields });
   }
 
   // ===== FAVORITES MANAGEMENT =====

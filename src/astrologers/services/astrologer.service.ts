@@ -64,8 +64,6 @@ export class AstrologerService {
           basicInfo: { completed: steps.basicInfo, label: 'Basic Information' },
           expertise: { completed: steps.expertise, label: 'Expertise & Languages' },
           pricing: { completed: steps.pricing, label: 'Pricing Setup' },
-          gallery: { completed: steps.gallery, label: 'Photo Gallery' },
-          introAudio: { completed: steps.introAudio, label: 'Intro Audio Message' },
           availability: { completed: steps.availability, label: 'Availability & Working Hours' }
         }
       }
@@ -97,70 +95,6 @@ export class AstrologerService {
       message: 'Pricing updated successfully',
       data: {
         pricing: astrologer.pricing,
-        profileCompletion: astrologer.profileCompletion
-      }
-    };
-  }
-
-  /**
-   * Update gallery photos
-   */
-  async updateGallery(astrologerId: string, photos: any[]): Promise<any> {
-    const astrologer = await this.astrologerModel.findById(astrologerId);
-
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
-
-    astrologer.gallery.photos = photos.map((photo, index) => ({
-      url: photo.url,
-      key: photo.key,
-      uploadedAt: new Date(),
-      order: photo.order !== undefined ? photo.order : index,
-      isApproved: false // Admin will approve
-    }));
-    astrologer.profileCompletion.steps.gallery = photos.length > 0;
-
-    await this.checkAndUpdateProfileCompletion(astrologer);
-    await astrologer.save();
-
-    return {
-      success: true,
-      message: 'Gallery updated successfully. Photos pending admin approval.',
-      data: {
-        gallery: astrologer.gallery,
-        profileCompletion: astrologer.profileCompletion
-      }
-    };
-  }
-
-  /**
-   * Update intro audio
-   */
-  async updateIntroAudio(astrologerId: string, audioData: any): Promise<any> {
-    const astrologer = await this.astrologerModel.findById(astrologerId);
-
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
-
-    astrologer.introAudio = {
-      url: audioData.url,
-      key: audioData.key,
-      duration: audioData.duration,
-      uploadedAt: new Date(),
-      isApproved: false // Admin will approve
-    };
-    astrologer.profileCompletion.steps.introAudio = true;
-
-    await this.checkAndUpdateProfileCompletion(astrologer);
-    await astrologer.save();
-
-    return {
-      success: true,
-      message: 'Intro audio updated successfully. Pending admin approval.',
-      data: {
-        introAudio: astrologer.introAudio,
         profileCompletion: astrologer.profileCompletion
       }
     };

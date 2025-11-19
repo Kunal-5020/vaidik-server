@@ -17,7 +17,8 @@ export class AdminUsersService {
     const skip = (page - 1) * limit;
     const query: any = {};
 
-    if (filters?.status) query.accountStatus = filters.status;
+    // Fix: Use 'status' instead of 'accountStatus'
+    if (filters?.status) query.status = filters.status;
     if (filters?.search) {
       query.$or = [
         { name: { $regex: filters.search, $options: 'i' } },
@@ -63,9 +64,21 @@ export class AdminUsersService {
   }
 
   async updateUserStatus(userId: string, status: string): Promise<any> {
+    // Validate status
+    const validStatuses = ['active', 'suspended', 'blocked', 'deleted'];
+    if (!validStatuses.includes(status)) {
+      throw new NotFoundException(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+    }
+
+    // Fix: Update 'status' field instead of 'accountStatus'
     const user = await this.userModel.findByIdAndUpdate(
       userId,
-      { $set: { accountStatus: status } },
+      { 
+        $set: { 
+          status: status,
+          updatedAt: new Date()
+        } 
+      },
       { new: true }
     );
 
@@ -81,10 +94,12 @@ export class AdminUsersService {
   }
 
   async getUserStats(): Promise<any> {
-    const [total, active, blocked, newThisMonth] = await Promise.all([
+    // Fix: Use 'status' instead of 'accountStatus'
+    const [total, active, blocked, suspended, newThisMonth] = await Promise.all([
       this.userModel.countDocuments(),
-      this.userModel.countDocuments({ accountStatus: 'active' }),
-      this.userModel.countDocuments({ accountStatus: 'blocked' }),
+      this.userModel.countDocuments({ status: 'active' }),
+      this.userModel.countDocuments({ status: 'blocked' }),
+      this.userModel.countDocuments({ status: 'suspended' }),
       this.userModel.countDocuments({
         createdAt: {
           $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
@@ -98,6 +113,7 @@ export class AdminUsersService {
         total,
         active,
         blocked,
+        suspended,
         newThisMonth,
       },
     };

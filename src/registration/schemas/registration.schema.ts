@@ -183,8 +183,6 @@ export class Registration {
 export const RegistrationSchema = SchemaFactory.createForClass(Registration);
 
 // Indexes
-RegistrationSchema.index({ phoneNumber: 1 });
-RegistrationSchema.index({ email: 1 });
-RegistrationSchema.index({ ticketNumber: 1 });
+// Unique indexes for phoneNumber, email and ticketNumber are created via @Prop({ unique: true })
 RegistrationSchema.index({ status: 1 });
 RegistrationSchema.index({ createdAt: -1 });

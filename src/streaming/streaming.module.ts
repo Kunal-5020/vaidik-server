@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import { PaymentsModule } from '../payments/payments.module';
 
 // Controllers
 import { StreamController } from './controllers/stream.controller';
@@ -29,6 +30,7 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 @Module({
   imports: [
     ConfigModule,
+    PaymentsModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'your-secret-key',
       signOptions: { expiresIn: '7d' },

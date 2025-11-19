@@ -7,6 +7,8 @@ import { ChatSession, ChatSessionDocument } from '../schemas/chat-session.schema
 import { OrdersService } from '../../orders/services/orders.service';
 import { OrderPaymentService } from '../../orders/services/order-payment.service';
 import { WalletService } from '../../payments/services/wallet.service';
+import { NotificationService } from '../../notifications/services/notification.service';
+
 
 @Injectable()
 export class ChatSessionService {
@@ -17,7 +19,8 @@ export class ChatSessionService {
     @InjectModel(ChatSession.name) private sessionModel: Model<ChatSessionDocument>,
     private ordersService: OrdersService,
     private orderPaymentService: OrderPaymentService,
-    private walletService: WalletService
+    private walletService: WalletService,
+    private notificationService: NotificationService,
   ) {}
 
   private generateSessionId(): string {
@@ -33,84 +36,120 @@ export class ChatSessionService {
   }
 
   // ===== INITIATE CHAT =====
-  async initiateChat(sessionData: {
-    userId: string;
-    astrologerId: string;
-    astrologerName: string;
-    ratePerMinute: number;
-  }): Promise<any> {
-    const estimatedCost = sessionData.ratePerMinute * 5;
-    const hasBalance = await this.walletService.checkBalance(
-      sessionData.userId,
-      estimatedCost
+async initiateChat(sessionData: {
+  userId: string;
+  astrologerId: string;
+  astrologerName: string;
+  ratePerMinute: number;
+}): Promise<any> {
+  const estimatedCost = sessionData.ratePerMinute * 5;
+  const hasBalance = await this.walletService.checkBalance(
+    sessionData.userId,
+    estimatedCost
+  );
+
+  if (!hasBalance) {
+    throw new BadRequestException(
+      `Insufficient balance. Minimum ₹${estimatedCost} required to start chat.`
     );
+  }
 
-    if (!hasBalance) {
-      throw new BadRequestException(
-        `Insufficient balance. Minimum ₹${estimatedCost} required to start chat.`
-      );
+  const sessionId = this.generateSessionId();
+  console.log(sessionId, "generated session id");
+
+  // ✅ STEP 1: Find or create conversation thread (returns existing order!)
+  const conversationThread = await this.ordersService.findOrCreateConversationThread(
+    sessionData.userId,
+    sessionData.astrologerId,
+    sessionData.astrologerName,
+    sessionData.ratePerMinute
+  );
+
+  this.logger.log(`Using conversation thread: ${conversationThread.orderId}`);
+
+  // ✅ STEP 2: Create order for this session (updates conversation thread)
+  const order = await this.ordersService.createOrder({
+    userId: sessionData.userId,
+    astrologerId: sessionData.astrologerId,
+    astrologerName: sessionData.astrologerName,
+    type: 'chat',
+    ratePerMinute: sessionData.ratePerMinute,
+    sessionId: sessionId
+  });
+  
+  if (!order || !order.orderId) {
+    this.logger.error(`Order creation failed`);
+    throw new Error('Order creation failed');
+  }
+
+  this.logger.log(`Order reference: ${order.orderId}`);
+
+  // ✅ STEP 3: Calculate session number (how many chats in this thread?)
+  const sessionNumber = order.sessionHistory.filter(s => s.sessionType === 'chat').length + 1;
+
+  // ✅ STEP 4: Create chat session linked to conversation thread
+  const session = new this.sessionModel({
+    sessionId,
+    userId: this.toObjectId(sessionData.userId),
+    astrologerId: this.toObjectId(sessionData.astrologerId),
+    orderId: order.orderId, // ✅ This is the conversation thread orderId
+    conversationThreadId: order.conversationThreadId, // ✅ NEW
+    sessionNumber, // ✅ NEW: 1st chat, 2nd chat, etc.
+    ratePerMinute: sessionData.ratePerMinute,
+    status: 'initiated',
+    requestCreatedAt: new Date(),
+    ringTime: new Date(),
+    maxDurationMinutes: 0,
+    maxDurationSeconds: 0,
+    timerStatus: 'not_started',
+    timerMetrics: {
+      elapsedSeconds: 0,
+      remainingSeconds: 0
     }
+  });
 
-    const sessionId = this.generateSessionId();
-    console.log(sessionId,"generated session id")
+  await session.save();
 
-    // Create order with HOLD payment
-    const order = await this.ordersService.createOrder({
+  // Set 3-min timeout
+  this.setRequestTimeout(sessionId, order.orderId, sessionData.userId);
+
+  // ✅ Fire-and-forget notification
+  this.notificationService.sendNotification({
+    recipientId: sessionData.astrologerId,
+    recipientModel: 'Astrologer',
+    type: 'chat_message',
+    title: 'New chat request',
+    message: `You have a new chat request from a user.`,
+    data: {
+      mode: 'chat',
+      sessionId,
+      orderId: order.orderId,
+      conversationThreadId: order.conversationThreadId, // ✅ NEW
       userId: sessionData.userId,
       astrologerId: sessionData.astrologerId,
-      astrologerName: sessionData.astrologerName,
-      type: 'chat',
       ratePerMinute: sessionData.ratePerMinute,
-      sessionId: sessionId
-    });
-    
-    if (!order) {
-  this.logger.error(`Order creation returned null or undefined`);
-  throw new Error('Order creation failed');
-}
-if (!order.orderId) {
-  this.logger.error(`Order missing orderId: ${JSON.stringify(order)}`);
-  throw new Error('Order missing orderId');
-}
-this.logger.log(`Order created with orderId: ${order.orderId}`);
+      step: 'user_initiated',
+      fullScreen: true,
+    },
+    priority: 'high',
+  }).catch(err => this.logger.error(`Chat incoming notification error: ${err.message}`));
 
-    // Create chat session (INITIATED)
-    const session = new this.sessionModel({
-      sessionId,
-      userId: this.toObjectId(sessionData.userId),
-      astrologerId: this.toObjectId(sessionData.astrologerId),
+  this.logger.log(`Chat initiated: ${sessionId} | Thread: ${order.conversationThreadId} | Session #${sessionNumber}`);
+
+  return {
+    success: true,
+    message: 'Chat initiated - waiting for astrologer',
+    data: {
+      sessionId: session.sessionId,
       orderId: order.orderId,
-      ratePerMinute: sessionData.ratePerMinute,
+      conversationThreadId: order.conversationThreadId, // ✅ NEW
+      sessionNumber, // ✅ NEW
       status: 'initiated',
-      requestCreatedAt: new Date(),
-      ringTime: new Date(),
-      maxDurationMinutes: 0,
-      maxDurationSeconds: 0,
-      timerStatus: 'not_started',
-      timerMetrics: {
-        elapsedSeconds: 0,
-        remainingSeconds: 0
-      }
-    });
+      ratePerMinute: sessionData.ratePerMinute
+    }
+  };
+}
 
-    await session.save();
-
-    // Set 3-min timeout
-    this.setRequestTimeout(sessionId, order.orderId, sessionData.userId);
-
-    this.logger.log(`Chat initiated: ${sessionId} | Order: ${order.orderId}`);
-
-    return {
-      success: true,
-      message: 'Chat initiated - waiting for astrologer',
-      data: {
-        sessionId: session.sessionId,
-        orderId: order.orderId,
-        status: 'initiated',
-        ratePerMinute: sessionData.ratePerMinute
-      }
-    };
-  }
 
   // ===== ACCEPT CHAT =====
   async acceptChat(sessionId: string, astrologerId: string): Promise<any> {
@@ -131,6 +170,24 @@ this.logger.log(`Order created with orderId: ${order.orderId}`);
     session.status = 'waiting';
     session.acceptedAt = new Date();
     await session.save();
+
+    // Notify user that astrologer accepted
+this.notificationService.sendNotification({
+  recipientId: session.userId.toString(),
+  recipientModel: 'User',
+  type: 'chat_message',
+  title: 'Astrologer accepted your chat',
+  message: 'Tap to start your chat session.',
+  data: {
+    mode: 'chat',
+    sessionId: session.sessionId,
+    orderId: session.orderId,
+    astrologerId,
+    step: 'astrologer_accepted',
+    fullScreen: true,
+  },
+  priority: 'high',
+}).catch(err => this.logger.error(`Chat accepted notification error: ${err.message}`));
 
     this.logger.log(`Chat accepted: ${sessionId}`);
 
@@ -163,14 +220,15 @@ this.logger.log(`Order created with orderId: ${order.orderId}`);
 
     // Refund hold
     await this.orderPaymentService.refundHold(
-      session.orderId,
-      session.userId.toString(),
-      `Rejected: ${reason}`
-    );
+  session.orderId,
+  session.userId.toString(),
+  'astrologer_rejected'
+);
 
-    session.status = 'rejected';
-    session.endedBy = astrologerId;
-    session.endReason = reason;
+session.status = 'rejected';
+session.endedBy = astrologerId;
+session.endReason = 'astrologer_rejected';
+
     session.endTime = new Date();
     await session.save();
 
@@ -182,6 +240,24 @@ this.logger.log(`Order created with orderId: ${order.orderId}`);
       'astrologer'
     );
 
+    // Notify user that astrologer rejected
+this.notificationService.sendNotification({
+  recipientId: session.userId.toString(),
+  recipientModel: 'User',
+  type: 'chat_message',
+  title: 'Chat request rejected',
+  message: 'Astrologer rejected your chat request. Amount has been refunded to your wallet.',
+  data: {
+    mode: 'chat',
+    sessionId: session.sessionId,
+    orderId: session.orderId,
+    astrologerId,
+    step: 'astrologer_rejected',
+  },
+  priority: 'medium',
+}).catch(err => this.logger.error(`Chat rejected notification error: ${err.message}`));
+
+
     this.logger.log(`Chat rejected: ${sessionId}`);
 
     return {
@@ -190,7 +266,6 @@ this.logger.log(`Order created with orderId: ${order.orderId}`);
     };
   }
 
-  // ===== START SESSION =====
   // ===== START SESSION (with Kundli message) =====
 async startSession(sessionId: string, userId?: string): Promise<any> {
   const session = await this.sessionModel.findOne({ sessionId });
@@ -199,10 +274,11 @@ async startSession(sessionId: string, userId?: string): Promise<any> {
   }
 
   if (session.status !== 'waiting' && session.status !== 'waiting_in_queue') {
+    this.logger.warn(`Session ${sessionId} is in status ${session.status}, cannot start`);
     throw new BadRequestException('Session not in valid state to start');
   }
 
-  // Calculate max duration (full minutes only)
+  // Calculate max duration
   const walletBalance = await this.walletService.getBalance(session.userId.toString());
   const maxDurationMinutes = Math.floor(walletBalance / session.ratePerMinute);
   const maxDurationSeconds = maxDurationMinutes * 60;
@@ -211,7 +287,7 @@ async startSession(sessionId: string, userId?: string): Promise<any> {
     throw new BadRequestException('Insufficient balance to start chat');
   }
 
-  // Transition to ACTIVE
+  // ✅ UPDATE SESSION STATUS TO ACTIVE
   session.status = 'active';
   session.startTime = new Date();
   session.maxDurationMinutes = maxDurationMinutes;
@@ -222,15 +298,11 @@ async startSession(sessionId: string, userId?: string): Promise<any> {
   session.timerMetrics.lastUpdatedAt = new Date();
 
   await session.save();
+  this.logger.log(`✅ Session ${sessionId} status updated to ACTIVE`);
 
-  // Update order status
+  // ✅ UPDATE ORDER STATUS TO ACTIVE
   await this.ordersService.updateOrderStatus(session.orderId, 'active');
-
-  // ✅ SEND KUNDLI DETAILS MESSAGE (even if continuing)
-  // This will be sent from gateway with user data
-  this.logger.log(
-    `Chat session started: ${sessionId} | Max Duration: ${maxDurationMinutes} mins`
-  );
+  this.logger.log(`✅ Order ${session.orderId} status updated to ACTIVE`);
 
   return {
     success: true,
@@ -240,7 +312,7 @@ async startSession(sessionId: string, userId?: string): Promise<any> {
       maxDurationMinutes,
       maxDurationSeconds,
       ratePerMinute: session.ratePerMinute,
-      sendKundliMessage: true // ✅ Signal to gateway to send kundli
+      sendKundliMessage: true
     }
   };
 }
@@ -264,14 +336,13 @@ async startSession(sessionId: string, userId?: string): Promise<any> {
 
   let actualDurationSeconds = 0;
 
-  // Calculate actual duration only if session was ACTIVE
+  // ✅ ONLY calculate duration if session was actually ACTIVE
   if (session.status === 'active' && session.startTime) {
     const endTime = new Date();
     actualDurationSeconds = Math.floor(
       (endTime.getTime() - session.startTime.getTime()) / 1000
     );
 
-    // Cap to max duration if timeout
     if (reason === 'timeout' && actualDurationSeconds > session.maxDurationSeconds) {
       actualDurationSeconds = session.maxDurationSeconds;
     }
@@ -282,25 +353,12 @@ async startSession(sessionId: string, userId?: string): Promise<any> {
     session.platformCommission = (session.totalAmount * 20) / 100;
     session.astrologerEarning = session.totalAmount - session.platformCommission;
 
-    // CHARGE from hold
-    try {
-      await this.orderPaymentService.chargeFromHold(
-        session.orderId,
-        session.userId.toString(),
-        actualDurationSeconds,
-        session.ratePerMinute
-      );
-
-      session.isPaid = true;
-      session.paidAt = new Date();
-
-      this.logger.log(
-        `Chat charged: ${sessionId} | Actual: ${actualDurationSeconds}s | Billed: ${session.billedMinutes}m | Amount: ₹${session.totalAmount}`
-      );
-    } catch (error: any) {
-      this.logger.error(`Payment failed for chat ${sessionId}: ${error.message}`);
-      throw error;
-    }
+    this.logger.log(
+      `Chat billing prepared: ${sessionId} | Actual: ${actualDurationSeconds}s | Billed: ${session.billedMinutes}m | Amount: ₹${session.totalAmount}`
+    );
+  } else {
+    // ✅ Session ended before becoming active (e.g., rejected, timeout, cancelled)
+    this.logger.warn(`Session ${sessionId} ended without being active (status: ${session.status})`);
   }
 
   session.status = 'ended';
@@ -311,13 +369,29 @@ async startSession(sessionId: string, userId?: string): Promise<any> {
 
   await session.save();
 
-  // ✅ FIXED: Use correct method name
-  await this.ordersService.completeSession(session.orderId, {
-    sessionId,
-    sessionType: 'chat',
-    actualDurationSeconds,
-    recordingUrl: undefined
-  });
+  // ✅ ONLY complete order if session was active, otherwise cancel/refund
+  if (actualDurationSeconds > 0) {
+    await this.ordersService.completeSession(session.orderId, {
+      sessionId,
+      sessionType: 'chat',
+      actualDurationSeconds,
+      recordingUrl: undefined
+    });
+  } else {
+    // Session never started, refund the hold
+    this.logger.log(`Session ${sessionId} never started, refunding hold`);
+    await this.orderPaymentService.refundHold(
+      session.orderId,
+      session.userId.toString(),
+      reason
+    );
+    await this.ordersService.cancelOrder(
+      session.orderId,
+      session.userId.toString(),
+      reason,
+      'system'
+    );
+  }
 
   this.logger.log(`Chat session ended: ${sessionId} | Duration: ${actualDurationSeconds}s`);
 
@@ -334,6 +408,7 @@ async startSession(sessionId: string, userId?: string): Promise<any> {
   };
 }
 
+
   // ===== REQUEST TIMEOUT (3 mins) =====
   private setRequestTimeout(sessionId: string, orderId: string, userId: string) {
     const timeout = setTimeout(async () => {
@@ -345,13 +420,14 @@ async startSession(sessionId: string, userId?: string): Promise<any> {
 
         // Refund hold on timeout
         await this.orderPaymentService.refundHold(
-          orderId,
-          userId,
-          'timeout - astrologer no response'
-        );
+  orderId,
+  userId,
+  'astrologer_no_response'
+);
 
-        session.status = 'cancelled';
-        session.endReason = 'astrologer_no_response';
+session.status = 'cancelled';
+session.endReason = 'astrologer_no_response';
+
         session.endTime = new Date();
         await session.save();
 
@@ -478,5 +554,117 @@ async startSession(sessionId: string, userId?: string): Promise<any> {
       }
     );
   }
+
+// ===== CONTINUE EXISTING CHAT =====
+async continueChat(data: {
+  userId: string;
+  astrologerId: string;
+  previousSessionId: string;
+  ratePerMinute: number;
+}): Promise<any> {
+  // Check balance (same logic as initiateChat)
+  const estimatedCost = data.ratePerMinute * 5;
+  const hasBalance = await this.walletService.checkBalance(data.userId, estimatedCost);
+
+  if (!hasBalance) {
+    throw new BadRequestException(
+      `Insufficient balance. Minimum 78907 required to continue chat.`
+    );
+  }
+
+  // 75 FIND CONVERSATION THREAD
+  const conversationThread = await this.ordersService.findOrCreateConversationThread(
+    data.userId,
+    data.astrologerId,
+    '', // Will get from existing thread
+    data.ratePerMinute
+  );
+
+  const astrologerName = conversationThread.astrologerName || 'Astrologer';
+
+  this.logger.log(`Continuing conversation thread: ${conversationThread.orderId}`);
+
+  // 75 NEW SESSION ID
+  const newSessionId = this.generateSessionId();
+
+  // Create \"order\" entry (updates conversation thread)
+  const order = await this.ordersService.createOrder({
+    userId: data.userId,
+    astrologerId: data.astrologerId,
+    astrologerName: astrologerName,
+    type: 'chat',
+    ratePerMinute: data.ratePerMinute,
+    sessionId: newSessionId,
+  });
+
+  // 75 CALCULATE SESSION NUMBER
+  const sessionNumber = conversationThread.sessionHistory.filter(s => s.sessionType === 'chat').length + 1;
+
+  // 75 CREATE NEW CHAT SESSION (same lifecycle as a fresh chat)
+  const session = new this.sessionModel({
+    sessionId: newSessionId,
+    userId: this.toObjectId(data.userId),
+    astrologerId: this.toObjectId(data.astrologerId),
+    orderId: conversationThread.orderId,
+    conversationThreadId: conversationThread.conversationThreadId,
+    sessionNumber,
+    ratePerMinute: data.ratePerMinute,
+    status: 'initiated', // ✅ same as initiateChat
+    requestCreatedAt: new Date(),
+    ringTime: new Date(),
+    maxDurationMinutes: 0,
+    maxDurationSeconds: 0,
+    timerStatus: 'not_started',
+    timerMetrics: {
+      elapsedSeconds: 0,
+      remainingSeconds: 0
+    },
+    previousSessionId: data.previousSessionId || undefined, // ✅ Optional now
+  });
+
+  await session.save();
+
+  // ✅ Same 3-min timeout behaviour as initiateChat
+  this.setRequestTimeout(newSessionId, conversationThread.orderId, data.userId);
+
+  this.logger.log(`Chat continuation created: ${newSessionId} | Thread: ${conversationThread.conversationThreadId} | Session #${sessionNumber}`);
+
+  // 75 Notify astrologer (push/in-app)
+  this.notificationService.sendNotification({
+    recipientId: data.astrologerId,
+    recipientModel: 'Astrologer',
+    type: 'chat_message',
+    title: 'Chat Continued',
+    message: 'User wants to continue the conversation',
+    data: {
+      mode: 'chat',
+      sessionId: newSessionId,
+      orderId: conversationThread.orderId,
+      conversationThreadId: conversationThread.conversationThreadId,
+      userId: data.userId,
+      previousSessionId: data.previousSessionId,
+      sessionNumber,
+      step: 'chat_continued',
+    },
+    priority: 'high',
+  }).catch(err => this.logger.error(`Chat continue notification error: ${err.message}`));
+
+  return {
+    success: true,
+    message: 'Chat continuation initiated',
+    data: {
+      sessionId: newSessionId,
+      orderId: conversationThread.orderId,
+      conversationThreadId: conversationThread.conversationThreadId,
+      sessionNumber,
+      status: 'initiated',
+      ratePerMinute: data.ratePerMinute,
+      previousSessionId: data.previousSessionId,
+      totalPreviousSessions: conversationThread.totalSessions,
+      totalSpent: conversationThread.totalAmount,
+    }
+  };
+}
+
   
 }

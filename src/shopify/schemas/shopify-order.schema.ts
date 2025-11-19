@@ -96,7 +96,7 @@ export const ShopifyOrderSchema = SchemaFactory.createForClass(
 );
 
 // Indexes for performance
-ShopifyOrderSchema.index({ shopifyOrderId: 1 }, { unique: true });
+// Unique index for shopifyOrderId is created via @Prop({ unique: true })
 ShopifyOrderSchema.index(
   { userId: 1, customerPhone: 1, shopifyCreatedAt: -1 },
 );

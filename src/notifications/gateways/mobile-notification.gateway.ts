@@ -1,4 +1,3 @@
-// notifications/gateways/mobile-notification.gateway.ts (FIXED)
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -13,65 +12,49 @@ import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
 @WebSocketGateway({
-  namespace: 'notifications', // Mobile app namespace
-  cors: {
-    origin: '*', // Mobile apps
-    credentials: true,
-  },
+  namespace: 'notifications',
+  cors: { origin: '*', credentials: true },
 })
 export class MobileNotificationGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
   private readonly logger = new Logger(MobileNotificationGateway.name);
-  
-  // Track connected users: Map<userId, Set<socketId>>
+
   private connectedUsers: Map<string, Set<string>> = new Map();
+  private userDeviceSockets: Map<string, Map<string, string>> = new Map();
 
   constructor(private jwtService: JwtService) {}
 
   async handleConnection(client: Socket) {
     try {
-      // Extract token from handshake
       const token = client.handshake.auth.token || client.handshake.headers.authorization?.split(' ')[1];
-
       if (!token) {
-        this.logger.warn(`❌ Mobile connection rejected - No token`);
+        this.logger.warn('❌ No token - connection rejected');
         client.disconnect();
         return;
       }
 
-      // Verify JWT
       const payload = await this.jwtService.verifyAsync(token);
       const userId = payload.sub || payload._id;
       const userType = payload.userType || (payload.astrologerId ? 'Astrologer' : 'User');
 
-      // Store user info in socket
       client.data.userId = userId;
       client.data.userType = userType;
 
-      // Track connection (FIXED: Proper null check)
-      if (!this.connectedUsers.has(userId)) {
-        this.connectedUsers.set(userId, new Set());
-      }
-      const userSockets = this.connectedUsers.get(userId);
-      if (userSockets) {
-        userSockets.add(client.id);
-      }
+      const deviceId = client.handshake.auth.deviceId || client.handshake.query.deviceId;
+      client.data.deviceId = deviceId;
 
-      // Join user's personal room
+      if (!this.connectedUsers.has(userId)) this.connectedUsers.set(userId, new Set());
+      if (!this.userDeviceSockets.has(userId)) this.userDeviceSockets.set(userId, new Map());
+
+      this.userDeviceSockets.get(userId)!.set(deviceId!, client.id);
+      this.connectedUsers.get(userId)?.add(client.id);
+
       client.join(`user:${userId}`);
 
-      this.logger.log(`✅ ${userType} connected: ${userId} (Socket: ${client.id})`);
-      this.logger.log(`📊 Total connected mobile users: ${this.connectedUsers.size}`);
-
-      // Send connection success
-      client.emit('connection-success', {
-        message: 'Connected to notification system',
-        userId,
-        userType,
-        timestamp: new Date(),
-      });
+      this.logger.log(`✅ ${userType} connected: ${userId} (Device: ${deviceId}; Socket: ${client.id})`);
+      client.emit('connection-success', { message: 'Connected to notification system', userId, userType, deviceId, timestamp: new Date() });
     } catch (error) {
       this.logger.error(`❌ Mobile authentication failed: ${error.message}`);
       client.disconnect();
@@ -80,72 +63,65 @@ export class MobileNotificationGateway implements OnGatewayConnection, OnGateway
 
   handleDisconnect(client: Socket) {
     const userId = client.data.userId;
-    
+    const deviceId = client.data.deviceId;
+
+    if (userId && deviceId && this.userDeviceSockets.has(userId)) {
+      const deviceMap = this.userDeviceSockets.get(userId);
+      deviceMap?.delete(deviceId);
+      if (deviceMap && deviceMap.size === 0) this.userDeviceSockets.delete(userId);
+    }
+
     if (userId && this.connectedUsers.has(userId)) {
       const userSockets = this.connectedUsers.get(userId);
-      
-      // FIXED: Proper null check
-      if (userSockets) {
-        userSockets.delete(client.id);
+      userSockets?.delete(client.id);
+      if (userSockets && userSockets.size === 0) this.connectedUsers.delete(userId);
+    }
 
-        if (userSockets.size === 0) {
-          this.connectedUsers.delete(userId);
-        }
+    this.logger.log(`👋 User disconnected: ${userId} (Device: ${deviceId}; Socket: ${client.id})`);
+  }
+
+  sendToUser(userId: string, notification: any): boolean {
+    const sockets = this.connectedUsers.get(userId);
+    if (sockets && sockets.size > 0) {
+      this.server.to(`user:${userId}`).emit('new-notification', notification);
+      this.logger.log(`📤 Broadcast notification sent to all devices of user ${userId}`);
+      return true;
+    }
+    return false;
+  }
+
+  sendToUserDevice(userId: string, deviceId: string, notification: any): boolean {
+    const deviceMap = this.userDeviceSockets.get(userId);
+    if (deviceMap) {
+      const socketId = deviceMap.get(deviceId);
+      if (socketId) {
+        this.server.to(socketId).emit('new-notification', notification);
+        this.logger.log(`📤 Notification sent to user ${userId} device ${deviceId} (Socket ${socketId})`);
+        return true;
       }
     }
-
-    this.logger.log(`👋 User disconnected: ${userId} (Socket: ${client.id})`);
-    this.logger.log(`📊 Remaining mobile users: ${this.connectedUsers.size}`);
+    this.logger.log(`⏭️ Device ${deviceId} of user ${userId} not connected; fallback to FCM`);
+    return false;
   }
 
-  // Send notification to specific user
-  sendToUser(userId: string, notification: any): boolean {
-    const userSockets = this.connectedUsers.get(userId);
-    
-    if (userSockets && userSockets.size > 0) {
-      this.server.to(`user:${userId}`).emit('new-notification', notification);
-      this.logger.log(`📤 Notification sent via Socket to user ${userId} (${userSockets.size} devices)`);
-      return true; // Successfully sent via Socket
-    }
-    
-    this.logger.log(`⏭️ User ${userId} not connected - will use FCM`);
-    return false; // User offline, use FCM
-  }
-
-  // Broadcast to all connected users
-  broadcastToAll(notification: any) {
-    this.server.emit('new-notification', notification);
-    this.logger.log(`📢 Broadcast notification to all mobile users (${this.connectedUsers.size} users)`);
-  }
-
-  // Check if user is online (FIXED: Proper null check)
   isUserOnline(userId: string): boolean {
-    const userSockets = this.connectedUsers.get(userId);
-    return this.connectedUsers.has(userId) && userSockets !== undefined && userSockets.size > 0;
+    const sockets = this.connectedUsers.get(userId);
+    return sockets !== undefined && sockets.size > 0;
   }
 
-  // Get connected users count
   getConnectedUsersCount(): number {
     return this.connectedUsers.size;
   }
 
-  // Mark notification as received (client confirms)
   @SubscribeMessage('notification-received')
-  handleNotificationReceived(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { notificationId: string }
-  ) {
-    this.logger.log(`✅ User ${client.data.userId} received notification ${data.notificationId}`);
+  handleNotificationReceived(@ConnectedSocket() client: Socket, @MessageBody() data: { notificationId: string }) {
+    this.logger.log(`✅ Notification received by user ${client.data.userId}: ${data.notificationId}`);
     return { success: true };
   }
 
-  // Mark notification as read
   @SubscribeMessage('mark-as-read')
-  handleMarkAsRead(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { notificationIds: string[] }
-  ) {
-    this.logger.log(`📖 User ${client.data.userId} marked ${data.notificationIds.length} notifications as read`);
+  handleMarkAsRead(@ConnectedSocket() client: Socket, @MessageBody() data: { notificationIds: string[] }) {
+    this.logger.log(`📖 User ${client.data.userId} marked notifications as read: ${data.notificationIds.length}`);
     return { success: true };
   }
 }

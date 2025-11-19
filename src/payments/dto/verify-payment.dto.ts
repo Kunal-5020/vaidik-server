@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsEnum } from 'class-validator';
+import { IsString, IsNotEmpty, IsEnum, IsOptional, IsNumber } from 'class-validator';
 
 export class VerifyPaymentDto {
   @IsString({ message: 'Transaction ID must be a string' })
@@ -13,4 +13,13 @@ export class VerifyPaymentDto {
     message: 'Status must be either completed or failed'
   })
   status: 'completed' | 'failed';
+
+  // Optional promotion metadata for recharge bonus
+  @IsOptional()
+  @IsString({ message: 'Promotion ID must be a string' })
+  promotionId?: string;
+
+  @IsOptional()
+  @IsNumber({}, { message: 'Bonus percentage must be a number' })
+  bonusPercentage?: number;
 }

@@ -7,17 +7,29 @@ export type CallSessionDocument = CallSession & Document;
 
 @Schema({ timestamps: true, collection: 'call_sessions' })
 export class CallSession {
-  @Prop({ required: true, unique: true, index: true })
+  @Prop({ required: true, unique: true })
   sessionId: string;
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User'})
   userId: Types.ObjectId;
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'Astrologer', index: true })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'Astrologer' })
   astrologerId: Types.ObjectId;
 
   @Prop({ required: true })
   orderId: string;
+
+  // ✅ NEW: Link to conversation thread
+@Prop()
+conversationThreadId?: string;
+
+// ✅ NEW: Session sequence number
+@Prop({ default: 1 })
+sessionNumber: number;
+
+// ✅ NEW: Message ID for the recording message in chat
+@Prop()
+recordingMessageId?: string;
 
   // ===== CALL TYPE =====
   @Prop({ required: true, enum: ['audio', 'video'] })
@@ -28,7 +40,6 @@ export class CallSession {
     required: true,
     enum: ['initiated', 'ringing', 'waiting', 'waiting_in_queue', 'active', 'ended', 'cancelled', 'rejected', 'failed'],
     default: 'initiated',
-    index: true
   })
   status: string;
 
@@ -288,25 +299,22 @@ agoraAstrologerUid?: number; // UID for astrologer
 recordingStarted: Date; // Agora recording start time
 
   // ===== METADATA =====
-  @Prop({ default: false, index: true })
+  @Prop({ default: false })
   isDeleted: boolean;
 
   @Prop()
   deletedAt?: Date;
 
-  @Prop({ default: Date.now, index: true })
+  @Prop({ default: Date.now })
   createdAt: Date;
 }
 
 export const CallSessionSchema = SchemaFactory.createForClass(CallSession);
 
 // Indexes
-CallSessionSchema.index({ sessionId: 1 }, { unique: true });
+// Unique index for sessionId is created via @Prop({ unique: true })
 CallSessionSchema.index({ userId: 1, createdAt: -1 });
 CallSessionSchema.index({ astrologerId: 1, createdAt: -1 });
 CallSessionSchema.index({ orderId: 1 });
-CallSessionSchema.index({ status: 1 });
-CallSessionSchema.index({ callType: 1 });
 CallSessionSchema.index({ userId: 1, status: 1 });
 CallSessionSchema.index({ astrologerId: 1, status: 1 });
-CallSessionSchema.index({ createdAt: -1 });

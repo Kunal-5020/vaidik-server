@@ -19,6 +19,8 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { ChatSessionService } from '../services/chat-session.service';
 import { ChatMessageService } from '../services/chat-message.service';
 import { EndChatDto, InitiateChatDto } from '../dto';
+import { AstrologerAcceptChatDto, AstrologerRejectChatDto } from '../dto';
+import { OrdersService } from '../../orders/services/orders.service';
 
 interface AuthenticatedRequest extends Request {
   user: { _id: string };
@@ -29,7 +31,8 @@ interface AuthenticatedRequest extends Request {
 export class ChatController {
   constructor(
     private chatSessionService: ChatSessionService,
-    private chatMessageService: ChatMessageService
+    private chatMessageService: ChatMessageService,
+    private ordersService: OrdersService
   ) {}
 
   @Get('history')
@@ -66,6 +69,120 @@ export class ChatController {
       ratePerMinute: initiateDto.ratePerMinute
     });
   }
+
+    // ===== ASTROLOGER ACCEPT CHAT =====
+  @Post('astrologer/accept')
+  async astrologerAcceptChat(
+    @Req() req: AuthenticatedRequest,
+    @Body(ValidationPipe) body: AstrologerAcceptChatDto,
+  ) {
+    if (!body.sessionId) {
+      throw new BadRequestException('sessionId is required');
+    }
+
+    const result = await this.chatSessionService.acceptChat(
+      body.sessionId,
+      req.user._id, // astrologerId from JWT
+    );
+
+    // ChatSessionService.acceptChat already returns { success, message, status }
+    return {
+      success: true,
+      message: result.message,
+      data: {
+        status: result.status,
+      },
+    };
+  }
+
+  // ===== ASTROLOGER REJECT CHAT =====
+  @Post('astrologer/reject')
+  async astrologerRejectChat(
+    @Req() req: AuthenticatedRequest,
+    @Body(ValidationPipe) body: AstrologerRejectChatDto,
+  ) {
+    if (!body.sessionId) {
+      throw new BadRequestException('sessionId is required');
+    }
+
+    const reason = body.reason || 'astrologer_rejected';
+
+    const result = await this.chatSessionService.rejectChat(
+      body.sessionId,
+      req.user._id, // astrologerId from JWT
+      reason,
+    );
+
+    return {
+      success: true,
+      message: result.message,
+    };
+  }
+
+  @Post('continue')
+async continueChat(
+  @Req() req: AuthenticatedRequest,
+  @Body() body: {
+    astrologerId: string;
+    previousSessionId: string;
+    ratePerMinute: number;
+  }
+) {
+  return this.chatSessionService.continueChat({
+    userId: req.user._id,
+    astrologerId: body.astrologerId,
+    previousSessionId: body.previousSessionId,
+    ratePerMinute: body.ratePerMinute,
+  });
+}
+
+// ===== GET ALL CONVERSATION MESSAGES (across all sessions) =====
+@Get('conversations/:orderId/messages')
+async getConversationMessages(
+  @Param('orderId') orderId: string,
+  @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+  @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+  @Req() req: AuthenticatedRequest
+) {
+  const result = await this.chatMessageService.getConversationMessages(
+    orderId,
+    page,
+    limit,
+    req.user._id
+  );
+  return { success: true, data: result };
+}
+
+// ===== GET CONVERSATION SUMMARY =====
+@Get('conversations/:orderId/summary')
+async getConversationSummary(
+  @Param('orderId') orderId: string,
+  @Req() req: AuthenticatedRequest
+) {
+  const order = await this.ordersService.getOrderDetails(orderId, req.user._id);
+  
+  return {
+    success: true,
+    data: {
+      orderId: order.data.orderId,
+      conversationThreadId: order.data.conversationThreadId,
+      astrologer: {
+        id: order.data.astrologerId,
+        name: order.data.astrologerName
+      },
+      totalSessions: order.data.totalSessions,
+      totalChatSessions: order.data.totalChatSessions,
+      totalCallSessions: order.data.totalCallSessions,
+      totalSpent: order.data.totalAmount,
+      totalDuration: order.data.totalUsedDurationSeconds,
+      sessionHistory: order.data.sessionHistory,
+      lastInteractionAt: order.data.lastInteractionAt,
+      messageCount: order.data.messageCount,
+      createdAt: order.data.createdAt
+    }
+  };
+}
+
 
   @Post('sessions/end')
   async endSession(

@@ -70,41 +70,26 @@ export class CallBillingService {
     session.isPaid = true;
     session.paidAt = new Date();
 
-    try {
-      // ✅ Charge from hold (already using OrderPaymentService)
-      await this.orderPaymentService.chargeFromHold(
-        session.orderId,
-        session.userId.toString(),
-        session.duration,
-        session.ratePerMinute
-      );
+    // Do NOT charge from hold here; that is handled by OrdersService.completeSession.
+// This service only computes and persists billing analytics.
+await session.save();
 
-      await session.save();
+this.logger.log(
+  `Billing computed: ${sessionId} | Billed: ${billing.billedMinutes}m | Amount: ₹${billing.totalAmount}`
+);
 
-      this.logger.log(
-        `Billing processed: ${sessionId} | Billed: ${billing.billedMinutes}m | Amount: ₹${billing.totalAmount}`
-      );
+return {
+  success: true,
+  message: 'Billing computed successfully',
+  billing: {
+    actualDuration: session.duration,
+    billedMinutes: billing.billedMinutes,
+    totalAmount: billing.totalAmount,
+    platformCommission: billing.platformCommission,
+    astrologerEarning: billing.astrologerEarning
+  }
+};
 
-      return {
-        success: true,
-        message: 'Billing processed successfully',
-        billing: {
-          actualDuration: session.duration,
-          billedMinutes: billing.billedMinutes,
-          totalAmount: billing.totalAmount,
-          platformCommission: billing.platformCommission,
-          astrologerEarning: billing.astrologerEarning
-        }
-      };
-    } catch (error: any) {
-      // Rollback billing status if payment fails
-      session.isPaid = false;
-      session.paidAt = undefined;
-      await session.save();
-
-      this.logger.error(`Billing failed for ${sessionId}: ${error.message}`);
-      throw error;
-    }
   }
 
   /**

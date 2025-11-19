@@ -5,7 +5,8 @@ import {
   IsOptional,
   IsMongoId,
   IsArray,
-  MaxLength
+  MaxLength,
+  IsObject
 } from 'class-validator';
 
 export class SendNotificationDto {
@@ -33,6 +34,10 @@ export class SendNotificationDto {
   @IsOptional()
   @IsString({ message: 'Image URL must be a string' })
   imageUrl?: string;
+
+   @IsOptional()
+  @IsObject({ message: 'Data must be an object' })
+  data?: Record<string, any>;
 
   @IsOptional()
   @IsString({ message: 'Action URL must be a string' })

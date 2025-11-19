@@ -25,7 +25,29 @@ export class PayoutService {
       throw new NotFoundException('Astrologer not found');
     }
 
-    // Check if enough balance
+    // Enforce 60% payout cap over total earnings
+    const totalEarned = astrologer.earnings?.totalEarned || 0;
+    const maxTotalPayout = totalEarned * 0.6;
+
+    const completedPayouts = await this.payoutModel.aggregate([
+      {
+        $match: {
+          astrologerId,
+          status: 'completed',
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    const alreadyPaid = completedPayouts[0]?.total || 0;
+    const remainingLimit = Math.max(0, maxTotalPayout - alreadyPaid);
+
+    if (requestDto.amount > remainingLimit) {
+      throw new BadRequestException(
+        `Requested amount exceeds maximum withdrawable based on 60% rule. You can withdraw up to ₹${remainingLimit.toFixed(2)} right now.`,
+      );
+    }
+
+    // Check if enough balance based on current withdrawableAmount
     if (astrologer.earnings.withdrawableAmount < requestDto.amount) {
       throw new BadRequestException('Insufficient withdrawable balance');
     }

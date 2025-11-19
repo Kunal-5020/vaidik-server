@@ -4,13 +4,15 @@ import { Injectable, NotFoundException, BadRequestException, Logger } from '@nes
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ChatMessage, ChatMessageDocument } from '../schemas/chat-message.schema';
+import { Order, OrderDocument } from '../../orders/schemas/orders.schema';
 
 @Injectable()
 export class ChatMessageService {
   private readonly logger = new Logger(ChatMessageService.name);
 
   constructor(
-    @InjectModel(ChatMessage.name) private messageModel: Model<ChatMessageDocument>
+    @InjectModel(ChatMessage.name) private messageModel: Model<ChatMessageDocument>,
+    @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
   ) {}
 
   private generateMessageId(): string {
@@ -25,55 +27,129 @@ export class ChatMessageService {
     }
   }
 
-  // ===== SEND MESSAGE (Text, Image, Video, Voice Note) =====
-  async sendMessage(data: {
-    sessionId: string;
-    senderId: string;
-    senderModel: 'User' | 'Astrologer';
-    receiverId: string;
-    receiverModel: 'User' | 'Astrologer';
-    orderId: string;
-    type: string;
-    content: string;
-    fileUrl?: string;
-    fileS3Key?: string;
-    fileSize?: number;
-    fileName?: string;
-    fileDuration?: number;
-    mimeType?: string;
-    replyToId?: string;
-  }): Promise<ChatMessageDocument> {
-    const messageId = this.generateMessageId();
+async sendMessage(data: {
+  sessionId: string;
+  senderId: string;
+  senderModel: 'User' | 'Astrologer' | 'System';
+  receiverId: string;
+  receiverModel: 'User' | 'Astrologer';
+  orderId: string;
+  type: string;
+  content: string;
+  fileUrl?: string;
+  fileS3Key?: string;
+  fileSize?: number;
+  fileName?: string;
+  fileDuration?: number;
+  mimeType?: string;
+  replyToId?: string;
+  isCallRecording?: boolean;
+  linkedSessionId?: string;
+}): Promise<ChatMessageDocument> {
+  const messageId = this.generateMessageId();
 
-    const message = new this.messageModel({
-      messageId,
-      sessionId: this.toObjectId(data.sessionId),
-      orderId: data.orderId,
-      senderId: this.toObjectId(data.senderId),
-      senderModel: data.senderModel,
-      receiverId: this.toObjectId(data.receiverId),
-      receiverModel: data.receiverModel,
-      type: data.type,
-      content: data.content,
-      fileUrl: data.fileUrl,
-      fileS3Key: data.fileS3Key,
-      fileSize: data.fileSize,
-      fileName: data.fileName,
-      fileDuration: data.fileDuration,
-      mimeType: data.mimeType,
-      replyToId: data.replyToId,
-      deleteStatus: 'visible',
-      deliveryStatus: 'sending', // ✅ Start as sending
-      sentAt: new Date(),
-      createdAt: new Date()
-    });
+  const message = new this.messageModel({
+    messageId,
+    sessionId: data.sessionId,
+    orderId: data.orderId,
+    senderId: this.toObjectId(data.senderId),
+    senderModel: data.senderModel,
+    receiverModel: data.receiverModel,
+    receiverId: this.toObjectId(data.receiverId),
+    type: data.type,
+    content: data.content,
+    fileUrl: data.fileUrl,
+    fileS3Key: data.fileS3Key,
+    fileSize: data.fileSize,
+    fileName: data.fileName,
+    fileDuration: data.fileDuration,
+    mimeType: data.mimeType,
+    replyToId: data.replyToId,
+    isCallRecording: data.isCallRecording || false,
+    linkedSessionId: data.linkedSessionId,
+    deleteStatus: 'visible',
+    deliveryStatus: data.senderModel === 'System' ? 'sent' : 'sending',
+    sentAt: new Date(),
+    createdAt: new Date()
+  });
 
-    await message.save();
+  await message.save();
 
-    this.logger.log(`Message created: ${messageId} | Type: ${data.type} | Status: sending`);
+  // ✅ NEW: Update conversation thread stats
+  await this.updateConversationStats(data.orderId);
 
-    return message;
+  this.logger.log(`Message created: ${messageId} | Type: ${data.type} | Thread: ${data.orderId}`);
+
+  return message;
+}
+
+// ✅ NEW METHOD: Update conversation statistics
+private async updateConversationStats(orderId: string): Promise<void> {
+  try {
+    // Import Order model (you need to inject it in constructor - see Step 3)
+    await this.orderModel.findOneAndUpdate(
+      { orderId },
+      {
+        $inc: { messageCount: 1 },
+        $set: { lastInteractionAt: new Date() }
+      }
+    );
+  } catch (error: any) {
+    this.logger.error(`Failed to update conversation stats: ${error.message}`);
+    // Don't throw - message already created
   }
+}
+
+
+
+// ===== GET ALL MESSAGES IN CONVERSATION THREAD =====
+async getConversationMessages(
+  orderId: string, // ✅ Conversation thread orderId
+  page: number = 1,
+  limit: number = 50,
+  userId?: string
+): Promise<any> {
+  const skip = (page - 1) * limit;
+
+  let visibilityFilter: any = { isDeleted: false, deleteStatus: 'visible' };
+
+  // Filter based on visibility
+  if (userId) {
+    visibilityFilter.$or = [
+      { isVisibleToUser: true },
+      { isVisibleToAstrologer: true }
+    ];
+  }
+
+  const [messages, total] = await Promise.all([
+    this.messageModel
+      .find({
+        orderId: orderId, // ✅ Get ALL messages in conversation (across all sessions!)
+        ...visibilityFilter
+      })
+      .populate('senderId', 'name profileImage profilePicture')
+      .sort({ sentAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    this.messageModel.countDocuments({
+      orderId: orderId,
+      ...visibilityFilter
+    })
+  ]);
+
+  return {
+    messages: messages.reverse(),
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit)
+    }
+  };
+}
+
+
 
   // ===== SEND KUNDLI DETAILS (Auto message) =====
   async sendKundliDetailsMessage(
@@ -256,50 +332,59 @@ export class ChatMessageService {
 
   // ===== GET SESSION MESSAGES =====
   async getSessionMessages(
-    sessionId: string,
-    page: number = 1,
-    limit: number = 50,
-    userId?: string
-  ): Promise<any> {
-    const skip = (page - 1) * limit;
+  sessionId: string,
+  page: number = 1,
+  limit: number = 50,
+  userId?: string
+): Promise<any> {
+  const skip = (page - 1) * limit;
 
-    let visibilityFilter: any = { isDeleted: false, deleteStatus: 'visible' };
+  let visibilityFilter: any = { isDeleted: false, deleteStatus: 'visible' };
 
-    // Filter based on visibility
-    if (userId) {
-      visibilityFilter.$or = [
-        { isVisibleToUser: true },
-        { isVisibleToAstrologer: true }
-      ];
-    }
+  // Filter based on visibility
+  if (userId) {
+    visibilityFilter.$or = [
+      { isVisibleToUser: true },
+      { isVisibleToAstrologer: true }
+    ];
+  }
 
-    const [messages, total] = await Promise.all([
-      this.messageModel
-        .find({
-          sessionId: this.toObjectId(sessionId),
-          ...visibilityFilter
-        })
-        .populate('senderId', 'name profileImage profilePicture')
-        .sort({ sentAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      this.messageModel.countDocuments({
-        sessionId: this.toObjectId(sessionId),
+  // ✅ FIX: Try to convert sessionId to ObjectId, but catch if it's invalid
+  let sessionIdQuery: any;
+  try {
+    sessionIdQuery = this.toObjectId(sessionId);
+  } catch {
+    // If conversion fails, use the string directly (some DBs accept both)
+    sessionIdQuery = sessionId;
+  }
+
+  const [messages, total] = await Promise.all([
+    this.messageModel
+      .find({
+        sessionId: sessionIdQuery,  // ✅ Use converted or original
         ...visibilityFilter
       })
-    ]);
+      .populate('senderId', 'name profileImage profilePicture')
+      .sort({ sentAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    this.messageModel.countDocuments({
+      sessionId: sessionIdQuery,  // ✅ Use converted or original
+      ...visibilityFilter
+    })
+  ]);
 
-    return {
-      messages: messages.reverse(),
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    };
-  }
+  return {
+    messages: messages.reverse(),
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit)
+    }
+  };
+}
 
   // ===== GET UNREAD COUNT =====
   async getUnreadCount(userId: string, sessionId: string): Promise<number> {

@@ -5,10 +5,10 @@ export type WalletTransactionDocument = WalletTransaction & Document;
 
 @Schema({ timestamps: true, collection: 'wallet_transactions' })
 export class WalletTransaction {
-  @Prop({ required: true, unique: true, index: true })
-  transactionId: string; // "TXN_20251002_ABC123"
+  @Prop({ required: true, unique: true }) // ✅ Add unique here
+  transactionId: string;
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User' }) // ❌ REMOVED index: true
   userId: Types.ObjectId;
 
   @Prop({ required: true })
@@ -23,20 +23,29 @@ export class WalletTransaction {
   @Prop({ required: true, maxlength: 500 })
   description: string;
 
-  @Prop()
-  orderId?: string; // Reference to Order (if applicable)
+  @Prop({ type: Object, default: {} })
+  metadata?: Record<string, any>;
 
   @Prop()
-  paymentGateway?: string; // 'razorpay', 'phonepe', 'paytm', etc.
+  orderId?: string;
 
   @Prop()
-  paymentId?: string; // Payment gateway transaction ID
+  paymentGateway?: string;
+
+  @Prop()
+  paymentId?: string;
+
+  @Prop()
+  promotionId?: string;
+
+  @Prop({ default: 0 })
+  bonusAmount?: number;
 
   @Prop({ 
     required: true,
     enum: ['pending', 'completed', 'failed', 'cancelled'],
     default: 'pending',
-    index: true
+    // ❌ REMOVED index: true (covered by compound index below)
   })
   status: string;
 
@@ -44,24 +53,22 @@ export class WalletTransaction {
   failureReason?: string;
 
   @Prop({ enum: ['recharge', 'deduction', 'refund', 'hold', 'charge', 'bonus', 'reward'] })
-type: string;
+  type: string;
 
-// ===== FOR HOLD TRANSACTIONS =====
-@Prop()
-holdReleaseableAt?: Date; // Auto-release time
+  @Prop()
+  holdReleaseableAt?: Date;
 
-@Prop()
-releasedAt?: Date; // When hold was released
+  @Prop()
+  releasedAt?: Date;
 
-@Prop()
-convertedAt?: Date; // When hold was converted to charge
+  @Prop()
+  convertedAt?: Date;
 
-// ===== FOR LINKED TRANSACTIONS =====
-@Prop()
-linkedTransactionId?: string; // Link to charge/refund when hold is converted/released
+  @Prop()
+  linkedTransactionId?: string;
 
-@Prop()
-linkedHoldTransactionId?: string; // Link back to original hold transaction
+  @Prop()
+  linkedHoldTransactionId?: string;
 
   @Prop({ default: Date.now })
   createdAt: Date;
@@ -69,8 +76,10 @@ linkedHoldTransactionId?: string; // Link back to original hold transaction
 
 export const WalletTransactionSchema = SchemaFactory.createForClass(WalletTransaction);
 
-// Indexes
-WalletTransactionSchema.index({ transactionId: 1 }, { unique: true });
+// ===== INDEXES =====
+// ❌ REMOVED: WalletTransactionSchema.index({ transactionId: 1 }, { unique: true });
+// (Already covered by @Prop unique: true above)
+
 WalletTransactionSchema.index({ userId: 1, createdAt: -1 });
 WalletTransactionSchema.index({ userId: 1, type: 1 });
 WalletTransactionSchema.index({ userId: 1, status: 1 });

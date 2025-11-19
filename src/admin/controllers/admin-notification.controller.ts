@@ -19,6 +19,7 @@ import { NotificationService } from '../../notifications/services/notification.s
 import { NotificationSchedulerService } from '../services/notification-scheduler.service';
 import { NotificationDeliveryService } from '../../notifications/services/notification-delivery.service';
 import { SendBroadcastDto, SendBroadcastToUsersDto } from '../dto/send-broadcast.dto';
+import { SendNotificationDto } from '../dto/send-notification.dto';
 import { ScheduleNotificationDto } from '../dto/schedule-notification.dto';
 import { NotifyFollowersDto } from '../dto/notify-followers.dto';
 
@@ -229,4 +230,30 @@ async scheduleNotification(
       message: 'System alert broadcasted to all admins',
     };
   }
+
+  @Post('send/fullscreen')
+async sendFullScreenNotification(
+  @Body(ValidationPipe) body: SendNotificationDto, // Define a DTO with required fields
+) {
+  const notification = await this.notificationService.sendNotification({
+    recipientId: body.recipientId,
+    recipientModel: body.recipientModel,
+    type: body.type || 'call_incoming',
+    title: body.title,
+    message: body.message,
+    data: {
+      ...(body.data || {}),
+      fullScreen: true, // Client checks this to show full-screen UI
+    },
+    imageUrl: body.imageUrl,
+    actionUrl: body.actionUrl,
+    priority: 'urgent', // urgent for full screen intent on Android
+  });
+
+  return {
+    success: true,
+    message: 'Full-screen notification sent',
+    data: notification,
+  };
+}
 }

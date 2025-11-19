@@ -191,9 +191,10 @@ async searchAstrologers(
     const astrologer = await this.astrologersService.getAstrologerDetails(astrologerId);
     
     if (!astrologer) {
+      console.warn(`⚠️ Astrologer with ID ${astrologerId} not found.`);
       throw new HttpException('Astrologer not found', HttpStatus.NOT_FOUND);
     }
-    
+    console.log(`Astrologer with ID ${astrologerId} is found.`);
     return astrologer;
   }
 

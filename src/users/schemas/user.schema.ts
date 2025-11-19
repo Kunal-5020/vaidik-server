@@ -151,26 +151,40 @@ export class User {
   // === WALLET SYSTEM (Aggregated Stats Only) ===
   @Prop({ 
     type: {
+      // Aggregate total (cash + bonus)
       balance: { type: Number, default: 0, min: 0 },
       currency: { type: String, default: 'INR' },
       totalRecharged: { type: Number, default: 0 },
       totalSpent: { type: Number, default: 0 },
       lastRechargeAt: { type: Date, default: null },
-      lastTransactionAt: { type: Date, default: null }
+      lastTransactionAt: { type: Date, default: null },
+      // Split balances
+      cashBalance: { type: Number, default: 0, min: 0 },
+      bonusBalance: { type: Number, default: 0, min: 0 },
+      totalBonusReceived: { type: Number, default: 0 },
+      totalBonusSpent: { type: Number, default: 0 },
     },
     default: () => ({
       balance: 0,
       totalRecharged: 0,
-      totalSpent: 0
+      totalSpent: 0,
+      cashBalance: 0,
+      bonusBalance: 0,
+      totalBonusReceived: 0,
+      totalBonusSpent: 0,
     })
   })
   wallet: {
-    balance: number;
+    balance: number; // total = cashBalance + bonusBalance
     currency: string;
     totalRecharged: number;
     totalSpent: number;
     lastRechargeAt?: Date;
     lastTransactionAt?: Date;
+    cashBalance: number;
+    bonusBalance: number;
+    totalBonusReceived: number;
+    totalBonusSpent: number;
   };
 
   // === FAVORITES (Small array - acceptable) ===
@@ -251,7 +265,7 @@ export class User {
 export const UserSchema = SchemaFactory.createForClass(User);
 
 // === INDEXES ===
-UserSchema.index({ phoneNumber: 1, status: 1, createdAt: -1 });
+// Unique index on phoneNumber is created via @Prop({ unique: true })
 UserSchema.index({ phoneHash: 1 });
 UserSchema.index({ status: 1 });
 UserSchema.index({ createdAt: -1 });

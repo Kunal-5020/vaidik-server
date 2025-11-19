@@ -14,6 +14,7 @@ import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.
 import { Order, OrderSchema } from '../orders/schemas/orders.schema';
 import { WalletTransaction, WalletTransactionSchema } from '../payments/schemas/wallet-transaction.schema';
 import { PayoutRequest, PayoutRequestSchema } from '../payments/schemas/payout-request.schema';
+import { GiftCard, GiftCardSchema } from '../payments/schemas/gift-card.schema';
 import { Registration, RegistrationSchema } from '../registration/schemas/registration.schema';
 import { ShopifyOrderEntity, ShopifyOrderSchema } from '../shopify/schemas/shopify-order.schema';
 import { Remedy, RemedySchema } from '../remedies/schemas/remedies.schema';
@@ -72,6 +73,7 @@ import { AdminNotificationGateway } from './gateways/admin-notification.gateway'
       { name: Order.name, schema: OrderSchema },
       { name: WalletTransaction.name, schema: WalletTransactionSchema },
       { name: PayoutRequest.name, schema: PayoutRequestSchema },
+      { name: GiftCard.name, schema: GiftCardSchema },
       { name: ShopifyOrderEntity.name, schema: ShopifyOrderSchema },
       { name: Remedy.name, schema: RemedySchema },
     ]),

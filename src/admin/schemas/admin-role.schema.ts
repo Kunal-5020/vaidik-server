@@ -33,5 +33,5 @@ export class AdminRole {
 
 export const AdminRoleSchema = SchemaFactory.createForClass(AdminRole);
 
-AdminRoleSchema.index({ name: 1 });
+// Unique index for name is created via @Prop({ unique: true })
 AdminRoleSchema.index({ isActive: 1 });

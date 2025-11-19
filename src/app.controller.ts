@@ -59,7 +59,7 @@ export class AppController {
     return health;
   }
 
-  @Get('api/v1/health')
+  @Get('api-health')
   async getApiHealth() {
     return {
       status: 'OK',

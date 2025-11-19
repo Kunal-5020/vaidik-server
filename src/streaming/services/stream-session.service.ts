@@ -10,10 +10,12 @@ import { UpdateCallSettingsDto } from '../dto/update-call-settings.dto';
 import { UpdateStreamDto } from '../dto/update-stream.dto';
 import { StreamGateway } from '../gateways/streaming.gateway';
 import { StreamRecordingService } from './stream-recording.service';
+import { GiftService } from '../../payments/services/gift.service';
 
 @Injectable()
 export class StreamSessionService {
    private readonly logger = new Logger(StreamSessionService.name);
+  private readonly giftService: GiftService;
 
   constructor(
     @InjectModel(StreamSession.name) private streamModel: Model<StreamSessionDocument>,
@@ -23,7 +25,10 @@ export class StreamSessionService {
     private readonly streamRecordingService: StreamRecordingService,
     private streamAgoraService: StreamAgoraService,
     @Inject(forwardRef(() => StreamGateway)) private streamGateway: StreamGateway,
-  ) {}
+    giftService: GiftService,
+  ) {
+    this.giftService = giftService;
+  }
 
   // ==================== STREAM MANAGEMENT ====================
 
@@ -1249,10 +1254,10 @@ async forceEndStreamAdmin(streamId: string, reason: string): Promise<any> {
 /**
  * Send gift to stream
  */
-async sendGift(streamId: string, userId: string, giftData: any): Promise<any> {
+async sendGift(streamId: string, userId: string, giftData: { giftType: string; amount: number }): Promise<any> {
   try {
     const stream = await this.streamModel.findOne({ streamId });
-    
+
     if (!stream) {
       throw new NotFoundException('Stream not found');
     }
@@ -1261,30 +1266,19 @@ async sendGift(streamId: string, userId: string, giftData: any): Promise<any> {
       throw new BadRequestException('Stream is not live');
     }
 
-    // ✅ Validate gift amount
-    if (!giftData.amount || giftData.amount <= 0) {
-      throw new BadRequestException('Invalid gift amount');
+    if (stream.allowGifts === false) {
+      throw new BadRequestException('Gifts are disabled for this stream');
     }
 
-    // ✅ Check user wallet balance
-    const user = await this.userModel.findById(userId);
-    
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+    const giftResult = await this.giftService.sendGift({
+      userId,
+      astrologerId: stream.hostId.toString(),
+      amount: giftData.amount,
+      giftType: giftData.giftType,
+      context: 'stream',
+      streamId,
+    });
 
-    if (!user.wallet || user.wallet.balance < giftData.amount) {
-      throw new BadRequestException(
-        `Insufficient balance. You need ₹${giftData.amount} but have ₹${user.wallet?.balance || 0}`
-      );
-    }
-
-    // ✅ Deduct from user wallet
-    user.wallet.balance -= giftData.amount;
-    user.wallet.totalSpent = (user.wallet.totalSpent || 0) + giftData.amount;
-    await user.save();
-
-    // ✅ Add to stream revenue
     stream.totalRevenue = (stream.totalRevenue || 0) + giftData.amount;
     stream.totalGifts = (stream.totalGifts || 0) + 1;
     await stream.save();
@@ -1295,9 +1289,10 @@ async sendGift(streamId: string, userId: string, giftData: any): Promise<any> {
       success: true,
       message: 'Gift sent successfully',
       data: {
-        newBalance: user.wallet.balance,
+        newBalance: giftResult.newBalance,
         giftType: giftData.giftType,
         amount: giftData.amount,
+        transactionId: giftResult.transactionId,
       },
     };
   } catch (error) {

@@ -16,6 +16,7 @@ import { StreamSessionService } from '../services/stream-session.service';
 import { StreamAnalyticsService } from '../services/stream-analytics.service';
 import { JoinStreamDto } from '../dto/join-stream.dto';
 import { RequestCallDto } from '../dto/request-call.dto';
+import { SendGiftDto } from '../dto/send-gift.dto';
 
 interface AuthenticatedRequest extends Request {
   user: { _id: string };
@@ -161,7 +162,7 @@ export class StreamController {
 async sendGift(
   @Param('streamId') streamId: string,
   @Req() req: AuthenticatedRequest,
-  @Body() giftData: { giftType: string; amount: number },
+  @Body() giftData: SendGiftDto,
 ) {
   return this.streamSessionService.sendGift(streamId, req.user._id, giftData);
 }

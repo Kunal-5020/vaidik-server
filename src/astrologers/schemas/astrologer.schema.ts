@@ -9,10 +9,6 @@ export class Astrologer {
   @Prop({ type: Types.ObjectId, ref: 'Registration', required: true })
   registrationId: Types.ObjectId;
 
-  // Reference to User (for authentication)
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, unique: true })
-  userId: Types.ObjectId;
-
   // Basic Info (copied from registration)
   @Prop({ required: true })
   name: string;
@@ -44,8 +40,6 @@ export class Astrologer {
         basicInfo: { type: Boolean, default: true }, // Already filled from registration
         expertise: { type: Boolean, default: true }, // Already filled from registration
         pricing: { type: Boolean, default: false },
-        gallery: { type: Boolean, default: false },
-        introAudio: { type: Boolean, default: false },
         availability: { type: Boolean, default: false }
       }
     },
@@ -55,8 +49,6 @@ export class Astrologer {
         basicInfo: true,
         expertise: true,
         pricing: false,
-        gallery: false,
-        introAudio: false,
         availability: false
       }
     })
@@ -68,53 +60,8 @@ export class Astrologer {
       basicInfo: boolean;
       expertise: boolean;
       pricing: boolean;
-      gallery: boolean;
-      introAudio: boolean;
       availability: boolean;
     };
-  };
-
-  // ✅ Photo Gallery (AWS S3)
-  @Prop({
-    type: {
-      photos: [{
-        url: { type: String, required: true },
-        key: { type: String, required: true },
-        uploadedAt: { type: Date, default: Date.now },
-        order: { type: Number, default: 0 },
-        isApproved: { type: Boolean, default: false }
-      }],
-      maxPhotos: { type: Number, default: 10 }
-    },
-    default: () => ({ photos: [], maxPhotos: 10 })
-  })
-  gallery: {
-    photos: {
-      url: string;
-      key: string;
-      uploadedAt: Date;
-      order: number;
-      isApproved: boolean;
-    }[];
-    maxPhotos: number;
-  };
-
-  // ✅ Intro Audio Message (AWS S3)
-  @Prop({
-    type: {
-      url: String,
-      key: String,
-      duration: Number,
-      uploadedAt: Date,
-      isApproved: { type: Boolean, default: false }
-    }
-  })
-  introAudio?: {
-    url: string;
-    key: string;
-    duration: number;
-    uploadedAt: Date;
-    isApproved: boolean;
   };
 
   @Prop({ required: true, default: 0 })
@@ -272,7 +219,7 @@ export class Astrologer {
   @Prop({ default: true })
   isCallEnabled: boolean;
 
-  @Prop({ default: true }) // ✅ NEW
+  @Prop({ default: true })
   isLiveStreamEnabled: boolean;
 
   @Prop()
@@ -318,7 +265,7 @@ export const AstrologerSchema = SchemaFactory.createForClass(Astrologer);
 // Indexes
 AstrologerSchema.index({ userId: 1 }, { unique: true });
 AstrologerSchema.index({ registrationId: 1 });
-AstrologerSchema.index({ phoneNumber: 1 }, { unique: true });
+// Unique index for phoneNumber is created via @Prop({ unique: true })
 AstrologerSchema.index({ accountStatus: 1, 'availability.isOnline': 1 });
 AstrologerSchema.index({ 'availability.isLive': 1 }); // ✅ NEW: For finding live astrologers
 AstrologerSchema.index({ specializations: 1 });

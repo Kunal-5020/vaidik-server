@@ -1,22 +1,22 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
 describe('AppController', () => {
-  let appController: AppController;
-
-  beforeEach(async () => {
-    const app: TestingModule = await Test.createTestingModule({
-      controllers: [AppController],
-      providers: [AppService],
-    }).compile();
-
-    appController = app.get<AppController>(AppController);
+  it('should be defined', () => {
+    const controller = new AppController(
+      new AppService(),
+      {} as any, // mongoConnection stub
+      {} as any, // cacheManager stub
+    );
+    expect(controller).toBeDefined();
   });
 
-  describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
-    });
+  it('getHello should return welcome message', () => {
+    const controller = new AppController(
+      new AppService(),
+      {} as any,
+      {} as any,
+    );
+    expect(controller.getHello()).toBe('Welcome to Vaidik Talk Backend API! 🚀');
   });
 });

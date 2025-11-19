@@ -71,7 +71,7 @@ export class PayoutRequest {
 export const PayoutRequestSchema = SchemaFactory.createForClass(PayoutRequest);
 
 // Indexes
-PayoutRequestSchema.index({ payoutId: 1 }, { unique: true });
+// Unique index for payoutId is created via @Prop({ unique: true })
 PayoutRequestSchema.index({ astrologerId: 1, createdAt: -1 });
 PayoutRequestSchema.index({ status: 1, createdAt: -1 });
 PayoutRequestSchema.index({ createdAt: -1 });

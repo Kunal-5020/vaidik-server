@@ -15,7 +15,6 @@ import {
   ParseIntPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { RegisterDeviceDto } from '../dto/register-device.dto';
 import { NotificationService } from '../services/notification.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -38,82 +37,6 @@ export class NotificationController {
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
     private notificationService: NotificationService,
   ) {}
-
-  /**
-   * Register device for push notifications (MULTI-DEVICE)
-   * POST /notifications/register-device
-   */
-  @Post('register-device')
-  async registerDevice(
-    @Req() req: AuthenticatedRequest,
-    @Body(ValidationPipe) registerDto: RegisterDeviceDto
-  ) {
-    const userId = req.user._id;
-    const userType = req.user.userType || 'user';
-
-    // ✅ Type the model properly
-    const model = (
-      userType === 'astrologer' ? this.astrologerModel : this.userModel
-    ) as Model<UserDocument | AstrologerDocument>;
-
-    // ✅ Use exec() to resolve the query
-    const user = await model.findById(userId).exec() as any;
-    
-    if (!user) {
-      return {
-        success: false,
-        message: 'User not found',
-      };
-    }
-
-    const existingDeviceIndex = user.devices.findIndex(
-      (device: any) => device.fcmToken === registerDto.fcmToken
-    );
-
-    if (existingDeviceIndex !== -1) {
-      user.devices[existingDeviceIndex] = {
-        ...user.devices[existingDeviceIndex],
-        fcmToken: registerDto.fcmToken,
-        deviceId: registerDto.deviceId || user.devices[existingDeviceIndex].deviceId,
-        deviceType: registerDto.deviceType || user.devices[existingDeviceIndex].deviceType,
-        deviceName: registerDto.deviceName || user.devices[existingDeviceIndex].deviceName,
-        lastActive: new Date(),
-        isActive: true,
-      };
-
-      console.log(`✅ Updated existing device for user ${userId}`);
-    } else {
-      user.devices.push({
-        fcmToken: registerDto.fcmToken,
-        deviceId: registerDto.deviceId,
-        deviceType: registerDto.deviceType,
-        deviceName: registerDto.deviceName,
-        lastActive: new Date(),
-        isActive: true,
-      });
-
-      console.log(`✅ Added new device for user ${userId}`);
-    }
-
-    if (user.devices.length > 5) {
-      user.devices = user.devices
-        .sort((a: any, b: any) => b.lastActive.getTime() - a.lastActive.getTime())
-        .slice(0, 5);
-
-      console.log(`⚠️ Trimmed devices to 5 for user ${userId}`);
-    }
-
-    await user.save();
-
-    return {
-      success: true,
-      message: 'Device registered successfully',
-      data: {
-        totalDevices: user.devices.length,
-        deviceId: registerDto.deviceId,
-      },
-    };
-  }
 
   /**
    * Unregister device (logout from device)

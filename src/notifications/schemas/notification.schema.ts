@@ -99,10 +99,9 @@ export class Notification {
 export const NotificationSchema = SchemaFactory.createForClass(Notification);
 
 // Indexes
-NotificationSchema.index({ notificationId: 1 }, { unique: true });
+// Unique index for notificationId is created via @Prop({ unique: true })
 NotificationSchema.index({ recipientId: 1, createdAt: -1 });
 NotificationSchema.index({ recipientId: 1, isRead: 1 });
-NotificationSchema.index({ type: 1 });
 NotificationSchema.index({ createdAt: -1 });
 NotificationSchema.index({ isBroadcast: 1 });
   

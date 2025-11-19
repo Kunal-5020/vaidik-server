@@ -7,11 +7,11 @@ export type ChatMessageDocument = ChatMessage & Document;
 
 @Schema({ timestamps: true, collection: 'chat_messages' })
 export class ChatMessage {
-  @Prop({ required: true, unique: true, index: true })
+  @Prop({ required: true, unique: true})
   messageId: string;
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'ChatSession', index: true })
-  sessionId: Types.ObjectId;
+  @Prop({ required: true })
+sessionId: string; 
 
   @Prop({ required: true })
   orderId: string;
@@ -19,7 +19,7 @@ export class ChatMessage {
   @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
   senderId: Types.ObjectId;
 
-  @Prop({ required: true, enum: ['User', 'Astrologer'] })
+  @Prop({ required: true, enum: ['User', 'Astrologer', 'System'] })
   senderModel: string;
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
@@ -74,6 +74,15 @@ export class ChatMessage {
     birthPlace: string;
     gender: string;
   };
+
+  @Prop({ default: false })
+isCallRecording: boolean; // ✅ Flag for call recordings
+
+@Prop()
+linkedSessionId?: string; // ✅ Link to call/chat session
+
+@Prop()
+thumbnailUrl?: string; // ✅ For video recordings
 
   // ===== REPLY =====
   @Prop()
@@ -177,19 +186,18 @@ export class ChatMessage {
   isVisibleToAstrologer: boolean;
 
   // ===== METADATA =====
-  @Prop({ default: Date.now, index: true })
+  @Prop({ default: Date.now })
   createdAt: Date;
 }
 
 export const ChatMessageSchema = SchemaFactory.createForClass(ChatMessage);
 
 // Indexes
-ChatMessageSchema.index({ messageId: 1 }, { unique: true });
+// Unique index for messageId is created via @Prop({ unique: true })
 ChatMessageSchema.index({ sessionId: 1, sentAt: -1 });
 ChatMessageSchema.index({ orderId: 1, sentAt: -1 });
 ChatMessageSchema.index({ senderId: 1, sentAt: -1 });
 ChatMessageSchema.index({ receiverId: 1, deliveryStatus: 1 });
-ChatMessageSchema.index({ createdAt: -1 });
 ChatMessageSchema.index({ isDeleted: 1, deleteStatus: 1 });
 ChatMessageSchema.index({ isStarred: 1, sentAt: -1 });
 ChatMessageSchema.index({ type: 1, sentAt: -1 });

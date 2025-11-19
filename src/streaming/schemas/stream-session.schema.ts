@@ -214,7 +214,7 @@ export class StreamSession {
 export const StreamSessionSchema = SchemaFactory.createForClass(StreamSession);
 
 // Indexes
-StreamSessionSchema.index({ streamId: 1 }, { unique: true });
+// Unique index for streamId is created via @Prop({ unique: true })
 StreamSessionSchema.index({ hostId: 1, createdAt: -1 });
 StreamSessionSchema.index({ status: 1, viewerCount: -1 });
 StreamSessionSchema.index({ 'currentCall.isOnCall': 1 });

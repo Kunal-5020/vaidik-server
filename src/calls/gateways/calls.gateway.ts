@@ -16,6 +16,19 @@ import { CallRecordingService } from '../services/call-recording.service';
 import { AgoraService } from '../services/agora.service'; // ✅ ADD
 import { CallBillingService } from '../services/call-billing.service';
 
+// Shared shape for incoming call requests (audio + video)
+export interface IncomingCallRequestPayload {
+  sessionId: string;
+  orderId: string;
+  userId: string;
+  callType: 'audio' | 'video';
+  ratePerMinute: number;
+  requestExpiresIn: number; // e.g. 3 * 60 * 1000
+  sound?: string;
+  vibration?: boolean;
+  timestamp?: Date;
+}
+
 @WebSocketGateway({
   cors: {
     origin: '*',
@@ -108,26 +121,25 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Send incoming call notification to specific astrologer
       const astrologerSocketId = this.astrologerSockets.get(data.astrologerId);
 
+      const payload: IncomingCallRequestPayload = {
+        sessionId: result.data.sessionId,
+        orderId: result.data.orderId,
+        userId: data.userId,
+        callType: data.callType,
+        ratePerMinute: data.ratePerMinute,
+        requestExpiresIn: 180000,
+        sound: 'call_ringtone.mp3',
+        vibration: true,
+        timestamp: new Date(),
+      };
+
       if (astrologerSocketId) {
-        this.server.to(astrologerSocketId).emit('incoming_call', {
-          sessionId: result.data.sessionId,
-          orderId: result.data.orderId,
-          userId: data.userId,
-          callType: data.callType,
-          ratePerMinute: data.ratePerMinute,
-          requestExpiresIn: 180000,
-          sound: 'call_ringtone.mp3',
-          vibration: true,
-          timestamp: new Date()
-        });
+        this.server.to(astrologerSocketId).emit('incoming_call', payload);
       } else {
         // Fallback for offline astrologer
         this.server.emit('incoming_call_to_astrologer', {
           astrologerId: data.astrologerId,
-          sessionId: result.data.sessionId,
-          orderId: result.data.orderId,
-          userId: data.userId,
-          callType: data.callType
+          ...payload,
         });
       }
 
@@ -254,12 +266,19 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       this.logger.log(`Agora channel created: ${channelName}`);
 
-      // ✅ START RECORDING
-      const recordingResult = await this.callRecordingService.startRecording(
-        data.sessionId,
-        session.callType as 'audio' | 'video' // ✅ FIX TYPE
-      );
+// ✅ Generate recording bot UID
+const recordingUid = this.agoraService.generateUid();
+
+// ✅ START RECORDING
+const recordingResult = await this.callRecordingService.startRecording(
+  data.sessionId,
+  session.callType as 'audio' | 'video',
+  channelName,
+  recordingUid  // ✅ NOW DEFINED
+);
+
       this.activeRecordings.set(data.sessionId, recordingResult.recordingId);
+
 
       // Emit timer start with Agora tokens
       this.server.to(data.sessionId).emit('timer_start', {
@@ -509,7 +528,12 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
       let recordingUrl, recordingS3Key, recordingDuration;
       
       if (this.activeRecordings.has(data.sessionId)) {
-        const recordingResult = await this.callRecordingService.stopRecording(data.sessionId);
+        const session = await this.callSessionService.getSession(data.sessionId);
+
+        const recordingResult = await this.callRecordingService.stopRecording(
+          data.sessionId,
+          session?.agoraChannelName || '' // ✅ ADD: Channel name
+        );
         recordingUrl = recordingResult.recordingUrl;
         recordingS3Key = recordingResult.recordingS3Key;
         recordingDuration = recordingResult.recordingDuration;
@@ -579,13 +603,19 @@ private async endCallInternal(
   // ✅ STOP RECORDING
   let recordingUrl, recordingS3Key, recordingDuration;
   
-  if (this.activeRecordings.has(sessionId)) {
-    const recordingResult = await this.callRecordingService.stopRecording(sessionId);
-    recordingUrl = recordingResult.recordingUrl;
-    recordingS3Key = recordingResult.recordingS3Key;
-    recordingDuration = recordingResult.recordingDuration;
-    this.activeRecordings.delete(sessionId);
-  }
+  // ✅ STOP RECORDING
+if (this.activeRecordings.has(sessionId)) {
+  const session = await this.callSessionService.getSession(sessionId);
+  const recordingResult = await this.callRecordingService.stopRecording(
+    sessionId,
+    session?.agoraChannelName || '' // ✅ ADD THIS
+  );
+  recordingUrl = recordingResult.recordingUrl;
+  recordingS3Key = recordingResult.recordingS3Key;
+  recordingDuration = recordingResult.recordingDuration;
+  this.activeRecordings.delete(sessionId);
+}
+
 
   const result = await this.callSessionService.endSession(
     sessionId,

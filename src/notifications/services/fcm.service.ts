@@ -1,4 +1,4 @@
-// src/notifications/services/fcm.service.ts (UPDATED - Handle optional imageUrl)
+// src/notifications/services/fcm.service.ts
 import { Injectable, Logger } from '@nestjs/common';
 import * as admin from 'firebase-admin';
 import * as path from 'path';
@@ -32,22 +32,35 @@ export class FcmService {
     }
   }
 
-  // Send push notification to single device
   async sendToDevice(
     fcmToken: string,
     title: string,
     body: string,
-    data?: Record<string, string>,
-    imageUrl?: string
+    data?: Record<string, any>,
+    imageUrl?: string,
+    isFullScreen?: boolean
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     try {
-      // ✅ Validate imageUrl - only include if it's a valid URL
+      // Convert all data to strings for FCM
+      const fcmData: Record<string, string> = {};
+      
+      if (data) {
+        for (const [key, value] of Object.entries(data)) {
+          fcmData[key] = String(value);
+        }
+      }
+
+      // Add fullScreen flag
+      if (isFullScreen) {
+        fcmData['fullScreen'] = 'true';
+      }
+
+      // Build notification payload
       const notificationPayload: any = {
         title,
         body,
       };
 
-      // ✅ Only add imageUrl if it's a non-empty valid URL
       if (imageUrl && this.isValidUrl(imageUrl)) {
         notificationPayload.imageUrl = imageUrl;
       }
@@ -55,7 +68,7 @@ export class FcmService {
       const message: admin.messaging.Message = {
         token: fcmToken,
         notification: notificationPayload,
-        data: data || {},
+        data: fcmData,
         android: {
           priority: 'high',
           notification: {
@@ -64,6 +77,10 @@ export class FcmService {
             priority: 'high',
             defaultVibrateTimings: true,
             defaultSound: true,
+            ...(isFullScreen && {
+              visibility: 'public',
+              tag: 'full_screen_call',
+            }),
           },
         },
         apns: {
@@ -72,13 +89,16 @@ export class FcmService {
               sound: 'default',
               badge: 1,
               'content-available': 1,
+              ...(isFullScreen && {
+                'interruption-level': 'critical',
+              }),
             },
           },
         },
       };
 
       const response = await admin.messaging().send(message);
-      this.logger.log(`✅ Push sent successfully: ${response}`);
+      this.logger.log(`✅ Push sent successfully: ${response} (fullScreen: ${isFullScreen})`);
 
       return {
         success: true,
@@ -93,106 +113,93 @@ export class FcmService {
     }
   }
 
-  /**
-   * Send notification to multiple devices (NEW)
-   */
-  // src/notifications/services/fcm.service.ts (VERIFY THIS METHOD)
-async sendToMultipleDevices(
-  fcmTokens: string[],
-  title: string,
-  body: string,
-  data?: Record<string, string>,
-  imageUrl?: string
-): Promise<{ successCount: number; failureCount: number; failedTokens?: string[] }> {
-  try {
-    if (!fcmTokens || fcmTokens.length === 0) {
-      return { successCount: 0, failureCount: 0, failedTokens: [] };
-    }
-
-    const validTokens = fcmTokens.filter(t => t && typeof t === 'string' && t.length > 0);
-    
-    if (validTokens.length === 0) {
-      this.logger.warn('⚠️ No valid FCM tokens');
-      return { successCount: 0, failureCount: fcmTokens.length, failedTokens: fcmTokens };
-    }
-
-    const notificationPayload: any = { title, body };
-    if (imageUrl && this.isValidUrl(imageUrl)) {
-      notificationPayload.imageUrl = imageUrl;
-    }
-
-    const message: admin.messaging.MulticastMessage = {
-      notification: notificationPayload,
-      data: data || {},
-      tokens: validTokens,
-      android: {
-        priority: 'high',
-        notification: {
-          sound: 'default',
-          channelId: 'vaidik_talk_notifications',
-        },
-      },
-    };
-
-    this.logger.log(`📤 Sending to ${validTokens.length} FCM tokens`);
-    this.logger.log(`🔑 First token (30 chars): ${validTokens[0]?.substring(0, 30)}...`);
-
-    const response = await admin.messaging().sendEachForMulticast(message);
-
-    // ✅ Log each response individually
-    response.responses.forEach((resp, idx) => {
-      if (resp.success) {
-        this.logger.log(`✅ Token ${idx}: Success - ${resp.messageId}`);
-      } else {
-        this.logger.error(`❌ Token ${idx}: Failed`, {
-          token: validTokens[idx]?.substring(0, 30) + '...',
-          error: resp.error?.code,
-          message: resp.error?.message,
-        });
+  async sendToMultipleDevices(
+    fcmTokens: string[],
+    title: string,
+    body: string,
+    data?: Record<string, string>,
+    imageUrl?: string,
+    isFullScreen?: boolean
+  ): Promise<{ successCount: number; failureCount: number; failedTokens?: string[] }> {
+    try {
+      if (!fcmTokens || fcmTokens.length === 0) {
+        return { successCount: 0, failureCount: 0, failedTokens: [] };
       }
-    });
 
-    this.logger.log(`📊 FCM Summary: ${response.successCount} success, ${response.failureCount} failed`);
+      const validTokens = fcmTokens.filter(t => t && typeof t === 'string' && t.length > 0);
+      
+      if (validTokens.length === 0) {
+        this.logger.warn('⚠️ No valid FCM tokens');
+        return { successCount: 0, failureCount: fcmTokens.length, failedTokens: fcmTokens };
+      }
 
-    return {
-      successCount: response.successCount,
-      failureCount: response.failureCount,
-      failedTokens: [],
-    };
-  } catch (error: any) {
-    this.logger.error('❌ FCM multicast error:', {
-      code: error.code,
-      message: error.message,
-      details: error.toString(),
-    });
-    return {
-      successCount: 0,
-      failureCount: fcmTokens.length,
-      failedTokens: fcmTokens,
-    };
+      const notificationPayload: any = { title, body };
+      if (imageUrl && this.isValidUrl(imageUrl)) {
+        notificationPayload.imageUrl = imageUrl;
+      }
+
+      const message: admin.messaging.MulticastMessage = {
+        notification: notificationPayload,
+        data: data || {},
+        tokens: validTokens,
+        android: {
+          priority: 'high',
+          notification: {
+            sound: 'default',
+            channelId: 'vaidik_talk_notifications',
+            priority: 'high',
+            defaultVibrateTimings: true,
+            ...(isFullScreen && {
+              visibility: 'public',
+              tag: 'full_screen_call',
+            }),
+          },
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: 'default',
+              badge: 1,
+              'content-available': 1,
+              ...(isFullScreen && {
+                'interruption-level': 'critical',
+              }),
+            },
+          },
+        },
+      };
+
+      this.logger.log(`📤 Sending to ${validTokens.length} FCM tokens (fullScreen: ${isFullScreen})`);
+
+      const response = await admin.messaging().sendEachForMulticast(message);
+
+      this.logger.log(`📊 FCM Summary: ${response.successCount} success, ${response.failureCount} failed`);
+
+      return {
+        successCount: response.successCount,
+        failureCount: response.failureCount,
+        failedTokens: [],
+      };
+    } catch (error: any) {
+      this.logger.error('❌ FCM multicast error:', error.message);
+      return {
+        successCount: 0,
+        failureCount: fcmTokens.length,
+        failedTokens: fcmTokens,
+      };
+    }
   }
-}
 
-  /**
-   * ✅ Helper method to validate URL
-   */
   private isValidUrl(urlString: string): boolean {
     try {
-      // Check if it's empty
       if (!urlString || typeof urlString !== 'string') {
         return false;
       }
-
-      // Trim whitespace
       const trimmed = urlString.trim();
       if (trimmed === '') {
         return false;
       }
-
-      // Try to parse as URL
       const url = new URL(trimmed);
-      
-      // Check if protocol is http or https
       return url.protocol === 'http:' || url.protocol === 'https:';
     } catch (error) {
       return false;

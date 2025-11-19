@@ -69,11 +69,10 @@ export class Report {
 export const ReportSchema = SchemaFactory.createForClass(Report);
 
 // Indexes
-ReportSchema.index({ reportId: 1 }, { unique: true });
+// Unique index for reportId is created via @Prop({ unique: true })
 ReportSchema.index({ userId: 1, createdAt: -1 });
 ReportSchema.index({ astrologerId: 1, createdAt: -1 });
 ReportSchema.index({ orderId: 1 });
 ReportSchema.index({ status: 1 });
-ReportSchema.index({ type: 1 });
 ReportSchema.index({ userId: 1, status: 1 });
 ReportSchema.index({ createdAt: -1 });

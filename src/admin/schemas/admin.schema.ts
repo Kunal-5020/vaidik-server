@@ -126,8 +126,7 @@ approval?: {
 export const AdminSchema = SchemaFactory.createForClass(Admin);
 
 // Indexes
-AdminSchema.index({ email: 1 });
-AdminSchema.index({ adminId: 1 });
+// Unique indexes for email and adminId are created via @Prop({ unique: true })
 AdminSchema.index({ status: 1 });
 AdminSchema.index({ roleId: 1 });
 AdminSchema.index({ lastActivityAt: -1 });

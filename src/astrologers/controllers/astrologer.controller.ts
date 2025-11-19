@@ -51,31 +51,6 @@ export class AstrologerController {
     return this.astrologerService.updatePricing(astrologerId, pricingData);
   }
 
-  /**
-   * Update gallery
-   * PUT /astrologer/profile/gallery
-   */
-  @Put('profile/gallery')
-  async updateGallery(
-    @Request() req,
-    @Body() galleryData: { photos: any[] }
-  ) {
-    const astrologerId = req.user.astrologerId;
-    return this.astrologerService.updateGallery(astrologerId, galleryData.photos);
-  }
-
-  /**
-   * Update intro audio
-   * PUT /astrologer/profile/intro-audio
-   */
-  @Put('profile/intro-audio')
-  async updateIntroAudio(
-    @Request() req,
-    @Body() audioData: { url: string; key: string; duration: number }
-  ) {
-    const astrologerId = req.user.astrologerId;
-    return this.astrologerService.updateIntroAudio(astrologerId, audioData);
-  }
 
   /**
    * Update availability

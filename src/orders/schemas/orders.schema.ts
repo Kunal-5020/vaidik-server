@@ -1,5 +1,3 @@
-// src/orders/schemas/order.schema.ts
-
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
@@ -10,98 +8,100 @@ export type OrderDocument = Order & Document;
   collection: 'orders',
 })
 export class Order {
-  @Prop({ required: true, unique: true, index: true })
+  @Prop({ required: true, unique: true }) // ✅ unique creates index automatically
   orderId: string;
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
+  @Prop()
+  conversationThreadId?: string;
+
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User' }) // ❌ REMOVED index: true
   userId: Types.ObjectId;
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'Astrologer', index: true })
+  @Prop({ required: true, type: Types.ObjectId, ref: 'Astrologer' }) // ❌ REMOVED index: true
   astrologerId: Types.ObjectId;
 
   @Prop({ required: true })
   astrologerName: string;
 
-  // ===== TYPE & CALL TYPE =====
   @Prop({ 
     required: true, 
-    enum: ['chat', 'call'],
-    index: true 
+    enum: ['chat', 'call', 'conversation'], // ❌ REMOVED index: true
   })
   type: string;
 
   @Prop({ enum: ['audio', 'video'] })
   callType?: string;
 
-  // ===== SESSION REFERENCES =====
   @Prop()
   chatSessionId?: string;
 
   @Prop()
   callSessionId?: string;
 
-  // ===== STATUS FLOW =====
+  @Prop()
+  currentSessionId?: string;
+
+  @Prop({ enum: ['chat', 'audio_call', 'video_call', 'none'], default: 'none' })
+  currentSessionType?: string;
+
   @Prop({ 
     required: true,
     enum: [
-      'pending',           // Initial state - waiting for astrologer response
-      'waiting',           // Astrologer accepted - session about to start
-      'waiting_in_queue',  // Astrologer busy - in queue
-      'active',            // Session running - charging active
-      'completed',         // Session ended normally
-      'cancelled',         // Rejected/Timeout/User cancelled
-      'refund_requested',  // User requested refund
-      'refund_approved',   // Refund approved
-      'refund_rejected',   // Refund rejected
-      'refunded'          // Refund processed
+      'pending',           
+      'waiting',           
+      'waiting_in_queue',  
+      'active',
+      'completed',         
+      'cancelled',         
+      'refund_requested',  
+      'refund_approved',   
+      'refund_rejected',   
+      'refunded'
     ],
     default: 'pending',
-    index: true
+    // ❌ REMOVED index: true (covered by compound indexes below)
   })
   status: string;
 
-  // ===== TIMING =====
   @Prop()
-  requestCreatedAt: Date; // When user initiated
+  requestCreatedAt: Date;
 
   @Prop()
-  acceptedAt?: Date; // When astrologer accepted
+  acceptedAt?: Date;
 
   @Prop()
-  startedAt?: Date; // When session actually started (charging begins)
+  startedAt?: Date;
 
   @Prop()
-  endedAt?: Date; // When session ended
+  endedAt?: Date;
 
   @Prop()
-  expectedWaitTime?: number; // seconds - if in queue
+  expectedWaitTime?: number;
 
   @Prop()
-  estimatedStartTime?: Date; // When astrologer expected to be free
+  estimatedStartTime?: Date;
 
   @Prop()
-  queuePosition?: number; // Position in waiting queue
+  queuePosition?: number;
 
-  // ===== DURATION & PRICING =====
   @Prop({ required: true })
   ratePerMinute: number;
 
   @Prop({ default: 0 })
-  maxDurationMinutes: number; // Full minutes only (7, not 7.5)
+  maxDurationMinutes: number;
 
   @Prop({ default: 0 })
-  actualDurationSeconds: number; // Real seconds used (280)
+  actualDurationSeconds: number;
 
   @Prop({ default: 0 })
-  billedMinutes: number; // Rounded up for billing (5)
+  billedMinutes: number;
 
-  // ===== PAYMENT SYSTEM (Hold → Charge → Refund) =====
   @Prop({
     type: {
       status: { 
         type: String,
-        enum: ['hold', 'charged', 'refunded', 'failed'],
-        default: 'hold'
+        enum: ['hold', 'charged', 'refunded', 'failed', 'none'],
+        default: 'none'
       },
       heldAmount: { type: Number, default: 0 },
       chargedAmount: { type: Number, default: 0 },
@@ -131,17 +131,15 @@ export class Order {
     failureReason?: string;
   };
 
-  // ===== CANCELLATION =====
   @Prop()
   cancelledAt?: Date;
 
   @Prop()
-  cancellationReason?: string; // 'rejected', 'timeout', 'user_cancelled', 'no_response'
+  cancellationReason?: string;
 
   @Prop({ enum: ['user', 'astrologer', 'system', 'admin'] })
   cancelledBy?: string;
 
-  // ===== RECORDING (for calls) =====
   @Prop({ default: false })
   hasRecording: boolean;
 
@@ -163,7 +161,6 @@ export class Order {
   @Prop()
   recordingEndedAt?: Date;
 
-  // ===== SESSION HISTORY (for continued consultations) =====
   @Prop({
     type: [{
       sessionId: String,
@@ -173,7 +170,9 @@ export class Order {
       durationSeconds: Number,
       billedMinutes: Number,
       chargedAmount: Number,
-      recordingUrl: String
+      recordingUrl: String,
+      recordingType: String,
+      status: { type: String, enum: ['completed', 'cancelled', 'failed'], default: 'completed' }
     }],
     default: []
   })
@@ -186,25 +185,40 @@ export class Order {
     billedMinutes: number;
     chargedAmount: number;
     recordingUrl?: string;
+    recordingType?: string;
+    status?: string;
   }>;
 
   @Prop({ default: 0 })
-  totalUsedDurationSeconds: number; // Cumulative
+  totalUsedDurationSeconds: number;
 
   @Prop({ default: 0 })
-  totalBilledMinutes: number; // Cumulative
+  totalBilledMinutes: number;
 
   @Prop({ default: 0 })
-  totalAmount: number; // Total charged (all sessions combined)
+  totalAmount: number;
 
-  // ===== CONSULTATION STATE =====
+  @Prop({ default: 0 })
+  totalSessions: number;
+
+  @Prop({ default: 0 })
+  totalChatSessions: number;
+
+  @Prop({ default: 0 })
+  totalCallSessions: number;
+
+  @Prop()
+  lastInteractionAt?: Date;
+
+  @Prop({ default: 0 })
+  messageCount: number;
+
   @Prop({ default: true })
-  isActive: boolean; // Can user continue this consultation?
+  isActive: boolean;
 
   @Prop()
   lastSessionEndTime?: Date;
 
-  // ===== REVIEW & RATING =====
   @Prop({ min: 1, max: 5 })
   rating?: number;
 
@@ -217,7 +231,6 @@ export class Order {
   @Prop()
   reviewSubmittedAt?: Date;
 
-  // ===== REFUND REQUEST SYSTEM =====
   @Prop({
     type: {
       requestedAt: Date,
@@ -249,8 +262,7 @@ export class Order {
     refundPercentage?: number;
   };
 
-  // ===== METADATA =====
-  @Prop({ default: false, index: true })
+  @Prop({ default: false }) // ❌ REMOVED index: true
   isDeleted: boolean;
 
   @Prop()
@@ -259,21 +271,22 @@ export class Order {
   @Prop({ type: Object })
   metadata?: Record<string, any>;
 
-  @Prop({ default: Date.now, index: true })
+  @Prop({ default: Date.now }) // ❌ REMOVED index: true
   createdAt: Date;
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
 
-// ===== INDEXES =====
-OrderSchema.index({ orderId: 1 }, { unique: true });
-OrderSchema.index({ userId: 1, astrologerId: 1, isDeleted: 1, status: 1 });
+// ===== INDEXES (Compound indexes only) =====
+OrderSchema.index({ conversationThreadId: 1 }, { sparse: true });
+OrderSchema.index({ userId: 1, astrologerId: 1 });
+OrderSchema.index({ userId: 1, astrologerId: 1, type: 1 });
 OrderSchema.index({ userId: 1, status: 1, createdAt: -1 });
 OrderSchema.index({ astrologerId: 1, status: 1, createdAt: -1 });
-OrderSchema.index({ orderId: 1, isDeleted: 1 });
+OrderSchema.index({ orderId: 1, isDeleted: 1 }); // Compound index is OK
 OrderSchema.index({ isActive: 1, status: 1 });
 OrderSchema.index({ 'payment.status': 1, createdAt: -1 });
-OrderSchema.index({ 'refundRequest.status': 1, createdAt: -1 });
 OrderSchema.index({ status: 1, createdAt: -1 });
 OrderSchema.index({ chatSessionId: 1 }, { sparse: true });
 OrderSchema.index({ callSessionId: 1 }, { sparse: true });
+OrderSchema.index({ lastInteractionAt: -1 });
