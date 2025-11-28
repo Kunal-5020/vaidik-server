@@ -100,6 +100,54 @@ export class CallController {
     };
   }
 
+  // ===== ASTROLOGER: ACCEPT CALL =====
+@Post('astrologer/accept')
+async acceptCallAsAstrologer(
+  @Req() req: AuthenticatedRequest,
+  @Body('sessionId', new ValidationPipe({ transform: true })) sessionId: string,
+) {
+  if (!sessionId) {
+    throw new BadRequestException('sessionId is required');
+  }
+
+  const astrologerId = req.user._id;
+  const result = await this.callSessionService.acceptCall(sessionId, astrologerId);
+
+  return {
+    success: true,
+    message: 'Call accepted',
+    data: result,
+  };
+}
+
+// ===== ASTROLOGER: REJECT CALL =====
+@Post('astrologer/reject')
+async rejectCallAsAstrologer(
+  @Req() req: AuthenticatedRequest,
+  @Body('sessionId', new ValidationPipe({ transform: true })) sessionId: string,
+  @Body('reason') reason: string,
+) {
+  if (!sessionId) {
+    throw new BadRequestException('sessionId is required');
+  }
+
+  const astrologerId = req.user._id;
+  const rejectReason = reason || 'astrologer_rejected';
+
+  const result = await this.callSessionService.rejectCall(
+    sessionId,
+    astrologerId,
+    rejectReason,
+  );
+
+  return {
+    success: true,
+    message: 'Call rejected',
+    data: result,
+  };
+}
+
+
   // ===== CONTINUE CALL =====
   @Post('sessions/:sessionId/continue')
   async continueCall(

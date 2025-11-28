@@ -34,13 +34,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: any): Promise<any> {
     try {
-      this.logger.log('🔐 JWT Validation Started', {
-        hasUserId: !!payload.userId,
-        has_id: !!payload._id,
-        hasAstrologerId: !!payload.astrologerId,
-        isAdmin: !!payload.isAdmin, // ✅ ADD THIS
-        role: payload.role,
-      });
+      // this.logger.log('🔐 JWT Validation Started', {
+      //   hasUserId: !!payload.userId,
+      //   has_id: !!payload._id,
+      //   hasAstrologerId: !!payload.astrologerId,
+      //   isAdmin: !!payload.isAdmin, // ✅ ADD THIS
+      //   role: payload.role,
+      // });
 
       if (payload.type && payload.type !== 'access') {
         this.logger.error('❌ Invalid token type:', payload.type);
@@ -93,12 +93,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   private async validateAstrologer(payload: any): Promise<any> {
     try {
       const astrologerId = payload.astrologerId;
-      const userId = payload.userId || payload._id;
 
-      this.logger.log('🔍 Astrologer validation: Looking up astrologer', {
-        astrologerId,
-        userId,
-      });
+      // this.logger.log('🔍 Astrologer validation: Looking up astrologer', {
+      //   astrologerId,
+      // });
 
       // Find astrologer
       const astrologer = await this.astrologerModel
@@ -126,45 +124,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         }
       }
 
-      // Find associated user
-      this.logger.log('🔍 Looking up associated user', { userId });
-      const user = await this.userModel
-        .findById(userId)
-        .select('_id phoneNumber status');
 
-      if (!user) {
-        this.logger.error('❌ User not found', { userId });
-        throw new UnauthorizedException('Associated user not found');
-      }
-
-      // ✅ Check user status
-      if (user.status !== 'active') {
-        this.logger.error('❌ User not active', {
-          userId,
-          status: user.status,
-        });
-        throw new UnauthorizedException('User account not active');
-      }
-
-      // ✅ Update last active
-      user.lastActiveAt = new Date();
-      await user.save();
-
-      this.logger.log('✅ Astrologer validated successfully', {
-        astrologerId: (astrologer._id as any).toString(),
-        astrologerName: astrologer.name,
-        accountStatus: astrologer.accountStatus,
-        userId: (user._id as any).toString(),
-        userPhone: user.phoneNumber,
-      });
+      // this.logger.log('✅ Astrologer validated successfully', {
+      //   astrologerId: (astrologer._id as any).toString(),
+      //   astrologerName: astrologer.name,
+      //   accountStatus: astrologer.accountStatus,
+      // });
 
       return {
-        _id: user._id,
-        userId: user._id,
-        astrologerId: astrologer._id,
-        phoneNumber: user.phoneNumber,
-        userType: 'astrologer',
-        role: 'astrologer',
+        _id: astrologer._id,
+        phoneNumber: astrologer.phoneNumber,
         name: astrologer.name,
         profilePicture: astrologer.profilePicture,
         isOnline: astrologer.availability?.isOnline || false,
@@ -189,10 +158,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       const userId = payload.userId || payload._id;
       const { phoneHash } = payload;
 
-      this.logger.log('🔍 User validation: Looking up user', {
-        userId,
-        hasPhoneHash: !!phoneHash,
-      });
+      // this.logger.log('🔍 User validation: Looking up user', {
+      //   userId,
+      //   hasPhoneHash: !!phoneHash,
+      // });
 
       const query: any = {
         _id: userId,
@@ -201,7 +170,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
       if (phoneHash) {
         query.phoneHash = phoneHash;
-        this.logger.log('📝 Phone hash validation enabled');
+        // this.logger.log('📝 Phone hash validation enabled');
       }
 
       const user = await this.userModel
@@ -227,11 +196,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       user.lastActiveAt = new Date();
       await user.save();
 
-      this.logger.log('✅ User validated successfully', {
-        userId: (user._id as any).toString(),
-        phoneNumber: user.phoneNumber,
-        status: user.status,
-      });
+      // this.logger.log('✅ User validated successfully', {
+      //   userId: (user._id as any).toString(),
+      //   phoneNumber: user.phoneNumber,
+      //   status: user.status,
+      // });
 
       return {
         _id: user._id,

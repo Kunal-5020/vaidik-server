@@ -13,7 +13,8 @@ import {
   DefaultValuePipe,
   ValidationPipe,
   NotFoundException,
-  BadRequestException
+  BadRequestException,
+  Delete
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { ChatSessionService } from '../services/chat-session.service';
@@ -266,6 +267,89 @@ async searchMessages(
   }
 
   const result = await this.chatMessageService.searchMessages(sessionId, query, page, limit);
+  return { success: true, data: result };
+}
+
+@Post('messages/:messageId/star')
+async starMessage(
+  @Param('messageId') messageId: string,
+  @Body('sessionId') sessionId: string,
+  @Req() req: AuthenticatedRequest
+) {
+  const message = await this.chatMessageService.starMessage(messageId, req.user._id);
+  
+  if (!message) {
+    throw new BadRequestException('Failed to star message');
+  }
+
+  return { 
+    success: true, 
+    message: 'Message starred',
+    data: {
+      messageId,
+      isStarred: true,
+      starredBy: message.starredBy,
+    }
+  };
+}
+
+@Delete('messages/:messageId/star')
+async unstarMessage(
+  @Param('messageId') messageId: string,
+  @Body('sessionId') sessionId: string,
+  @Req() req: AuthenticatedRequest
+) {
+  const message = await this.chatMessageService.unstarMessage(messageId, req.user._id);
+  
+  if (!message) {
+    throw new BadRequestException('Failed to unstar message');
+  }
+
+  return { 
+    success: true, 
+    message: 'Star removed',
+    data: {
+      messageId,
+      isStarred: message.isStarred || false,
+      starredBy: message.starredBy || [],
+    }
+  };
+}
+
+@Post('messages/:messageId/delete')
+async deleteMessage(
+  @Param('messageId') messageId: string,
+  @Body('deleteFor') deleteFor: 'sender' | 'everyone',
+  @Req() req: AuthenticatedRequest
+) {
+  await this.chatMessageService.deleteMessage(
+    messageId,
+    req.user._id,
+    deleteFor
+  );
+
+  return { 
+    success: true, 
+    message: 'Message deleted',
+    data: { messageId, deleteFor }
+  };
+}
+
+@Get('conversations/:orderId/starred')
+async getConversationStarredMessages(
+  @Param('orderId') orderId: string,
+  @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+  @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit: number,
+  @Req() req: AuthenticatedRequest
+) {
+  // Get all starred messages across all sessions in conversation
+  const result = await this.chatMessageService.getConversationStarredMessages(
+    orderId,
+    req.user._id,
+    page,
+    limit
+  );
+  
   return { success: true, data: result };
 }
 

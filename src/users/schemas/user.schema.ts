@@ -194,6 +194,21 @@ export class User {
   })
   favoriteAstrologers: Types.ObjectId[];
 
+  @Prop({
+  type: [{
+    astrologerId: { type: String, required: true },
+    reason: { type: String, required: true },
+    blockedAt: { type: Date, default: Date.now },
+    _id: false,
+  }],
+  default: [],
+})
+blockedAstrologers: Array<{
+  astrologerId: string;
+  reason: string;
+  blockedAt: Date;
+}>;
+
   // === BASIC STATS (Aggregated only) ===
   @Prop({ 
     type: {
@@ -257,6 +272,8 @@ export class User {
     isActive: boolean;
   }[];
 
+  @Prop({ default: true })
+singleDeviceMode: boolean;
 
   createdAt: Date;
   updatedAt: Date;

@@ -117,15 +117,26 @@ export class AuthService {
       }
 
       // Keep only last 5 active devices (sorted by last active)
-      if (user.devices.length > 5) {
-        user.devices = user.devices
-          .sort((a: any, b: any) => 
-            new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime()
-          )
-          .slice(0, 5);
-        
-        this.logger.log('✅ AUTH SERVICE: Trimmed to 5 most recent devices');
-      }
+      if (user.devices.length > 1) {
+  // Send force logout notification to old devices
+  const oldDevices = user.devices
+    .filter(d => d.deviceId !== deviceInfo.deviceId && d.fcmToken)
+    .map(d => d.fcmToken);
+  
+  if (oldDevices.length > 0) {
+    this.logger.log('📤 Sending force logout to old devices:', oldDevices.length);
+    // Fire-and-forget notification
+    this.sendForceLogoutNotification(oldDevices, 'user').catch(err => 
+      this.logger.error('Failed to send force logout:', err)
+    );
+  }
+
+  // Keep only current device
+  user.devices = user.devices
+    .filter(d => d.deviceId === deviceInfo.deviceId);
+  
+  this.logger.log('✅ AUTH SERVICE: Kept only current device (single device mode)');
+}
 
       // Save user with updated devices
       await user.save();
@@ -369,7 +380,8 @@ export class AuthService {
 
       const verification = await this.truecallerService.verifyOAuthCode(
         truecallerVerifyDto.authorizationCode,
-        truecallerVerifyDto.codeVerifier
+        truecallerVerifyDto.codeVerifier,
+        'vaidik'
       );
 
       if (!verification.success || !verification.userProfile) {
@@ -501,6 +513,45 @@ export class AuthService {
       }
     };
   }
+
+  /**
+ * Send force logout notification via FCM
+ */
+private async sendForceLogoutNotification(
+  fcmTokens: string[],
+  userType: 'user' | 'astrologer'
+): Promise<void> {
+  try {
+    // TODO: Replace with your actual FCM service
+    this.logger.log('📤 Force logout notification sent to:', {
+      count: fcmTokens.length,
+      userType,
+      tokens: fcmTokens.map(t => t.substring(0, 20) + '...'),
+    });
+
+    // Example FCM payload (uncomment when you have FCM service)
+    /*
+    const payload = {
+      tokens: fcmTokens,
+      notification: {
+        title: 'Logged Out',
+        body: 'You have been logged out because you signed in from another device.',
+      },
+      data: {
+        type: 'force_logout',
+        reason: 'new_device_login',
+        userType: userType,
+        timestamp: new Date().toISOString(),
+      },
+    };
+
+    await this.fcmService.sendMulticast(payload);
+    */
+  } catch (error) {
+    this.logger.error('❌ Failed to send force logout notification:', error);
+    // Don't throw - this is fire-and-forget
+  }
+}
 
   private generatePhoneHash(phoneNumber: string): string {
     return crypto.createHash('sha256').update(phoneNumber).digest('hex').substring(0, 16);

@@ -19,7 +19,6 @@ import { AstrologersModule } from './astrologers/astrologers.module';
 import { ChatModule } from './chat/chat.module';
 import { CallsModule } from './calls/calls.module';
 import { StreamingModule } from './streaming/streaming.module';
-import { AdminModule } from './admin/admin.module';
 import { PaymentsModule } from './payments/payments.module';
 import { OrdersModule } from './orders/orders.module';
 import { RemediesModule } from './remedies/remedies.module';
@@ -30,6 +29,8 @@ import { UploadModule } from './upload/upload.module';
 import { ShopifyModule } from './shopify/shopify.module';
 
 import { ScheduleModule } from '@nestjs/schedule';
+import { SupportModule } from './support/support.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -110,6 +111,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     RegistrationModule,
     UploadModule,
     ShopifyModule,
+    SupportModule,
   ],
   controllers: [AppController],
   providers: [

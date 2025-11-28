@@ -12,6 +12,7 @@ import {
 import { AstrologerAuthService } from '../services/astrologer-auth.service';
 import { SendOtpDto } from '../dto/send-otp.dto';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
+import { TruecallerVerifyDto } from '../dto/truecaller-verify.dto';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 
 @Controller('auth/astrologer')
@@ -138,6 +139,41 @@ export class AstrologerAuthController {
         }
       };
     } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Verify Truecaller OAuth for astrologer login/registration
+   */
+  @Post('verify-truecaller')
+  @HttpCode(HttpStatus.OK)
+  async verifyTruecaller(@Body(ValidationPipe) truecallerVerifyDto: TruecallerVerifyDto) {
+    try {
+      this.logger.log('🔍 Verifying Truecaller for astrologer', {
+        hasAuthCode: !!truecallerVerifyDto.authorizationCode,
+        hasCodeVerifier: !!truecallerVerifyDto.codeVerifier,
+        hasDeviceInfo: !!(truecallerVerifyDto.fcmToken && truecallerVerifyDto.deviceId)
+      });
+
+      const deviceInfo = {
+        fcmToken: truecallerVerifyDto.fcmToken,
+        deviceId: truecallerVerifyDto.deviceId,
+        deviceType: truecallerVerifyDto.deviceType,
+        deviceName: truecallerVerifyDto.deviceName,
+      };
+
+      const result = await this.astrologerAuthService.verifyTruecaller(truecallerVerifyDto, deviceInfo);
+
+      this.logger.log('✅ Truecaller verification result for astrologer', {
+        success: result.success,
+        message: result.message,
+        astrologerId: result.data?.astrologer?.id
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('❌ Truecaller verification failed for astrologer', { error: error.message });
       throw error;
     }
   }

@@ -20,7 +20,6 @@ import { Notification, NotificationSchema } from './schemas/notification.schema'
 import { ScheduledNotification, ScheduledNotificationSchema } from './schemas/scheduled-notification.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema';
-import { AdminModule } from 'src/admin/admin.module';
 
 
 @Module({
@@ -36,7 +35,7 @@ import { AdminModule } from 'src/admin/admin.module';
       { name: User.name, schema: UserSchema },
       { name: Astrologer.name, schema: AstrologerSchema },
     ]),
-    forwardRef(() => require('../admin/admin.module').AdminModule),
+    forwardRef(() => require('../admin/features/notifications/notifications.module').AdminNotificationsModule),
   ],
   controllers: [NotificationController],
   providers: [

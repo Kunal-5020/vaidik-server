@@ -231,6 +231,27 @@ export class Order {
   @Prop()
   reviewSubmittedAt?: Date;
 
+  @Prop({ 
+  enum: ['pending', 'approved', 'rejected', 'flagged'], 
+  default: 'pending'
+})
+reviewModerationStatus?: string;
+
+@Prop()
+reviewModerationReason?: string;
+
+@Prop({ type: Types.ObjectId, ref: 'Admin' })
+reviewModeratedBy?: Types.ObjectId;
+
+@Prop()
+reviewModeratedAt?: Date;
+
+@Prop({ default: false })
+reviewIsEdited?: boolean;
+
+@Prop()
+reviewEditedAt?: Date;
+
   @Prop({
     type: {
       requestedAt: Date,

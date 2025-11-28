@@ -53,6 +53,17 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private callBillingService: CallBillingService
   ) {}
 
+  private async ensureActiveCall(sessionId: string): Promise<boolean> {
+  const session = await this.callSessionService.getSession(sessionId);
+  if (!session || session.status !== 'active') {
+    this.logger.warn(
+      `🚫 Call action blocked; session not active: session=${sessionId}, status=${session?.status}`,
+    );
+    return false;
+  }
+  return true;
+}
+
   handleConnection(client: Socket) {
     this.logger.log(`Call client connected: ${client.id}`);
   }
@@ -212,119 +223,189 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  // Inside CallGateway
+@SubscribeMessage('join_session')
+handleJoinSession(
+  @ConnectedSocket() client: Socket,
+  @MessageBody() payload: any, // Accept any, then extract data
+) {
+  // Extract data (first element if array, or whole payload)
+  const data = Array.isArray(payload) ? payload[0] : payload;
+
+  if (!data?.sessionId || !data?.userId || !data?.role) {
+    this.logger.warn(
+      `🚫 Invalid join_session from ${client.id}: ${JSON.stringify(payload)}`
+    );
+    return { success: false, message: 'sessionId, userId and role required' };
+  }
+
+  client.join(data.sessionId);
+  this.activeUsers.set(data.userId, {
+    socketId: client.id,
+    userId: data.userId,
+    role: data.role,
+    sessionId: data.sessionId,
+  });
+
+  this.logger.log(
+    `👥 ${data.role} joined call room: session=${data.sessionId}, userId=${data.userId}`
+  );
+
+  return { success: true };
+}
+
+
   // ===== START CALL =====
-  @SubscribeMessage('start_call')
-  async handleStartCall(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      sessionId: string;
-      userId: string;
-      role: 'user' | 'astrologer';
+// src/calls/gateways/call.gateway.ts - FIXED handleStartCall
+
+@SubscribeMessage('start_call')
+async handleStartCall(
+  @ConnectedSocket() client: Socket,
+  @MessageBody()
+  data:
+    | { sessionId: string; userId: string; role: 'user' | 'astrologer' }
+    | [{ sessionId: string; userId: string; role: 'user' | 'astrologer' }, any],
+) {
+  try {
+    const payload = Array.isArray(data) ? data[0] : data;
+
+    this.logger.log(
+      `▶️ start_call received: sessionId=${payload?.sessionId}, userId=${payload?.userId}, role=${payload?.role}`,
+    );
+
+    if (!payload?.sessionId || !payload?.userId || !payload?.role) {
+      throw new BadRequestException('sessionId, userId and role are required');
     }
-  ) {
+
+    // 1️⃣ Start session
+    const result = await this.callSessionService.startSession(payload.sessionId);
+
+    // 2️⃣ Join room
+    client.join(payload.sessionId);
+
+    this.activeUsers.set(payload.userId, {
+      socketId: client.id,
+      userId: payload.userId,
+      role: payload.role,
+      sessionId: payload.sessionId,
+    });
+
+    await this.callSessionService.updateParticipantStatus(
+      payload.sessionId,
+      payload.userId,
+      payload.role,
+      { isOnline: true, connectionQuality: 'good' },
+    );
+
+    // 3️⃣ Load session
+    const session = await this.callSessionService.getSession(payload.sessionId);
+    if (!session) {
+      throw new BadRequestException('Session not found');
+    }
+
+    // ✅ Generate Agora channel and tokens
+    const channelName = this.agoraService.generateChannelName();
+    const userUid = this.agoraService.generateUid();
+    const astrologerUid = this.agoraService.generateUid();
+
+    const userToken = this.agoraService.generateRtcToken(channelName, userUid, 'publisher');
+    const astrologerToken = this.agoraService.generateRtcToken(channelName, astrologerUid, 'publisher');
+
+    // Update session
+    session.agoraChannelName = channelName;
+    session.agoraUserToken = userToken;
+    session.agoraAstrologerToken = astrologerToken;
+    session.agoraUserUid = userUid;
+    session.agoraAstrologerUid = astrologerUid;
+    session.recordingStarted = new Date();
+    await session.save();
+
+    this.logger.log(`Agora channel created: ${channelName}`);
+
+    let recordingStarted = false;
+
     try {
-      const result = await this.callSessionService.startSession(data.sessionId);
-
-      client.join(data.sessionId);
-
-      this.activeUsers.set(data.userId, {
-        socketId: client.id,
-        userId: data.userId,
-        role: data.role,
-        sessionId: data.sessionId
-      });
-
-      await this.callSessionService.updateParticipantStatus(
-        data.sessionId,
-        data.userId,
-        data.role,
-        { isOnline: true, connectionQuality: 'good' }
+      const recordingUid = this.agoraService.generateUid();
+      const recordingResult = await this.callRecordingService.startRecording(
+        payload.sessionId,
+        session.callType as 'audio' | 'video',
+        channelName,
+        recordingUid,
       );
 
-      // ✅ GET SESSION AND GENERATE AGORA TOKENS
-      const session = await this.callSessionService.getSession(data.sessionId);
-      if (!session) {
-        throw new BadRequestException('Session not found');
-      }
-
-      // ✅ Generate Agora channel and tokens
-      const channelName = this.agoraService.generateChannelName();
-      const userUid = this.agoraService.generateUid();
-      const astrologerUid = this.agoraService.generateUid();
-
-      const userToken = this.agoraService.generateRtcToken(channelName, userUid, 'publisher');
-      const astrologerToken = this.agoraService.generateRtcToken(channelName, astrologerUid, 'publisher');
-
-      // Update session with Agora details
-      session.agoraChannelName = channelName;
-      session.agoraUserToken = userToken;
-      session.agoraAstrologerToken = astrologerToken;
-      session.agoraUserUid = userUid;
-      session.agoraAstrologerUid = astrologerUid;
-      session.recordingStarted = new Date();
-      await session.save();
-
-      this.logger.log(`Agora channel created: ${channelName}`);
-
-// ✅ Generate recording bot UID
-const recordingUid = this.agoraService.generateUid();
-
-// ✅ START RECORDING
-const recordingResult = await this.callRecordingService.startRecording(
-  data.sessionId,
-  session.callType as 'audio' | 'video',
-  channelName,
-  recordingUid  // ✅ NOW DEFINED
-);
-
-      this.activeRecordings.set(data.sessionId, recordingResult.recordingId);
-
-
-      // Emit timer start with Agora tokens
-      this.server.to(data.sessionId).emit('timer_start', {
-        sessionId: data.sessionId,
-        maxDurationMinutes: result.data.maxDurationMinutes,
-        maxDurationSeconds: result.data.maxDurationSeconds,
-        ratePerMinute: result.data.ratePerMinute,
-        callType: result.data.callType,
-        chargingStarted: true,
-        // ✅ AGORA TOKEN DATA
-        agoraAppId: this.agoraService.getAppId(),
-        agoraChannelName: channelName,
-        agoraToken: data.role === 'user' ? userToken : astrologerToken,
-        agoraUid: data.role === 'user' ? userUid : astrologerUid,
-        agoraUserUid: userUid,
-        agoraAstrologerUid: astrologerUid,
-        recordingStarted: true,
-        timestamp: new Date()
-      });
-
-      // Start timer ticker
-      this.startTimerTicker(data.sessionId, result.data.maxDurationSeconds);
-
-      // Notify other party
-      client.to(data.sessionId).emit('participant_joined', {
-        userId: data.userId,
-        role: data.role,
-        isOnline: true,
-        timestamp: new Date()
-      });
-
-      return { 
-        success: true, 
-        message: 'Call started',
-        data: {
-          agoraChannelName: channelName,
-          agoraToken: data.role === 'user' ? userToken : astrologerToken,
-          agoraUid: data.role === 'user' ? userUid : astrologerUid,
-          recordingStarted: true
-        }
-      };
-    } catch (error: any) {
-      this.logger.error(`Start call error: ${error.message}`);
-      return { success: false, message: error.message };
+      this.activeRecordings.set(payload.sessionId, recordingResult.recordingId);
+      recordingStarted = true;
+    } catch (recErr: any) {
+      this.logger.error(`Recording start failed: ${recErr.message}`);
+      recordingStarted = false;
     }
+
+    // ✅ BASE PAYLOAD (shared fields)
+    const basePayload = {
+      sessionId: payload.sessionId,
+      maxDurationMinutes: result.data.maxDurationMinutes,
+      maxDurationSeconds: result.data.maxDurationSeconds,
+      ratePerMinute: result.data.ratePerMinute,
+      callType: result.data.callType,
+      chargingStarted: true,
+      agoraAppId: this.agoraService.getAppId(),
+      agoraChannelName: channelName,
+      agoraUserUid: userUid,
+      agoraAstrologerUid: astrologerUid,
+      recordingStarted,
+      timestamp: new Date().toISOString(),
+    };
+
+    // ✅ EMIT TO USER with user token and UID
+    const userSocket = this.activeUsers.get(session.userId.toString());
+if (userSocket?.socketId) {
+  this.server.to(userSocket.socketId).emit('timer_start', {
+    ...basePayload,
+    agoraToken: userToken,
+    agoraUid: userUid,
+  });
+  this.logger.log(`📤 timer_start sent to USER ${session.userId} with UID ${userUid}`);
+}
+
+    // ✅ EMIT TO ASTROLOGER with astrologer token and UID
+    const astrologerSocket = this.activeUsers.get(session.astrologerId.toString());
+if (astrologerSocket?.socketId) {
+  this.server.to(astrologerSocket.socketId).emit('timer_start', {
+    ...basePayload,
+    agoraToken: astrologerToken,
+    agoraUid: astrologerUid,
+  });
+  this.logger.log(`📤 timer_start sent to ASTROLOGER ${session.astrologerId} with UID ${astrologerUid}`);
+}
+
+    // Start timer ticker
+    this.startTimerTicker(payload.sessionId, result.data.maxDurationSeconds);
+    this.logger.log(`Timer started for session ${payload.sessionId}`);
+
+    // Notify other party
+    client.to(payload.sessionId).emit('participant_joined', {
+      userId: payload.userId,
+      role: payload.role,
+      isOnline: true,
+      timestamp: new Date(),
+    });
+
+    return {
+      success: true,
+      message: 'Call started',
+      data: {
+        agoraChannelName: channelName,
+        agoraToken: payload.role === 'user' ? userToken : astrologerToken,
+        agoraUid: payload.role === 'user' ? userUid : astrologerUid,
+        recordingStarted: true,
+      },
+    };
+  } catch (error: any) {
+    this.logger.error(`Start call error: ${error.message}`);
+    return { success: false, message: error.message };
   }
+}
+
 
    // ===== GET REAL-TIME BILLING =====
   @SubscribeMessage('get_billing')
@@ -362,6 +443,7 @@ const recordingResult = await this.callRecordingService.startRecording(
       }
 
       const remainingSeconds = maxDurationSeconds - secondsElapsed;
+
 
       this.server.to(sessionId).emit('timer_tick', {
         elapsedSeconds: secondsElapsed,
@@ -425,97 +507,114 @@ const recordingResult = await this.callRecordingService.startRecording(
   }
 
   // ===== PARTICIPANT STATUS UPDATES =====
-  @SubscribeMessage('participant_muted')
-  async handleMute(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      sessionId: string;
-      userId: string;
-      role: 'user' | 'astrologer';
-      isMuted: boolean;
-    }
-  ) {
-    try {
-      await this.callSessionService.updateParticipantStatus(
-        data.sessionId,
-        data.userId,
-        data.role,
-        { isMuted: data.isMuted }
-      );
-
-      client.to(data.sessionId).emit('participant_muted', {
-        userId: data.userId,
-        isMuted: data.isMuted,
-        timestamp: new Date()
-      });
-
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, message: error.message };
-    }
+ @SubscribeMessage('participant_muted')
+async handleMute(
+  @ConnectedSocket() client: Socket,
+  @MessageBody() data: {
+    sessionId: string;
+    userId: string;
+    role: 'user' | 'astrologer';
+    isMuted: boolean;
   }
+) {
+  try {
+    const ok = await this.ensureActiveCall(data.sessionId);
+    if (!ok) {
+      return { success: false, message: 'Call is not active' };
+    }
+
+    await this.callSessionService.updateParticipantStatus(
+      data.sessionId,
+      data.userId,
+      data.role,
+      { isMuted: data.isMuted }
+    );
+
+    client.to(data.sessionId).emit('participant_muted', {
+      userId: data.userId,
+      isMuted: data.isMuted,
+      timestamp: new Date()
+    });
+
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, message: error.message };
+  }
+}
+
 
   // ===== VIDEO STATUS UPDATE =====
   @SubscribeMessage('video_status')
-  async handleVideoStatus(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      sessionId: string;
-      userId: string;
-      role: 'user' | 'astrologer';
-      isVideoOn: boolean;
-    }
-  ) {
-    try {
-      await this.callSessionService.updateParticipantStatus(
-        data.sessionId,
-        data.userId,
-        data.role,
-        { isVideoOn: data.isVideoOn }
-      );
-
-      client.to(data.sessionId).emit('video_status_changed', {
-        userId: data.userId,
-        isVideoOn: data.isVideoOn,
-        timestamp: new Date()
-      });
-
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, message: error.message };
-    }
+async handleVideoStatus(
+  @ConnectedSocket() client: Socket,
+  @MessageBody() data: {
+    sessionId: string;
+    userId: string;
+    role: 'user' | 'astrologer';
+    isVideoOn: boolean;
   }
+) {
+  try {
+    const ok = await this.ensureActiveCall(data.sessionId);
+    if (!ok) {
+      return { success: false, message: 'Call is not active' };
+    }
+
+    await this.callSessionService.updateParticipantStatus(
+      data.sessionId,
+      data.userId,
+      data.role,
+      { isVideoOn: data.isVideoOn }
+    );
+
+    client.to(data.sessionId).emit('video_status_changed', {
+      userId: data.userId,
+      isVideoOn: data.isVideoOn,
+      timestamp: new Date()
+    });
+
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, message: error.message };
+  }
+}
+
 
   // ===== CONNECTION QUALITY UPDATE =====
   @SubscribeMessage('connection_quality')
-  async handleConnectionQuality(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      sessionId: string;
-      userId: string;
-      role: 'user' | 'astrologer';
-      quality: 'excellent' | 'good' | 'fair' | 'poor';
-    }
-  ) {
-    try {
-      await this.callSessionService.updateParticipantStatus(
-        data.sessionId,
-        data.userId,
-        data.role,
-        { connectionQuality: data.quality }
-      );
-
-      client.to(data.sessionId).emit('connection_quality_updated', {
-        userId: data.userId,
-        quality: data.quality,
-        timestamp: new Date()
-      });
-
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, message: error.message };
-    }
+async handleConnectionQuality(
+  @ConnectedSocket() client: Socket,
+  @MessageBody() data: {
+    sessionId: string;
+    userId: string;
+    role: 'user' | 'astrologer';
+    quality: 'excellent' | 'good' | 'fair' | 'poor';
   }
+) {
+  try {
+    const ok = await this.ensureActiveCall(data.sessionId);
+    if (!ok) {
+      return { success: false, message: 'Call is not active' };
+    }
+
+    await this.callSessionService.updateParticipantStatus(
+      data.sessionId,
+      data.userId,
+      data.role,
+      { connectionQuality: data.quality }
+    );
+
+    client.to(data.sessionId).emit('connection_quality_updated', {
+      userId: data.userId,
+      quality: data.quality,
+      timestamp: new Date()
+    });
+
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, message: error.message };
+  }
+}
 
   // ===== END CALL =====
   @SubscribeMessage('end_call')

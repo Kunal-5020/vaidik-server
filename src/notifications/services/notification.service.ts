@@ -6,6 +6,8 @@ import { Notification, NotificationDocument } from '../schemas/notification.sche
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
 import { NotificationDeliveryService } from './notification-delivery.service';
+import { getNotificationConfig, RefinedNotificationType } from '../config/notification-types.config';
+
 
 @Injectable()
 export class NotificationService {
@@ -410,4 +412,225 @@ export class NotificationService {
       timestamp: new Date(),
     };
   }
+
+  // ========================================
+// 🆕 REFINED NOTIFICATION TYPE METHODS
+// ========================================
+
+/**
+ * Send Call Notification (Video/Audio)
+ */
+async sendCallNotification(data: {
+  recipientId: string;
+  recipientModel: 'User' | 'Astrologer';
+  callerId: string;
+  callerName: string;
+  callerAvatar?: string;
+  isVideo: boolean;
+  callId: string;
+  roomId?: string;
+}): Promise<NotificationDocument> {
+  const type = data.isVideo ? RefinedNotificationType.CALL_VIDEO : RefinedNotificationType.CALL_AUDIO;
+  const config = getNotificationConfig(type);
+
+  return this.sendNotification({
+    recipientId: data.recipientId,
+    recipientModel: data.recipientModel,
+    type,
+    title: data.callerName,
+    message: data.isVideo ? 'Incoming video call...' : 'Incoming voice call...',
+    data: {
+      callId: data.callId,
+      callerId: data.callerId,
+      callerName: data.callerName,
+      callerAvatar: data.callerAvatar,
+      isVideo: data.isVideo,
+      roomId: data.roomId,
+      fullScreen: true,
+    },
+    imageUrl: data.callerAvatar,
+    priority: config.priority,
+  });
+}
+
+/**
+ * Send Message Notification
+ */
+async sendMessageNotification(data: {
+  recipientId: string;
+  recipientModel: 'User' | 'Astrologer';
+  senderId: string;
+  senderName: string;
+  senderAvatar?: string;
+  messageText: string;
+  chatId: string;
+  messageId: string;
+}): Promise<NotificationDocument> {
+  const config = getNotificationConfig(RefinedNotificationType.MESSAGE_DIRECT);
+
+  return this.sendNotification({
+    recipientId: data.recipientId,
+    recipientModel: data.recipientModel,
+    type: RefinedNotificationType.MESSAGE_DIRECT,
+    title: data.senderName,
+    message: data.messageText,
+    data: {
+      senderId: data.senderId,
+      senderName: data.senderName,
+      senderAvatar: data.senderAvatar,
+      chatId: data.chatId,
+      messageId: data.messageId,
+    },
+    imageUrl: data.senderAvatar,
+    actionUrl: `vaidiktalk://chat/${data.chatId}`,
+    priority: config.priority,
+  });
+}
+
+/**
+ * Send Chat Notification (Group)
+ */
+async sendChatNotification(data: {
+  recipientId: string;
+  recipientModel: 'User' | 'Astrologer';
+  senderId: string;
+  senderName: string;
+  senderAvatar?: string;
+  messageText: string;
+  chatId: string;
+  groupName?: string;
+}): Promise<NotificationDocument> {
+  const config = getNotificationConfig(RefinedNotificationType.CHAT_GROUP);
+
+  return this.sendNotification({
+    recipientId: data.recipientId,
+    recipientModel: data.recipientModel,
+    type: RefinedNotificationType.CHAT_GROUP,
+    title: data.groupName || data.senderName,
+    message: `${data.senderName}: ${data.messageText}`,
+    data: {
+      senderId: data.senderId,
+      senderName: data.senderName,
+      chatId: data.chatId,
+      groupName: data.groupName,
+    },
+    imageUrl: data.senderAvatar,
+    actionUrl: `vaidiktalk://chat/${data.chatId}`,
+    priority: config.priority,
+  });
+}
+
+/**
+ * Send Live Event Notification
+ */
+async sendLiveEventNotification(data: {
+  recipientId: string;
+  recipientModel: 'User' | 'Astrologer';
+  eventId: string;
+  eventName: string;
+  eventType: 'started' | 'reminder';
+  eventStartTime?: Date;
+  astrologerId?: string;
+  astrologerName?: string;
+  astrologerAvatar?: string;
+}): Promise<NotificationDocument> {
+  const type = data.eventType === 'started' 
+    ? RefinedNotificationType.LIVE_EVENT_STARTED 
+    : RefinedNotificationType.LIVE_EVENT_REMINDER;
+  
+  const config = getNotificationConfig(type);
+
+  return this.sendNotification({
+    recipientId: data.recipientId,
+    recipientModel: data.recipientModel,
+    type,
+    title: data.eventType === 'started' ? '🔴 Live Now!' : '⏰ Event Starting Soon',
+    message: data.eventType === 'started'
+      ? `${data.astrologerName || 'Astrologer'} is now live: ${data.eventName}`
+      : `${data.eventName} starts in 15 minutes`,
+    data: {
+      eventId: data.eventId,
+      eventName: data.eventName,
+      eventType: data.eventType,
+      astrologerId: data.astrologerId,
+      astrologerName: data.astrologerName,
+      eventStartTime: data.eventStartTime?.toISOString(),
+    },
+    imageUrl: data.astrologerAvatar,
+    actionUrl: `vaidiktalk://event/${data.eventId}`,
+    priority: config.priority,
+  });
+}
+
+/**
+ * Send System/Promotional Notification
+ */
+async sendSystemNotification(data: {
+  recipientId: string;
+  recipientModel: 'User' | 'Astrologer';
+  title: string;
+  message: string;
+  imageUrl?: string;
+  actionUrl?: string;
+  data?: Record<string, any>;
+}): Promise<NotificationDocument> {
+  const config = getNotificationConfig(RefinedNotificationType.SYSTEM_PROMOTIONAL);
+
+  return this.sendNotification({
+    recipientId: data.recipientId,
+    recipientModel: data.recipientModel,
+    type: RefinedNotificationType.SYSTEM_PROMOTIONAL,
+    title: data.title,
+    message: data.message,
+    data: data.data,
+    imageUrl: data.imageUrl,
+    actionUrl: data.actionUrl,
+    priority: config.priority,
+  });
+}
+
+/**
+ * Force Logout User
+ */
+async forceLogoutUser(data: {
+  recipientId: string;
+  recipientModel: 'User' | 'Astrologer';
+  reason: string;
+  adminId?: string;
+}): Promise<NotificationDocument> {
+  const config = getNotificationConfig(RefinedNotificationType.FORCE_LOGOUT);
+
+  // 1. Send notification
+  const notification = await this.sendNotification({
+    recipientId: data.recipientId,
+    recipientModel: data.recipientModel,
+    type: RefinedNotificationType.FORCE_LOGOUT,
+    title: 'Session Ended',
+    message: data.reason,
+    data: {
+      reason: data.reason,
+      forceLogout: true,
+      timestamp: new Date().toISOString(),
+      adminId: data.adminId,
+    },
+    priority: config.priority,
+  });
+
+  // 2. Deactivate all user devices
+  const model = (
+    data.recipientModel === 'User' ? this.userModel : this.astrologerModel
+  ) as Model<UserDocument | AstrologerDocument>;
+
+  await model.findByIdAndUpdate(data.recipientId, {
+    $set: { 'devices.$[].isActive': false },
+  });
+
+  this.logger.log(
+    `🔒 Force logout: ${data.recipientModel} ${data.recipientId} | ` +
+    `Reason: ${data.reason} | Admin: ${data.adminId || 'System'}`
+  );
+
+  return notification;
+}
+
 }

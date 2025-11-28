@@ -76,6 +76,9 @@ export class ChatSession {
   @Prop({ default: 0 })
   astrologerEarning: number;
 
+  @Prop()
+  postSessionWindowEndsAt?: Date;
+
   @Prop({ default: false })
   isPaid: boolean;
 

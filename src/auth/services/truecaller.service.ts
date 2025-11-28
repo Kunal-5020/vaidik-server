@@ -88,101 +88,86 @@ export class TruecallerService {
   };
 
   constructor(private configService: ConfigService) {
-    this.clientId =
-      this.configService.get<string>('TRUECALLER_CLIENT_ID') ??
-      'roh4kmkkmy2bvkuq_5pa2rx72ouwa88cwtrbogsqc0g';
-
     this.tokenEndpoint = 'https://oauth-account-noneu.truecaller.com/v1/token';
     this.userInfoEndpoint = 'https://oauth-account-noneu.truecaller.com/v1/userinfo';
 
     this.logger.log('✅ TruecallerService initialized');
   }
 
-  async verifyOAuthCode(
-    authorizationCode: string,
-    codeVerifier: string
-  ): Promise<TruecallerVerifyResponse> {
-    if (!this.clientId) {
-      this.logger.error('❌ Truecaller client ID not configured');
-      return {
-        success: false,
-        message: 'Truecaller client ID not configured',
-      };
-    }
-
-    try {
-      this.logger.log('🔐 Step 1: Exchanging authorization code for access token...');
-
-      const tokenResponse = await this.exchangeCodeForToken(
-        authorizationCode,
-        codeVerifier
-      );
-
-      this.logger.log('✅ Step 1 completed: Access token received');
-
-      this.logger.log('📤 Step 2: Fetching user info from /userinfo endpoint...');
-
-      const userProfile = await this.getUserInfo(tokenResponse.access_token);
-
-      this.logger.log('✅ Step 2 completed: User info received', {
-        phoneNumber: userProfile.phoneNumber,
-        name: `${userProfile.firstName} ${userProfile.lastName}`.trim(),
-      });
-
-      return {
-        success: true,
-        userProfile,
-        message: 'Truecaller verification successful',
-      };
-    } catch (error) {
-      this.logger.error('❌ Truecaller verification failed:', {
-        message: error.message,
-        status: error.response?.status,
-        data: error.response?.data,
-      });
-
-      return {
-        success: false,
-        message: `Verification failed: ${error.message}`,
-      };
-    }
+  private getClientConfig(appType: 'vaidik' | 'astro') {
+  if (appType === 'astro') {
+    return {
+      clientId: this.configService.get<string>('TRUECALLER_ASTRO_CLIENT_ID'),
+      packageName: this.configService.get<string>('TRUECALLER_ASTRO_PACKAGE_NAME'),
+      sha1: this.configService.get<string>('TRUECALLER_ASTRO_SHA1_FINGERPRINT'),
+    };
   }
+
+  return {
+    clientId: this.configService.get<string>('TRUECALLER_CLIENT_ID'),
+    packageName: this.configService.get<string>('TRUECALLER_PACKAGE_NAME'),
+    sha1: this.configService.get<string>('TRUECALLER_SHA1_FINGERPRINT'),
+  };
+}
+
+
+  async verifyOAuthCode(
+  authorizationCode: string,
+  codeVerifier: string,
+  appType: 'vaidik' | 'astro'
+): Promise<TruecallerVerifyResponse> {
+
+  const { clientId } = this.getClientConfig(appType);
+
+  if (!clientId) {
+    return {
+      success: false,
+      message: `Truecaller client ID not configured for appType: ${appType}`
+    };
+  }
+
+  try {
+    this.logger.log(`🔐 Using clientId for ${appType}: ${clientId}`);
+
+    const tokenResponse = await this.exchangeCodeForToken(
+      authorizationCode,
+      codeVerifier,
+      clientId
+    );
+
+    const userProfile = await this.getUserInfo(tokenResponse.access_token);
+
+    return {
+      success: true,
+      userProfile,
+      message: 'Truecaller verification successful',
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: error.message,
+    };
+  }
+}
+
 
   private async exchangeCodeForToken(
-    authorizationCode: string,
-    codeVerifier: string
-  ) {
-    try {
-      const params = new URLSearchParams();
-      params.append('grant_type', 'authorization_code');
-      params.append('client_id', this.clientId);
-      params.append('code', authorizationCode);
-      params.append('code_verifier', codeVerifier);
+  authorizationCode: string,
+  codeVerifier: string,
+  clientId: string
+) {
+  const params = new URLSearchParams();
+  params.append('grant_type', 'authorization_code');
+  params.append('client_id', clientId);
+  params.append('code', authorizationCode);
+  params.append('code_verifier', codeVerifier);
 
-      this.logger.log('📤 Sending token exchange request...');
+  return axios.post(this.tokenEndpoint, params, {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    timeout: 10000,
+  }).then(res => res.data);
+}
 
-      const response = await axios.post(this.tokenEndpoint, params, {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        timeout: 10000,
-      });
-
-      this.logger.log('✅ Token exchange successful');
-      return response.data;
-    } catch (error) {
-      this.logger.error('❌ Token exchange failed:', {
-        status: error.response?.status,
-        message: error.response?.data?.error || error.message,
-        details: error.response?.data,
-      });
-
-      throw new BadRequestException(
-        error.response?.data?.error_description ||
-          'Invalid authorization code. Please try again.'
-      );
-    }
-  }
 
   /**
    * Fetch user info from Truecaller /userinfo endpoint

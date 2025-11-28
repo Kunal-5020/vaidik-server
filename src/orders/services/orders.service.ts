@@ -9,7 +9,7 @@ import { WalletService } from '../../payments/services/wallet.service';
 import { NotificationService } from '../../notifications/services/notification.service';
 import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
 import { EarningsService } from '../../astrologers/services/earnings.service';
-
+import { UserBlockingService } from 'src/users/services/user-blocking.service';
 
 @Injectable()
 export class OrdersService {
@@ -18,10 +18,12 @@ export class OrdersService {
   constructor(
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
+    // OrderPaymentService is now only for legacy/other order types, not chat/call conversation threads
     private orderPaymentService: OrderPaymentService,
     private walletService: WalletService,
     private notificationService: NotificationService,
     private earningsService: EarningsService,
+    private userBlockingService: UserBlockingService,
   ) {}
 
   // ===== HELPERS =====
@@ -38,138 +40,128 @@ export class OrdersService {
   }
 
   // ===== FIND OR CREATE CONVERSATION THREAD =====
-async findOrCreateConversationThread(
-  userId: string,
-  astrologerId: string,
-  astrologerName: string,
-  ratePerMinute: number
-): Promise<OrderDocument> {
-  // Generate conversation thread ID
-  const conversationThreadId = this.generateConversationThreadId(userId, astrologerId);
+  async findOrCreateConversationThread(
+    userId: string,
+    astrologerId: string,
+    astrologerName: string,
+    ratePerMinute: number
+  ): Promise<OrderDocument> {
+    // Generate conversation thread ID
+    const conversationThreadId = this.generateConversationThreadId(userId, astrologerId);
 
-  // Try to find existing conversation thread
-  let order = await this.orderModel.findOne({
-    conversationThreadId,
-    isDeleted: false
-  });
+    // Try to find existing conversation thread
+    let order = await this.orderModel.findOne({
+      conversationThreadId,
+      isDeleted: false
+    });
 
-  if (order) {
-    this.logger.log(`Found existing conversation thread: ${order.orderId}`);
+    if (order) {
+      this.logger.log(`Found existing conversation thread: ${order.orderId}`);
+      return order;
+    }
+
+    // Create new conversation thread
+    const orderId = this.generateOrderId();
+
+    order = new this.orderModel({
+      orderId,
+      conversationThreadId,
+      userId: this.toObjectId(userId),
+      astrologerId: this.toObjectId(astrologerId),
+      astrologerName,
+      type: 'conversation', // ✅ Conversation-thread order
+      ratePerMinute,
+      status: 'active',      // Conversation threads stay active across sessions
+      requestCreatedAt: new Date(),
+      isActive: true,
+      sessionHistory: [],
+      totalUsedDurationSeconds: 0,
+      totalBilledMinutes: 0,
+      totalAmount: 0,
+      totalSessions: 0,
+      totalChatSessions: 0,
+      totalCallSessions: 0,
+      messageCount: 0,
+      reviewSubmitted: false,
+      isDeleted: false,
+      // Payment summary for the whole thread (no per-session hold)
+      payment: {
+        status: 'none',
+        heldAmount: 0,
+        chargedAmount: 0,
+        refundedAmount: 0
+      }
+    });
+
+    await order.save();
+    this.logger.log(`Created new conversation thread: ${orderId} | Thread ID: ${conversationThreadId}`);
+
     return order;
   }
 
-  // Create new conversation thread
-  const orderId = this.generateOrderId();
-
-  order = new this.orderModel({
-    orderId,
-    conversationThreadId,
-    userId: this.toObjectId(userId),
-    astrologerId: this.toObjectId(astrologerId),
-    astrologerName,
-    type: 'conversation', // ✅ NEW TYPE
-    ratePerMinute,
-    status: 'active', // ✅ Conversation threads are always active
-    requestCreatedAt: new Date(),
-    isActive: true,
-    sessionHistory: [],
-    totalUsedDurationSeconds: 0,
-    totalBilledMinutes: 0,
-    totalAmount: 0,
-    totalSessions: 0,
-    totalChatSessions: 0,
-    totalCallSessions: 0,
-    messageCount: 0,
-    reviewSubmitted: false,
-    isDeleted: false,
-    payment: {
-      status: 'none', // ✅ No payment yet (per-session basis)
-      heldAmount: 0,
-      chargedAmount: 0,
-      refundedAmount: 0
-    }
-  });
-
-  await order.save();
-  this.logger.log(`Created new conversation thread: ${orderId} | Thread ID: ${conversationThreadId}`);
-
-  return order;
-}
-
-// ===== GENERATE CONVERSATION THREAD ID =====
-private generateConversationThreadId(userId: string, astrologerId: string): string {
-  // Sort IDs to ensure consistency (user_A + astro_B = same as astro_B + user_A)
-  const ids = [userId, astrologerId].sort();
-  return `THREAD_${ids[0]}_${ids[1]}`;
-}
-
-
-  // ===== CREATE ORDER (NEW SESSION WITHIN CONVERSATION THREAD) =====
-async createOrder(orderData: {
-  userId: string;
-  astrologerId: string;
-  astrologerName: string;
-  type: 'call' | 'chat';
-  callType?: 'audio' | 'video';
-  ratePerMinute: number;
-  sessionId: string;
-}): Promise<OrderDocument> {
-  
-  // ✅ STEP 1: Find or create conversation thread
-  const conversationThread = await this.findOrCreateConversationThread(
-    orderData.userId,
-    orderData.astrologerId,
-    orderData.astrologerName,
-    orderData.ratePerMinute
-  );
-
-  this.logger.log(`Using conversation thread: ${conversationThread.orderId} for new ${orderData.type} session`);
-
-  // ✅ STEP 2: Update conversation thread with current session info
-  conversationThread.currentSessionId = orderData.sessionId;
-  conversationThread.currentSessionType = orderData.type === 'call' 
-    ? (orderData.callType === 'video' ? 'video_call' : 'audio_call')
-    : 'chat';
-
-  if (orderData.type === 'call') {
-    conversationThread.callSessionId = orderData.sessionId;
-    conversationThread.callType = orderData.callType;
-  } else {
-    conversationThread.chatSessionId = orderData.sessionId;
+  // ===== GENERATE CONVERSATION THREAD ID =====
+  private generateConversationThreadId(userId: string, astrologerId: string): string {
+    // Sort IDs to ensure consistency (user_A + astro_B = same as astro_B + user_A)
+    const ids = [userId, astrologerId].sort();
+    return `THREAD_${ids[0]}_${ids[1]}`;
   }
 
-  // ✅ STEP 3: Hold payment for this session
-  await this.orderPaymentService.holdPayment(
-    conversationThread.orderId,
-    orderData.userId,
-    orderData.ratePerMinute,
-    5
-  );
-  this.logger.log(`Payment hold successful for session ${orderData.sessionId}`);
+  // ===== CREATE ORDER (NEW SESSION WITHIN CONVERSATION THREAD) =====
+  async createOrder(orderData: {
+    userId: string;
+    astrologerId: string;
+    astrologerName: string;
+    type: 'call' | 'chat';
+    callType?: 'audio' | 'video';
+    ratePerMinute: number;
+    sessionId: string;
+  }): Promise<OrderDocument> {
 
-  // ✅ STEP 4: Calculate max duration
-  const maxDurationInfo = await this.orderPaymentService.calculateMaxDuration(
-    orderData.userId,
-    orderData.ratePerMinute
-  );
+    const isBlocked = await this.userBlockingService.isAstrologerBlocked(
+      new Types.ObjectId(orderData.userId),
+      orderData.astrologerId,
+    );
 
-  conversationThread.maxDurationMinutes = maxDurationInfo.maxDurationMinutes;
-  conversationThread.payment = {
-    status: 'hold',
-    heldAmount: orderData.ratePerMinute * 5,
-    chargedAmount: 0,
-    refundedAmount: 0,
-    heldAt: new Date(),
-  };
+    if (isBlocked) {
+      throw new BadRequestException(
+        'You have blocked this astrologer. Please unblock them to proceed.'
+      );
+    }
 
-  await conversationThread.save();
-  this.logger.log(`Conversation thread updated for session ${orderData.sessionId}`);
+    // ✅ STEP 1: Find or create conversation thread
+    const conversationThread = await this.findOrCreateConversationThread(
+      orderData.userId,
+      orderData.astrologerId,
+      orderData.astrologerName,
+      orderData.ratePerMinute
+    );
 
-  // ✅ RETURN THE CONVERSATION THREAD (not a new order!)
-  return conversationThread;
-}
+    this.logger.log(`Using conversation thread: ${conversationThread.orderId} for new ${orderData.type} session`);
 
+    // ✅ STEP 2: Update conversation thread with current session info
+    conversationThread.currentSessionId = orderData.sessionId;
+    conversationThread.currentSessionType = orderData.type === 'call'
+      ? (orderData.callType === 'video' ? 'video_call' : 'audio_call')
+      : 'chat';
 
+    if (orderData.type === 'call') {
+      conversationThread.callSessionId = orderData.sessionId;
+      conversationThread.callType = orderData.callType;
+    } else {
+      conversationThread.chatSessionId = orderData.sessionId;
+    }
+
+    // ❌ STEP 3 REMOVED: No payment hold for chat/call sessions (post-paid model)
+
+    // ❌ STEP 4 REMOVED: No maxDurationMinutes calculated from holds here
+    // Max duration is computed on the session side using wallet balance at start.
+
+    await conversationThread.save();
+    this.logger.log(`Conversation thread updated for session ${orderData.sessionId}`);
+
+    // ✅ RETURN THE CONVERSATION THREAD (not a new physical order per session)
+    return conversationThread;
+  }
 
   // ===== UPDATE ORDER STATUS =====
   async updateOrderStatus(
@@ -190,7 +182,7 @@ async createOrder(orderData: {
     return order;
   }
 
-  // ===== ACCEPT ORDER =====
+  // ===== ACCEPT ORDER ===== (legacy, not used for conversation threads)
   async acceptOrder(
     orderId: string,
     astrologerId: string
@@ -200,8 +192,7 @@ async createOrder(orderData: {
       throw new BadRequestException('Order not found or already processed');
     }
 
-    // ✅ For now, mark as waiting (in real system, check if astrologer is free)
-    order.status = 'waiting'; // Will transition to ACTIVE when session starts
+    order.status = 'waiting';
     order.acceptedAt = new Date();
 
     await order.save();
@@ -215,7 +206,7 @@ async createOrder(orderData: {
     };
   }
 
-  // ===== REJECT ORDER =====
+  // ===== REJECT ORDER ===== (no wallet refund for chat/call threads)
   async rejectOrder(
     orderId: string,
     astrologerId: string,
@@ -230,12 +221,7 @@ async createOrder(orderData: {
       throw new BadRequestException('Order cannot be rejected at this stage');
     }
 
-    // ✅ Refund hold amount
-    await this.orderPaymentService.refundHold(
-      orderId,
-      order.userId.toString(),
-      reason
-    );
+    // ❌ Removed: refundHold – chat/call threads do not use pre-hold any more
 
     // Update order
     order.status = 'cancelled';
@@ -249,65 +235,59 @@ async createOrder(orderData: {
 
     return {
       success: true,
-      message: 'Order cancelled and refunded'
+      message: 'Order cancelled'
     };
   }
 
   // ===== HANDLE TIMEOUT (3 mins) =====
   async handleOrderTimeout(orderId: string): Promise<any> {
-  const order = await this.orderModel.findOne({ orderId, isDeleted: false });
-  if (!order) {
-    throw new NotFoundException('Order not found');
+    const order = await this.orderModel.findOne({ orderId, isDeleted: false });
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (order.status !== 'pending' && order.status !== 'waiting') {
+      return; // Already processed
+    }
+
+    // ❌ Removed: refundHold – chat/call threads now have no hold to refund
+
+    // Update order
+    order.status = 'cancelled';
+    order.cancellationReason = 'astrologer_no_response';
+    order.cancelledBy = 'system';
+    order.cancelledAt = new Date();
+
+    await order.save();
+
+    this.logger.log(`Order timeout: ${orderId}`);
+
+    // 🔔 Notify user about timeout (no charge made)
+    this.notificationService.sendNotification({
+      recipientId: order.userId.toString(),
+      recipientModel: 'User',
+      type: order.type === 'call' ? 'call_ended' : 'chat_message',
+      title: order.type === 'call'
+        ? 'Call request timed out'
+        : 'Chat request timed out',
+      message: 'Astrologer did not respond in time. No amount has been charged to your wallet.',
+      data: {
+        mode: order.type, // 'call' | 'chat' (legacy; for conversation threads treat accordingly)
+        orderId: order.orderId,
+        sessionId: order.type === 'call' ? order.callSessionId : order.chatSessionId,
+        astrologerId: order.astrologerId.toString(),
+        step: 'astrologer_no_response',
+      },
+      priority: 'medium',
+    }).catch(err => this.logger.error(`Timeout notification error: ${err.message}`));
+
+    return {
+      success: true,
+      message: 'Order cancelled due to timeout'
+    };
   }
 
-  if (order.status !== 'pending' && order.status !== 'waiting') {
-    return; // Already processed
-  }
-
-  // ✅ Refund hold amount
-  await this.orderPaymentService.refundHold(
-    orderId,
-    order.userId.toString(),
-    'astrologer_no_response'
-  );
-
-  // Update order
-  order.status = 'cancelled';
-  order.cancellationReason = 'astrologer_no_response';
-  order.cancelledBy = 'system';
-  order.cancelledAt = new Date();
-
-  await order.save();
-
-  this.logger.log(`Order timeout: ${orderId}`);
-
-  // 🔔 Notify user about timeout and refund (fire-and-forget)
-  this.notificationService.sendNotification({
-    recipientId: order.userId.toString(),
-    recipientModel: 'User',
-    type: order.type === 'call' ? 'call_ended' : 'chat_message',
-    title: order.type === 'call'
-      ? 'Call request timed out'
-      : 'Chat request timed out',
-    message: 'Astrologer did not respond in time. The held amount has been refunded to your wallet.',
-    data: {
-      mode: order.type,                // 'call' | 'chat'
-      orderId: order.orderId,
-      sessionId: order.type === 'call' ? order.callSessionId : order.chatSessionId,
-      astrologerId: order.astrologerId.toString(),
-      step: 'astrologer_no_response',
-    },
-    priority: 'medium',
-  }).catch(err => this.logger.error(`Timeout notification error: ${err.message}`));
-
-  return {
-    success: true,
-    message: 'Order cancelled due to timeout'
-  };
-}
-
-
-  // ===== START SESSION (Transition to ACTIVE) =====
+  // ===== START SESSION (legacy; not used by new chat/call flow) =====
   async startSession(
     orderId: string,
     sessionId: string
@@ -317,12 +297,10 @@ async createOrder(orderData: {
       throw new BadRequestException('Order not in valid state to start session');
     }
 
-    // ✅ Verify payment is still on hold
-    if (order.payment.status !== 'hold') {
-      throw new BadRequestException('Payment not in hold status');
-    }
+    // ❌ Removed: check for payment.status === 'hold'
+    // In the new model, chat/call sessions manage timers and wallet themselves.
 
-    order.status = 'active'; // ✅ NOW charging window is open
+    order.status = 'active';
     order.startedAt = new Date();
 
     await order.save();
@@ -331,247 +309,244 @@ async createOrder(orderData: {
 
     return {
       success: true,
-      message: 'Session started - charging active',
-      maxDurationMinutes: order.maxDurationMinutes
+      message: 'Session started',
+      maxDurationMinutes: order.maxDurationMinutes || 0
     };
   }
 
   // ===== GET CONVERSATION STATISTICS =====
-async getConversationStats(orderId: string, userId: string): Promise<any> {
-  const order = await this.orderModel.findOne({
-    orderId,
-    userId: this.toObjectId(userId),
-    isDeleted: false
-  });
+  async getConversationStats(orderId: string, userId: string): Promise<any> {
+    const order = await this.orderModel.findOne({
+      orderId,
+      userId: this.toObjectId(userId),
+      isDeleted: false
+    });
 
-  if (!order) {
-    throw new NotFoundException('Conversation not found');
+    if (!order) {
+      throw new NotFoundException('Conversation not found');
+    }
+
+    return {
+      success: true,
+      data: {
+        orderId: order.orderId,
+        conversationThreadId: order.conversationThreadId,
+        totalSessions: order.totalSessions,
+        totalChatSessions: order.totalChatSessions,
+        totalCallSessions: order.totalCallSessions,
+        totalMessages: order.messageCount,
+        totalSpent: order.totalAmount,
+        totalDuration: order.totalUsedDurationSeconds,
+        totalBilledMinutes: order.totalBilledMinutes,
+        lastInteractionAt: order.lastInteractionAt,
+        createdAt: order.createdAt,
+        sessionHistory: order.sessionHistory.map(session => ({
+          sessionId: session.sessionId,
+          type: session.sessionType,
+          startedAt: session.startedAt,
+          endedAt: session.endedAt,
+          duration: session.durationSeconds,
+          billedMinutes: session.billedMinutes,
+          amount: session.chargedAmount,
+          hasRecording: !!session.recordingUrl,
+          recordingUrl: session.recordingUrl,
+          recordingType: session.recordingType
+        }))
+      }
+    };
   }
 
-  return {
-    success: true,
-    data: {
-      orderId: order.orderId,
-      conversationThreadId: order.conversationThreadId,
-      totalSessions: order.totalSessions,
-      totalChatSessions: order.totalChatSessions,
-      totalCallSessions: order.totalCallSessions,
-      totalMessages: order.messageCount,
-      totalSpent: order.totalAmount,
-      totalDuration: order.totalUsedDurationSeconds,
-      totalBilledMinutes: order.totalBilledMinutes,
-      lastInteractionAt: order.lastInteractionAt,
-      createdAt: order.createdAt,
-      sessionHistory: order.sessionHistory.map(session => ({
-        sessionId: session.sessionId,
-        type: session.sessionType,
-        startedAt: session.startedAt,
-        endedAt: session.endedAt,
-        duration: session.durationSeconds,
-        billedMinutes: session.billedMinutes,
-        amount: session.chargedAmount,
-        hasRecording: !!session.recordingUrl,
-        recordingUrl: session.recordingUrl,
-        recordingType: session.recordingType
-      }))
-    }
-  };
-}
+  // ===== GET ALL USER CONVERSATIONS =====
+  async getUserConversations(
+    userId: string,
+    page: number = 1,
+    limit: number = 20
+  ): Promise<any> {
+    const skip = (page - 1) * limit;
 
-// ===== GET ALL USER CONVERSATIONS =====
-async getUserConversations(
-  userId: string,
-  page: number = 1,
-  limit: number = 20
-): Promise<any> {
-  const skip = (page - 1) * limit;
-
-  const [conversations, total] = await Promise.all([
-    this.orderModel
-      .find({
+    const [conversations, total] = await Promise.all([
+      this.orderModel
+        .find({
+          userId: this.toObjectId(userId),
+          type: 'conversation',
+          isDeleted: false
+        })
+        .populate('astrologerId', 'name profilePicture isOnline experienceYears ratings')
+        .sort({ lastInteractionAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.orderModel.countDocuments({
         userId: this.toObjectId(userId),
         type: 'conversation',
         isDeleted: false
       })
-      .populate('astrologerId', 'name profilePicture isOnline experienceYears ratings')
-      .sort({ lastInteractionAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean(),
-    this.orderModel.countDocuments({
-      userId: this.toObjectId(userId),
-      type: 'conversation',
-      isDeleted: false
-    })
-  ]);
+    ]);
 
-  return {
-    success: true,
-    data: {
-      conversations: conversations.map(conv => ({
-        orderId: conv.orderId,
-        conversationThreadId: conv.conversationThreadId,
-        astrologer: conv.astrologerId,
-        totalSessions: conv.totalSessions,
-        totalMessages: conv.messageCount,
-        totalSpent: conv.totalAmount,
-        lastInteractionAt: conv.lastInteractionAt,
-        createdAt: conv.createdAt
-      })),
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    }
-  };
-}
-
-
-  // ===== COMPLETE SESSION & CHARGE =====
-async completeSession(
-  orderId: string,
-  sessionData: {
-    sessionId: string;
-    sessionType: 'chat' | 'audio_call' | 'video_call';
-    actualDurationSeconds: number;
-    recordingUrl?: string;
-    recordingS3Key?: string;
-    recordingDuration?: number;
-  }
-): Promise<any> {
-  const order = await this.orderModel.findOne({ orderId, isDeleted: false });
-  if (!order) {
-    throw new NotFoundException('Order not found');
-  }
-
-  // ✅ ONLY process if there was actual duration (session was active)
-  if (sessionData.actualDurationSeconds === 0) {
-    this.logger.warn(`Session ${sessionData.sessionId} had 0 duration, skipping billing`);
     return {
       success: true,
-      message: 'Session ended without activity',
-      chargeResult: { billedMinutes: 0, chargedAmount: 0, refundedAmount: 0 }
+      data: {
+        conversations: conversations.map(conv => ({
+          orderId: conv.orderId,
+          conversationThreadId: conv.conversationThreadId,
+          astrologer: conv.astrologerId,
+          totalSessions: conv.totalSessions,
+          totalMessages: conv.messageCount,
+          totalSpent: conv.totalAmount,
+          lastInteractionAt: conv.lastInteractionAt,
+          createdAt: conv.createdAt
+        })),
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      }
     };
   }
 
-  // ✅ Charge from hold
-  const chargeResult = await this.orderPaymentService.chargeFromHold(
-    orderId,
-    order.userId.toString(),
-    sessionData.actualDurationSeconds,
-    order.ratePerMinute
-  );
+  // ===== COMPLETE SESSION & AGGREGATE (NO CHARGE HERE) =====
+  async completeSession(
+    orderId: string,
+    sessionData: {
+      sessionId: string;
+      sessionType: 'chat' | 'audio_call' | 'video_call';
+      actualDurationSeconds: number;
+      billedMinutes: number;
+      chargedAmount: number;
+      recordingUrl?: string;
+      recordingS3Key?: string;
+      recordingDuration?: number;
+    }
+  ): Promise<any> {
+    const order = await this.orderModel.findOne({ orderId, isDeleted: false });
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
 
-  // ✅ Create session record
-  const sessionRecord = {
-    sessionId: sessionData.sessionId,
-    sessionType: sessionData.sessionType,
-    startedAt: order.startedAt || new Date(),
-    endedAt: new Date(),
-    durationSeconds: sessionData.actualDurationSeconds,
-    billedMinutes: chargeResult.billedMinutes,
-    chargedAmount: chargeResult.chargedAmount,
-    recordingUrl: sessionData.recordingUrl,
-    recordingType: sessionData.recordingUrl 
-      ? (sessionData.sessionType === 'audio_call' ? 'voice_note' : 'video')
-      : undefined,
-    status: 'completed'
-  };
+    // ✅ ONLY aggregate if there was actual duration (session was active)
+    if (sessionData.actualDurationSeconds === 0) {
+      this.logger.warn(`Session ${sessionData.sessionId} had 0 duration, skipping aggregation`);
+      return {
+        success: true,
+        message: 'Session ended without activity',
+        chargeResult: { billedMinutes: 0, chargedAmount: 0, refundedAmount: 0 }
+      };
+    }
 
-  // ✅ Add to session history
-  order.sessionHistory.push(sessionRecord);
+    const billedMinutes = sessionData.billedMinutes;
+    const chargedAmount = sessionData.chargedAmount;
 
-  // ✅ Update cumulative stats
-  order.totalUsedDurationSeconds += sessionData.actualDurationSeconds;
-  order.totalBilledMinutes += chargeResult.billedMinutes;
-  order.totalAmount += chargeResult.chargedAmount;
+    // ✅ Create session record (using already charged amounts from session)
+    const sessionRecord = {
+      sessionId: sessionData.sessionId,
+      sessionType: sessionData.sessionType,
+      startedAt: order.startedAt || new Date(),
+      endedAt: new Date(),
+      durationSeconds: sessionData.actualDurationSeconds,
+      billedMinutes,
+      chargedAmount,
+      recordingUrl: sessionData.recordingUrl,
+      recordingType: sessionData.recordingUrl
+        ? (sessionData.sessionType === 'audio_call' ? 'voice_note' : 'video')
+        : undefined,
+      status: 'completed'
+    };
 
-  // ✅ Update conversation statistics
-  order.totalSessions = order.sessionHistory.length;
-  order.totalChatSessions = order.sessionHistory.filter(s => s.sessionType === 'chat').length;
-  order.totalCallSessions = order.sessionHistory.filter(s => 
-    s.sessionType === 'audio_call' || s.sessionType === 'video_call'
-  ).length;
+    // ✅ Add to session history
+    order.sessionHistory.push(sessionRecord);
 
-  // ✅ Update last interaction timestamp
-  order.lastInteractionAt = new Date();
-  order.lastSessionEndTime = new Date();
-  order.endedAt = new Date();
+    // ✅ Update cumulative stats
+    order.totalUsedDurationSeconds += sessionData.actualDurationSeconds;
+    order.totalBilledMinutes += billedMinutes;
+    order.totalAmount += chargedAmount;
 
-  // ✅ Clear current session reference (session completed)
-  order.currentSessionId = undefined;
-  order.currentSessionType = 'none';
+    // ✅ Update conversation statistics
+    order.totalSessions = order.sessionHistory.length;
+    order.totalChatSessions = order.sessionHistory.filter(s => s.sessionType === 'chat').length;
+    order.totalCallSessions = order.sessionHistory.filter(s =>
+      s.sessionType === 'audio_call' || s.sessionType === 'video_call'
+    ).length;
 
-  // ✅ Keep conversation thread active for future sessions
-  order.isActive = true;
-  order.status = 'active'; // Conversation thread stays active
+    // ✅ Update last interaction timestamp
+    order.lastInteractionAt = new Date();
+    order.lastSessionEndTime = new Date();
+    order.endedAt = new Date();
 
-  // ===== UPDATE ASTROLOGER EARNINGS =====
-  try {
-    // Load astrologer commission rate
-    const astrologer = await this.astrologerModel
-      .findById(order.astrologerId)
-      .select('earnings.platformCommission')
-      .lean();
+    // ✅ Clear current session reference (session completed)
+    order.currentSessionId = undefined;
+    order.currentSessionType = 'none';
 
-    if (astrologer) {
-      const commissionRate = astrologer.earnings?.platformCommission ?? 40; // default 40% platform
-      const userSpend = chargeResult.chargedAmount || 0;
-      const platformCommission = (userSpend * commissionRate) / 100;
-      const astrologerEarning = userSpend - platformCommission;
+    // ✅ Keep conversation thread active for future sessions
+    order.isActive = true;
+    order.status = 'active';
 
-      if (astrologerEarning > 0) {
-        const logicalSessionType =
-          sessionData.sessionType === 'chat' ? 'chat' : 'call';
+    // ===== UPDATE ASTROLOGER EARNINGS =====
+    try {
+      const astrologer = await this.astrologerModel
+        .findById(order.astrologerId)
+        .select('earnings.platformCommission')
+        .lean();
 
-        // This will increment earnings.totalEarned & withdrawableAmount
-        await this.earningsService.updateEarnings(
-          order.astrologerId.toString(),
-          userSpend,
-          logicalSessionType,
-        );
+      if (astrologer) {
+        const commissionRate = astrologer.earnings?.platformCommission ?? 40; // default 40% platform
+        const userSpend = chargedAmount || 0;
+        const platformCommission = (userSpend * commissionRate) / 100;
+        const astrologerEarning = userSpend - platformCommission;
 
-        this.logger.log(
-          `Earnings updated for astrologer ${order.astrologerId}: userSpend=₹${userSpend}, ` +
-          `commissionRate=${commissionRate}%, earning≈₹${astrologerEarning.toFixed(2)}`,
+        if (astrologerEarning > 0) {
+          const logicalSessionType =
+            sessionData.sessionType === 'chat' ? 'chat' : 'call';
+
+          await this.earningsService.updateEarnings(
+            order.astrologerId.toString(),
+            userSpend,
+            logicalSessionType,
+          );
+
+          this.logger.log(
+            `Earnings updated for astrologer ${order.astrologerId}: userSpend=₹${userSpend}, ` +
+            `commissionRate=${commissionRate}%, earning≈₹${astrologerEarning.toFixed(2)}`,
+          );
+        }
+      } else {
+        this.logger.warn(
+          `Astrologer not found for earnings update: ${order.astrologerId.toString()}`,
         );
       }
-    } else {
-      this.logger.warn(
-        `Astrologer not found for earnings update: ${order.astrologerId.toString()}`,
+    } catch (err: any) {
+      this.logger.error(
+        `Failed to update astrologer earnings for session ${sessionData.sessionId}: ${err.message}`,
       );
     }
-  } catch (err: any) {
-    this.logger.error(
-      `Failed to update astrologer earnings for session ${sessionData.sessionId}: ${err.message}`,
+
+    await order.save();
+
+    this.logger.log(
+      `✅ Session completed: ${sessionData.sessionId} | Type: ${sessionData.sessionType} | ` +
+      `Billed: ${billedMinutes}m | Charged: ₹${chargedAmount} | ` +
+      `Total sessions: ${order.totalSessions} | Total spent: ₹${order.totalAmount}`
     );
+
+    return {
+      success: true,
+      message: 'Session completed and aggregated',
+      chargeResult: {
+        billedMinutes,
+        chargedAmount,
+        refundedAmount: 0
+      },
+      sessionHistory: order.sessionHistory,
+      conversationStats: {
+        totalSessions: order.totalSessions,
+        totalChatSessions: order.totalChatSessions,
+        totalCallSessions: order.totalCallSessions,
+        totalSpent: order.totalAmount,
+        totalDuration: order.totalUsedDurationSeconds
+      }
+    };
   }
-
-  await order.save();
-
-  this.logger.log(
-    `✅ Session completed: ${sessionData.sessionId} | Type: ${sessionData.sessionType} | ` +
-    `Billed: ${chargeResult.billedMinutes}m | Charged: ₹${chargeResult.chargedAmount} | ` +
-    `Total sessions: ${order.totalSessions} | Total spent: ₹${order.totalAmount}`
-  );
-
-  return {
-    success: true,
-    message: 'Session completed and charged',
-    chargeResult,
-    sessionHistory: order.sessionHistory,
-    conversationStats: {
-      totalSessions: order.totalSessions,
-      totalChatSessions: order.totalChatSessions,
-      totalCallSessions: order.totalCallSessions,
-      totalSpent: order.totalAmount,
-      totalDuration: order.totalUsedDurationSeconds
-    }
-  };
-}
-
 
   // ===== FIND ACTIVE ORDER WITH ASTROLOGER =====
   async findActiveOrderWithAstrologer(
@@ -586,7 +561,7 @@ async completeSession(
     });
   }
 
-  // ===== CONTINUE CONSULTATION =====
+  // ===== CONTINUE CONSULTATION (no holds, just wallet-based limit) =====
   async continueConsultation(
     orderId: string,
     userId: string
@@ -602,39 +577,29 @@ async completeSession(
       throw new NotFoundException('Order not found or not available for continuation');
     }
 
-    // ✅ Recalculate max duration based on current wallet
-    const maxDurationInfo = await this.orderPaymentService.calculateMaxDuration(
-      userId,
-      order.ratePerMinute
-    );
+    // ✅ Recalculate max duration based on current wallet (post-paid model)
+    const walletBalance = await this.walletService.getBalance(userId);
+    const maxDurationMinutes = Math.floor(walletBalance / order.ratePerMinute);
 
-    if (maxDurationInfo.maxDurationMinutes < 5) {
+    if (maxDurationMinutes < 5) {
       throw new BadRequestException(
         `Insufficient balance. Need at least ₹${order.ratePerMinute * 5} to continue.`
       );
     }
 
-    // ✅ HOLD new payment for continuation
-    await this.orderPaymentService.holdPayment(
-      orderId,
-      userId,
-      order.ratePerMinute,
-      maxDurationInfo.maxDurationMinutes
-    );
-
-    // Update order for continuation
-    order.maxDurationMinutes = maxDurationInfo.maxDurationMinutes;
+    // Update order for continuation (no hold, just metadata)
+    order.maxDurationMinutes = maxDurationMinutes;
     order.status = 'waiting'; // Back to waiting for acceptance
 
     await order.save();
 
-    this.logger.log(`Order continued: ${orderId} | New max duration: ${maxDurationInfo.maxDurationMinutes} mins`);
+    this.logger.log(`Order continued: ${orderId} | New max duration: ${maxDurationMinutes} mins`);
 
     return {
       success: true,
       message: 'Consultation ready to continue',
       orderId,
-      maxDurationMinutes: maxDurationInfo.maxDurationMinutes,
+      maxDurationMinutes,
       previousSessions: order.sessionHistory.length,
       totalPreviouslySpent: order.totalAmount,
       type: order.type,
@@ -660,14 +625,7 @@ async completeSession(
       throw new NotFoundException('Order not found or cannot be cancelled at this stage');
     }
 
-    // ✅ Refund hold if payment is still on hold
-    if (order.payment.status === 'hold') {
-      await this.orderPaymentService.refundHold(
-        orderId,
-        userId,
-        `Cancellation: ${reason}`
-      );
-    }
+    // ❌ Removed: refundHold – no more holds for chat/call conversation threads
 
     order.status = 'cancelled';
     order.cancellationReason = reason;

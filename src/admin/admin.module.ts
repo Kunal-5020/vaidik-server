@@ -1,112 +1,69 @@
-import { Module, forwardRef } from '@nestjs/common'
+// src/admin/admin.module.ts
+import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { JwtModule } from '@nestjs/jwt';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 
-// Schemas
-import { Admin, AdminSchema } from './schemas/admin.schema';
-import { AdminRole, AdminRoleSchema } from './schemas/admin-role.schema';
-import { AdminActivityLog, AdminActivityLogSchema } from './schemas/admin-activity-log.schema';
+// Core Schemas
+import { Admin, AdminSchema } from './core/schemas/admin.schema';
+import { AdminRole, AdminRoleSchema } from './core/schemas/admin-role.schema';
 
-// Import other module schemas
-import { User, UserSchema } from '../users/schemas/user.schema';
-import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema';
-import { Order, OrderSchema } from '../orders/schemas/orders.schema';
-import { WalletTransaction, WalletTransactionSchema } from '../payments/schemas/wallet-transaction.schema';
-import { PayoutRequest, PayoutRequestSchema } from '../payments/schemas/payout-request.schema';
-import { GiftCard, GiftCardSchema } from '../payments/schemas/gift-card.schema';
-import { Registration, RegistrationSchema } from '../registration/schemas/registration.schema';
-import { ShopifyOrderEntity, ShopifyOrderSchema } from '../shopify/schemas/shopify-order.schema';
-import { Remedy, RemedySchema } from '../remedies/schemas/remedies.schema';
+// Core Guards & Providers
+import { AdminAuthGuard } from './core/guards/admin-auth.guard';
+import { PermissionsGuard } from './core/guards/permissions.guard';
 
-// Controllers
-import { AdminAuthController } from './controllers/admin-auth.controller';
-import { AdminUsersController } from './controllers/admin-users.controller';
-import { AdminRegistrationController } from './controllers/admin-registration.service';
-import { AdminAstrologersController } from './controllers/admin-astrologers.controller';
-import { AdminOrdersController } from './controllers/admin-orders.controller';
-import { AdminPaymentsController } from './controllers/admin-payments.controller';
-import { AdminAnalyticsController } from './controllers/admin-analytics.controller';
-import { AdminNotificationController } from './controllers/admin-notification.controller';
-import { AdminController } from './controllers/admin-remedies.controller';
+// Feature Modules
+import { AuthModule } from './features/auth/auth.module';
+import { ActivityLogsModule } from './features/activity-logs/activity-logs.module';
+import { UserManagementModule } from './features/user-management/user-management.module';
+import { AstrologerManagementModule } from './features/astrologer-management/astrologer-management.module';
+import { OrdersModule } from './features/orders/orders.module';
+import { AdminPaymentsFeatureModule } from './features/payments/payments.module';
+import { AnalyticsModule } from './features/analytics/analytics.module';
+import { AdminNotificationsModule } from './features/notifications/notifications.module';
+import { MonitoringModule } from './features/monitoring/monitoring.module';
+import { AdminReportsModule } from './features/reports/admin-reports.module';
 
-// Services
-import { AdminAuthService } from './services/admin-auth.service';
-import { AdminUsersService } from './services/admin-users.service';
-import { AdminAstrologersService } from './services/admin-astrologers.service';
-import { AdminOrdersService } from './services/admin-orders.service';
-import { AdminPaymentsService } from './services/admin-payments.service';
-import { AdminAnalyticsService } from './services/admin-analytics.service';
-import { AdminActivityLogService } from './services/admin-activity-log.service';
-import { AdminRegistrationService } from './services/admin-registration.service';
-import { NotificationSchedulerService } from './services/notification-scheduler.service';
-import { AdminMonitoringService } from './services/admin-monitoring.service';
-
-// Import other modules
-import { PaymentsModule } from '../payments/payments.module';
-
-import { AdminManagementController } from './controllers/admin-management.controller';
-import { AdminActivityLogsController } from './controllers/admin-activity-logs.controller';
-import { AdminAuthGuard } from './guards/admin-auth.guard';
-import { AdminNotificationGateway } from './gateways/admin-notification.gateway';
+// Admin Management Controller (for managing admins)
+import { AdminManagementController } from './features/admin-management/controllers/admin-management.controller';
+import { AdminManagementService } from './features/admin-management/services/admin-management.service';
 
 @Module({
   imports: [
     ConfigModule,
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
-        signOptions: {
-          expiresIn: configService.get<string>('JWT_EXPIRES_IN') || '7d',
-        },
-      }),
-      inject: [ConfigService],
-    }),
+    
+    // Core schemas available globally within admin module
     MongooseModule.forFeature([
-      { name: Registration.name, schema: RegistrationSchema },
       { name: Admin.name, schema: AdminSchema },
       { name: AdminRole.name, schema: AdminRoleSchema },
-      { name: AdminActivityLog.name, schema: AdminActivityLogSchema },
-      { name: User.name, schema: UserSchema },
-      { name: Astrologer.name, schema: AstrologerSchema },
-      { name: Order.name, schema: OrderSchema },
-      { name: WalletTransaction.name, schema: WalletTransactionSchema },
-      { name: PayoutRequest.name, schema: PayoutRequestSchema },
-      { name: GiftCard.name, schema: GiftCardSchema },
-      { name: ShopifyOrderEntity.name, schema: ShopifyOrderSchema },
-      { name: Remedy.name, schema: RemedySchema },
     ]),
-    PaymentsModule,
-    forwardRef(() => require('../notifications/notifications.module').NotificationsModule),
+    
+    // Feature modules
+    AuthModule,
+    ActivityLogsModule,
+    UserManagementModule,
+    AstrologerManagementModule,
+    OrdersModule,
+    AdminPaymentsFeatureModule,
+    AnalyticsModule,
+    AdminNotificationsModule,
+    MonitoringModule,
+    AdminReportsModule,
   ],
   controllers: [
-    AdminAuthController,
-    AdminUsersController,
-    AdminAstrologersController,
-    AdminOrdersController,
-    AdminPaymentsController,
-    AdminAnalyticsController,
     AdminManagementController,
-    AdminActivityLogsController,
-    AdminRegistrationController,
-    AdminNotificationController,
-    AdminController,
   ],
   providers: [
-    AdminAuthService,
-    AdminUsersService,
-    AdminAstrologersService,
-    AdminOrdersService,
-    AdminPaymentsService,
-    AdminAnalyticsService,
-    AdminActivityLogService,
-    AdminRegistrationService,
     AdminAuthGuard,
-    NotificationSchedulerService,
-    AdminNotificationGateway,
-    AdminMonitoringService,
+    PermissionsGuard,
+    AdminManagementService,
   ],
-  exports: [AdminAuthService, AdminActivityLogService, AdminAuthGuard, JwtModule, NotificationSchedulerService, MongooseModule, AdminNotificationGateway,],
+  exports: [
+    AuthModule,
+    ActivityLogsModule,
+    AdminNotificationsModule,
+    MongooseModule,
+    AdminAuthGuard,
+    PermissionsGuard,
+  ],
 })
 export class AdminModule {}

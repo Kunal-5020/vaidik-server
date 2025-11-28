@@ -7,57 +7,48 @@ import {
   HttpStatus,
   HttpException,
   UseInterceptors,
-  ClassSerializerInterceptor
+  ClassSerializerInterceptor,
+  UseGuards,
+  Req,
 } from '@nestjs/common';
 import { AstrologersService } from '../services/astrologers.service';
 import { SearchAstrologersDto } from '../dto/search-astrologers.dto';
+import { UserBlockingService } from '../../users/services/user-blocking.service';
+import { OptionalJwtAuthGuard } from '../../auth/guards/optional-jwt-auth.guard';
 
 @Controller('astrologers')
 @UseInterceptors(ClassSerializerInterceptor)
 export class AstrologersController {
   constructor(
-    private readonly astrologersService: AstrologersService) {}
+    private readonly astrologersService: AstrologersService,
+    private readonly userBlockingService: UserBlockingService,
+  ) {}
 
   /**
    * Search and filter astrologers with advanced options
    * GET /astrologers/search
-   * 
-   * Query params:
-   * - search: text search in name/bio
-   * - skills: array of specializations
-   * - languages: array of languages
-   * - genders: array of genders
-   * - countries: array of countries
-   * - topAstrologers: array of tier filters
-   * - sortBy: sort option (popularity, rating, price, etc)
-   * - minPrice, maxPrice: price range
-   * - minRating: minimum rating filter
-   * - minExperience, maxExperience: experience range
-   * - isOnline: filter online astrologers
-   * - isLive: filter live streaming astrologers
-   * - page, limit: pagination
    */
   @Get('search')
-async searchAstrologers(
-  @Query(new ValidationPipe({ 
-    transform: true, 
-    whitelist: true,
-    forbidNonWhitelisted: false,
-    transformOptions: { enableImplicitConversion: true } // ✅ Add this
-  })) 
-  searchDto: SearchAstrologersDto
-) {
-  console.log('📥 Received search params:', searchDto);
-  return this.astrologersService.searchAstrologers(searchDto);
-}
-
+  @UseGuards(OptionalJwtAuthGuard) // ✅ Use existing JWT strategy
+  async searchAstrologers(
+    @Query(new ValidationPipe({ 
+      transform: true, 
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transformOptions: { enableImplicitConversion: true }
+    })) 
+    searchDto: SearchAstrologersDto,
+    @Req() req: any
+  ) {
+    // ✅ Get userId from validated user object (set by JWT strategy)
+    const userId = req.user?.userId || req.user?.id;
+    
+    return this.astrologersService.searchAstrologers(searchDto, userId);
+  }
 
   /**
-   * Get available filter options with counts
+   * Get filter options
    * GET /astrologers/filter-options
-   * 
-   * Returns all available specializations, languages, etc. with counts
-   * Useful for building dynamic filter UI
    */
   @Get('filter-options')
   async getFilterOptions() {
@@ -65,35 +56,37 @@ async searchAstrologers(
   }
 
   /**
-   * Get all approved astrologers (legacy endpoint - consider deprecating)
+   * Get all astrologers (legacy)
    * GET /astrologers
-   * Use /astrologers/search instead for better filtering
    */
   @Get()
+  @UseGuards(OptionalJwtAuthGuard)
   async getAstrologers(
-    @Query(new ValidationPipe({ 
-      transform: true, 
-      whitelist: true 
-    })) 
-    searchDto: SearchAstrologersDto
+    @Query(new ValidationPipe({ transform: true, whitelist: true })) 
+    searchDto: SearchAstrologersDto,
+    @Req() req: any
   ) {
-    // Redirect to search with default filters
-    return this.astrologersService.searchAstrologers(searchDto);
+    const userId = req.user?.userId || req.user?.id;
+    return this.astrologersService.searchAstrologers(searchDto, userId);
   }
 
   /**
-   * Get featured astrologers (high rated, popular)
+   * Get featured astrologers
    * GET /astrologers/featured
    */
   @Get('featured')
+  @UseGuards(OptionalJwtAuthGuard)
   async getFeaturedAstrologers(
-    @Query('limit') limit?: number
+    @Query('limit') limit?: number,
+    @Req() req?: any
   ) {
     const parsedLimit = limit ? Number(limit) : 10;
     if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
       throw new HttpException('Limit must be between 1 and 50', HttpStatus.BAD_REQUEST);
     }
-    return this.astrologersService.getFeaturedAstrologers(parsedLimit);
+    
+    const userId = req.user?.userId || req.user?.id;
+    return this.astrologersService.getFeaturedAstrologers(parsedLimit, userId);
   }
 
   /**
@@ -101,101 +94,135 @@ async searchAstrologers(
    * GET /astrologers/top-rated
    */
   @Get('top-rated')
+  @UseGuards(OptionalJwtAuthGuard)
   async getTopRatedAstrologers(
-    @Query('limit') limit?: number
+    @Query('limit') limit?: number,
+    @Req() req?: any
   ) {
     const parsedLimit = limit ? Number(limit) : 10;
     if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
       throw new HttpException('Limit must be between 1 and 50', HttpStatus.BAD_REQUEST);
     }
-    return this.astrologersService.getTopRatedAstrologers(parsedLimit);
+    
+    const userId = req.user?.userId || req.user?.id;
+    return this.astrologersService.getTopRatedAstrologers(parsedLimit, userId);
   }
 
   /**
-   * Get all currently online astrologers
+   * Get online astrologers
    * GET /astrologers/online
    */
   @Get('online')
+  @UseGuards(OptionalJwtAuthGuard)
   async getOnlineAstrologers(
-    @Query('limit') limit?: number
+    @Query('limit') limit?: number,
+    @Req() req?: any
   ) {
     const parsedLimit = limit ? Number(limit) : 20;
     if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
       throw new HttpException('Limit must be between 1 and 100', HttpStatus.BAD_REQUEST);
     }
-    return this.astrologersService.getOnlineAstrologers(parsedLimit);
+    
+    const userId = req.user?.userId || req.user?.id;
+    return this.astrologersService.getOnlineAstrologers(parsedLimit, userId);
   }
 
   /**
-   * Get all live streaming astrologers (for users to watch)
+   * Get live streaming astrologers
    * GET /astrologers/live
    */
   @Get('live')
+  @UseGuards(OptionalJwtAuthGuard)
   async getLiveAstrologers(
-    @Query('limit') limit?: number
+    @Query('limit') limit?: number,
+    @Req() req?: any
   ) {
     const parsedLimit = limit ? Number(limit) : 20;
     if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
       throw new HttpException('Limit must be between 1 and 100', HttpStatus.BAD_REQUEST);
     }
-    return this.astrologersService.getLiveAstrologers(parsedLimit);
+    
+    const userId = req.user?.userId || req.user?.id;
+    return this.astrologersService.getLiveAstrologers(parsedLimit, userId);
   }
 
   /**
-   * Get astrologers by specific specialization
+   * Get astrologers by specialization
    * GET /astrologers/specialization/:specialization
    */
   @Get('specialization/:specialization')
+  @UseGuards(OptionalJwtAuthGuard)
   async getBySpecialization(
     @Param('specialization') specialization: string,
-    @Query('limit') limit?: number
+    @Query('limit') limit?: number,
+    @Req() req?: any
   ) {
     const parsedLimit = limit ? Number(limit) : 10;
     if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
       throw new HttpException('Limit must be between 1 and 50', HttpStatus.BAD_REQUEST);
     }
+    
+    const userId = req.user?.userId || req.user?.id;
     return this.astrologersService.getAstrologersBySpecialization(
       specialization.toLowerCase(),
-      parsedLimit
+      parsedLimit,
+      userId
     );
   }
 
   /**
-   * Get random astrologers (for discovery/recommendations)
+   * Get random astrologers
    * GET /astrologers/random
    */
   @Get('random')
+  @UseGuards(OptionalJwtAuthGuard)
   async getRandomAstrologers(
-    @Query('limit') limit?: number
+    @Query('limit') limit?: number,
+    @Req() req?: any
   ) {
     const parsedLimit = limit ? Number(limit) : 5;
     if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 20) {
       throw new HttpException('Limit must be between 1 and 20', HttpStatus.BAD_REQUEST);
     }
-    return this.astrologersService.getRandomAstrologers(parsedLimit);
+    
+    const userId = req.user?.userId || req.user?.id;
+    return this.astrologersService.getRandomAstrologers(parsedLimit, userId);
   }
 
   /**
-   * Get single astrologer details (public profile)
+   * Get single astrologer details
    * GET /astrologers/:astrologerId
-   * Note: This should be last to avoid route conflicts
    */
   @Get(':astrologerId')
+  @UseGuards(OptionalJwtAuthGuard)
   async getAstrologerDetails(
-    @Param('astrologerId') astrologerId: string
+    @Param('astrologerId') astrologerId: string,
+    @Req() req?: any
   ) {
     if (!astrologerId || astrologerId.trim() === '') {
       throw new HttpException('Astrologer ID is required', HttpStatus.BAD_REQUEST);
     }
     
+    const userId = req.user?.userId || req.user?.id;
+    
+    // ✅ Check if user has blocked this astrologer
+    if (userId) {
+      const isBlocked = await this.userBlockingService.isAstrologerBlocked(
+        userId as any,
+        astrologerId
+      );
+      
+      if (isBlocked) {
+        throw new HttpException('Astrologer not found', HttpStatus.NOT_FOUND);
+      }
+    }
+    
     const astrologer = await this.astrologersService.getAstrologerDetails(astrologerId);
     
     if (!astrologer) {
-      console.warn(`⚠️ Astrologer with ID ${astrologerId} not found.`);
       throw new HttpException('Astrologer not found', HttpStatus.NOT_FOUND);
     }
-    console.log(`Astrologer with ID ${astrologerId} is found.`);
+    
     return astrologer;
   }
-
 }

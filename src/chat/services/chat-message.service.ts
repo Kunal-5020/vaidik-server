@@ -1,4 +1,4 @@
-// src/chat/services/chat-message.service.ts
+// src/chat/services/chat-message.service.ts (BACKEND – COMPLETE FIXED)
 
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -27,131 +27,119 @@ export class ChatMessageService {
     }
   }
 
-async sendMessage(data: {
-  sessionId: string;
-  senderId: string;
-  senderModel: 'User' | 'Astrologer' | 'System';
-  receiverId: string;
-  receiverModel: 'User' | 'Astrologer';
-  orderId: string;
-  type: string;
-  content: string;
-  fileUrl?: string;
-  fileS3Key?: string;
-  fileSize?: number;
-  fileName?: string;
-  fileDuration?: number;
-  mimeType?: string;
-  replyToId?: string;
-  isCallRecording?: boolean;
-  linkedSessionId?: string;
-}): Promise<ChatMessageDocument> {
-  const messageId = this.generateMessageId();
+  async sendMessage(data: {
+    sessionId: string;
+    senderId: string;
+    senderModel: 'User' | 'Astrologer' | 'System';
+    receiverId: string;
+    receiverModel: 'User' | 'Astrologer';
+    orderId: string;
+    type: string;
+    content: string;
+    fileUrl?: string;
+    fileS3Key?: string;
+    fileSize?: number;
+    fileName?: string;
+    fileDuration?: number;
+    mimeType?: string;
+    replyToId?: string;
+    isCallRecording?: boolean;
+    linkedSessionId?: string;
+  }): Promise<ChatMessageDocument> {
+    const messageId = this.generateMessageId();
 
-  const message = new this.messageModel({
-    messageId,
-    sessionId: data.sessionId,
-    orderId: data.orderId,
-    senderId: this.toObjectId(data.senderId),
-    senderModel: data.senderModel,
-    receiverModel: data.receiverModel,
-    receiverId: this.toObjectId(data.receiverId),
-    type: data.type,
-    content: data.content,
-    fileUrl: data.fileUrl,
-    fileS3Key: data.fileS3Key,
-    fileSize: data.fileSize,
-    fileName: data.fileName,
-    fileDuration: data.fileDuration,
-    mimeType: data.mimeType,
-    replyToId: data.replyToId,
-    isCallRecording: data.isCallRecording || false,
-    linkedSessionId: data.linkedSessionId,
-    deleteStatus: 'visible',
-    deliveryStatus: data.senderModel === 'System' ? 'sent' : 'sending',
-    sentAt: new Date(),
-    createdAt: new Date()
-  });
+    const message = new this.messageModel({
+      messageId,
+      sessionId: data.sessionId,
+      orderId: data.orderId,
+      senderId: this.toObjectId(data.senderId),
+      senderModel: data.senderModel,
+      receiverModel: data.receiverModel,
+      receiverId: this.toObjectId(data.receiverId),
+      type: data.type,
+      content: data.content,
+      fileUrl: data.fileUrl,
+      fileS3Key: data.fileS3Key,
+      fileSize: data.fileSize,
+      fileName: data.fileName,
+      fileDuration: data.fileDuration,
+      mimeType: data.mimeType,
+      replyToId: data.replyToId,
+      isCallRecording: data.isCallRecording || false,
+      linkedSessionId: data.linkedSessionId,
+      deleteStatus: 'visible',
+      deliveryStatus: data.senderModel === 'System' ? 'sent' : 'sending',
+      sentAt: new Date(),
+      createdAt: new Date()
+    });
 
-  await message.save();
+    await message.save();
+    await this.updateConversationStats(data.orderId);
 
-  // ✅ NEW: Update conversation thread stats
-  await this.updateConversationStats(data.orderId);
+    this.logger.log(`Message created: ${messageId} | Type: ${data.type} | Thread: ${data.orderId}`);
 
-  this.logger.log(`Message created: ${messageId} | Type: ${data.type} | Thread: ${data.orderId}`);
-
-  return message;
-}
-
-// ✅ NEW METHOD: Update conversation statistics
-private async updateConversationStats(orderId: string): Promise<void> {
-  try {
-    // Import Order model (you need to inject it in constructor - see Step 3)
-    await this.orderModel.findOneAndUpdate(
-      { orderId },
-      {
-        $inc: { messageCount: 1 },
-        $set: { lastInteractionAt: new Date() }
-      }
-    );
-  } catch (error: any) {
-    this.logger.error(`Failed to update conversation stats: ${error.message}`);
-    // Don't throw - message already created
-  }
-}
-
-
-
-// ===== GET ALL MESSAGES IN CONVERSATION THREAD =====
-async getConversationMessages(
-  orderId: string, // ✅ Conversation thread orderId
-  page: number = 1,
-  limit: number = 50,
-  userId?: string
-): Promise<any> {
-  const skip = (page - 1) * limit;
-
-  let visibilityFilter: any = { isDeleted: false, deleteStatus: 'visible' };
-
-  // Filter based on visibility
-  if (userId) {
-    visibilityFilter.$or = [
-      { isVisibleToUser: true },
-      { isVisibleToAstrologer: true }
-    ];
+    return message;
   }
 
-  const [messages, total] = await Promise.all([
-    this.messageModel
-      .find({
-        orderId: orderId, // ✅ Get ALL messages in conversation (across all sessions!)
+  private async updateConversationStats(orderId: string): Promise<void> {
+    try {
+      await this.orderModel.findOneAndUpdate(
+        { orderId },
+        {
+          $inc: { messageCount: 1 },
+          $set: { lastInteractionAt: new Date() }
+        }
+      );
+    } catch (error: any) {
+      this.logger.error(`Failed to update conversation stats: ${error.message}`);
+    }
+  }
+
+  async getConversationMessages(
+    orderId: string,
+    page: number = 1,
+    limit: number = 50,
+    userId?: string
+  ): Promise<any> {
+    const skip = (page - 1) * limit;
+
+    let visibilityFilter: any = { isDeleted: false, deleteStatus: 'visible' };
+
+    if (userId) {
+      visibilityFilter.$or = [
+        { isVisibleToUser: true },
+        { isVisibleToAstrologer: true }
+      ];
+    }
+
+    const [messages, total] = await Promise.all([
+      this.messageModel
+        .find({
+          orderId: orderId,
+          ...visibilityFilter
+        })
+        .populate('senderId', 'name profileImage profilePicture')
+        .sort({ sentAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.messageModel.countDocuments({
+        orderId: orderId,
         ...visibilityFilter
       })
-      .populate('senderId', 'name profileImage profilePicture')
-      .sort({ sentAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean(),
-    this.messageModel.countDocuments({
-      orderId: orderId,
-      ...visibilityFilter
-    })
-  ]);
+    ]);
 
-  return {
-    messages: messages.reverse(),
-    pagination: {
-      page,
-      limit,
-      total,
-      pages: Math.ceil(total / limit)
-    }
-  };
-}
+    return {
+      messages: messages.reverse(),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  }
 
-
-
-  // ===== SEND KUNDLI DETAILS (Auto message) =====
   async sendKundliDetailsMessage(
     sessionId: string,
     astrologerId: string,
@@ -169,17 +157,17 @@ async getConversationMessages(
 
     const message = new this.messageModel({
       messageId,
-      sessionId: this.toObjectId(sessionId),
+      sessionId: sessionId,
       orderId,
-      senderId: this.toObjectId(userId), // Sent by user but auto-generated
+      senderId: this.toObjectId(userId),
       senderModel: 'User',
       receiverId: this.toObjectId(astrologerId),
       receiverModel: 'Astrologer',
       type: 'kundli_details',
       content: `Kundli Details: ${kundliData.name}, DOB: ${kundliData.dob}, Birth Time: ${kundliData.birthTime}, Place: ${kundliData.birthPlace}, Gender: ${kundliData.gender}`,
       kundliDetails: kundliData,
-      isVisibleToUser: false, // ✅ Only visible to astrologer
-      isVisibleToAstrologer: true, // ✅ Visible to astrologer only
+      isVisibleToUser: true,
+      isVisibleToAstrologer: true,
       deleteStatus: 'visible',
       deliveryStatus: 'sent',
       sentAt: new Date(),
@@ -187,19 +175,17 @@ async getConversationMessages(
     });
 
     await message.save();
-
     this.logger.log(`Kundli details message sent: ${messageId}`);
 
     return message;
   }
 
-  // ===== UPDATE DELIVERY STATUS (Sent) =====
   async markAsSent(messageIds: string[]): Promise<void> {
     await this.messageModel.updateMany(
       { messageId: { $in: messageIds } },
       {
         $set: {
-          deliveryStatus: 'sent', // ✅ Grey double tick
+          deliveryStatus: 'sent',
           sentAt: new Date()
         }
       }
@@ -208,13 +194,12 @@ async getConversationMessages(
     this.logger.log(`${messageIds.length} messages marked as sent`);
   }
 
-  // ===== UPDATE DELIVERY STATUS (Delivered) =====
   async markAsDelivered(messageIds: string[]): Promise<void> {
     await this.messageModel.updateMany(
       { messageId: { $in: messageIds } },
       {
         $set: {
-          deliveryStatus: 'delivered', // ✅ Grey double tick (delivered)
+          deliveryStatus: 'delivered',
           deliveredAt: new Date()
         }
       }
@@ -223,13 +208,12 @@ async getConversationMessages(
     this.logger.log(`${messageIds.length} messages marked as delivered`);
   }
 
-  // ===== UPDATE DELIVERY STATUS (Read/Blue Tick) =====
   async markAsRead(messageIds: string[], userId: string): Promise<void> {
     await this.messageModel.updateMany(
       { messageId: { $in: messageIds } },
       {
         $set: {
-          deliveryStatus: 'read', // ✅ Blue double tick (read)
+          deliveryStatus: 'read',
           readAt: new Date()
         }
       }
@@ -238,7 +222,6 @@ async getConversationMessages(
     this.logger.log(`${messageIds.length} messages marked as read by ${userId}`);
   }
 
-  // ===== MARK MESSAGE AS STARRED =====
   async starMessage(messageId: string, userId: string): Promise<ChatMessageDocument | null> {
     const message = await this.messageModel.findOne({ messageId });
 
@@ -248,7 +231,6 @@ async getConversationMessages(
 
     const userObjectId = this.toObjectId(userId);
 
-    // Check if already starred by this user
     if (message.starredBy && message.starredBy.includes(userObjectId)) {
       throw new BadRequestException('Message already starred by you');
     }
@@ -261,13 +243,11 @@ async getConversationMessages(
     message.starredAt = new Date();
 
     await message.save();
-
     this.logger.log(`Message starred: ${messageId}`);
 
     return message;
   }
 
-  // ===== UNSTAR MESSAGE =====
   async unstarMessage(messageId: string, userId: string): Promise<ChatMessageDocument | null> {
     const message = await this.messageModel.findOne({ messageId });
 
@@ -277,7 +257,6 @@ async getConversationMessages(
 
     const userObjectId = this.toObjectId(userId);
 
-    // Remove user from starredBy array
     message.starredBy = message.starredBy?.filter(id => id.toString() !== userObjectId.toString()) || [];
 
     if (message.starredBy.length === 0) {
@@ -286,13 +265,11 @@ async getConversationMessages(
     }
 
     await message.save();
-
     this.logger.log(`Message unstarred: ${messageId}`);
 
     return message;
   }
 
-  // ===== GET STARRED MESSAGES =====
   async getStarredMessages(
     sessionId: string,
     page: number = 1,
@@ -300,10 +277,17 @@ async getConversationMessages(
   ): Promise<any> {
     const skip = (page - 1) * limit;
 
+    let sessionIdQuery: any;
+    try {
+      sessionIdQuery = this.toObjectId(sessionId);
+    } catch {
+      sessionIdQuery = sessionId;
+    }
+
     const [messages, total] = await Promise.all([
       this.messageModel
         .find({
-          sessionId: this.toObjectId(sessionId),
+          sessionId: sessionIdQuery,
           isStarred: true,
           isDeleted: false
         })
@@ -313,7 +297,7 @@ async getConversationMessages(
         .limit(limit)
         .lean(),
       this.messageModel.countDocuments({
-        sessionId: this.toObjectId(sessionId),
+        sessionId: sessionIdQuery,
         isStarred: true,
         isDeleted: false
       })
@@ -330,73 +314,74 @@ async getConversationMessages(
     };
   }
 
-  // ===== GET SESSION MESSAGES =====
   async getSessionMessages(
-  sessionId: string,
-  page: number = 1,
-  limit: number = 50,
-  userId?: string
-): Promise<any> {
-  const skip = (page - 1) * limit;
+    sessionId: string,
+    page: number = 1,
+    limit: number = 50,
+    userId?: string
+  ): Promise<any> {
+    const skip = (page - 1) * limit;
 
-  let visibilityFilter: any = { isDeleted: false, deleteStatus: 'visible' };
+    let visibilityFilter: any = { isDeleted: false, deleteStatus: 'visible' };
 
-  // Filter based on visibility
-  if (userId) {
-    visibilityFilter.$or = [
-      { isVisibleToUser: true },
-      { isVisibleToAstrologer: true }
-    ];
-  }
+    if (userId) {
+      visibilityFilter.$or = [
+        { isVisibleToUser: true },
+        { isVisibleToAstrologer: true }
+      ];
+    }
 
-  // ✅ FIX: Try to convert sessionId to ObjectId, but catch if it's invalid
-  let sessionIdQuery: any;
-  try {
-    sessionIdQuery = this.toObjectId(sessionId);
-  } catch {
-    // If conversion fails, use the string directly (some DBs accept both)
-    sessionIdQuery = sessionId;
-  }
+    let sessionIdQuery: any;
+    try {
+      sessionIdQuery = this.toObjectId(sessionId);
+    } catch {
+      sessionIdQuery = sessionId;
+    }
 
-  const [messages, total] = await Promise.all([
-    this.messageModel
-      .find({
-        sessionId: sessionIdQuery,  // ✅ Use converted or original
+    const [messages, total] = await Promise.all([
+      this.messageModel
+        .find({
+          sessionId: sessionIdQuery,
+          ...visibilityFilter
+        })
+        .populate('senderId', 'name profileImage profilePicture')
+        .sort({ sentAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.messageModel.countDocuments({
+        sessionId: sessionIdQuery,
         ...visibilityFilter
       })
-      .populate('senderId', 'name profileImage profilePicture')
-      .sort({ sentAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean(),
-    this.messageModel.countDocuments({
-      sessionId: sessionIdQuery,  // ✅ Use converted or original
-      ...visibilityFilter
-    })
-  ]);
+    ]);
 
-  return {
-    messages: messages.reverse(),
-    pagination: {
-      page,
-      limit,
-      total,
-      pages: Math.ceil(total / limit)
-    }
-  };
-}
+    return {
+      messages: messages.reverse(),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  }
 
-  // ===== GET UNREAD COUNT =====
   async getUnreadCount(userId: string, sessionId: string): Promise<number> {
+    let sessionIdQuery: any;
+    try {
+      sessionIdQuery = this.toObjectId(sessionId);
+    } catch {
+      sessionIdQuery = sessionId;
+    }
+
     return this.messageModel.countDocuments({
-      sessionId: this.toObjectId(sessionId),
+      sessionId: sessionIdQuery,
       receiverId: this.toObjectId(userId),
-      deliveryStatus: { $in: ['sending', 'sent', 'delivered'] }, // Not read
+      deliveryStatus: { $in: ['sending', 'sent', 'delivered'] },
       isDeleted: false
     });
   }
 
-  // ===== GET TOTAL UNREAD COUNT =====
   async getTotalUnreadCount(userId: string): Promise<number> {
     return this.messageModel.countDocuments({
       receiverId: this.toObjectId(userId),
@@ -405,7 +390,6 @@ async getConversationMessages(
     });
   }
 
-  // ===== ADD REACTION =====
   async addReaction(
     messageId: string,
     userId: string,
@@ -418,7 +402,6 @@ async getConversationMessages(
       throw new NotFoundException('Message not found');
     }
 
-    // Check if user already reacted with this emoji
     const existingReaction = message.reactions?.find(
       r => r.userId.toString() === userId && r.emoji === emoji
     );
@@ -444,7 +427,6 @@ async getConversationMessages(
     this.logger.log(`Reaction added to message: ${messageId} | Emoji: ${emoji}`);
   }
 
-  // ===== REMOVE REACTION =====
   async removeReaction(
     messageId: string,
     userId: string,
@@ -465,7 +447,6 @@ async getConversationMessages(
     this.logger.log(`Reaction removed from message: ${messageId}`);
   }
 
-  // ===== EDIT MESSAGE =====
   async editMessage(messageId: string, senderId: string, newContent: string): Promise<ChatMessageDocument | null> {
     const message = await this.messageModel.findOne({ messageId });
 
@@ -492,13 +473,11 @@ async getConversationMessages(
     });
 
     await message.save();
-
     this.logger.log(`Message edited: ${messageId}`);
 
     return message;
   }
 
-  // ===== DELETE MESSAGE =====
   async deleteMessage(
     messageId: string,
     senderId: string,
@@ -523,11 +502,9 @@ async getConversationMessages(
     }
 
     await message.save();
-
     this.logger.log(`Message deleted: ${messageId} | Delete for: ${deleteFor}`);
   }
 
-  // ===== SEARCH MESSAGES =====
   async searchMessages(
     sessionId: string,
     query: string,
@@ -536,10 +513,17 @@ async getConversationMessages(
   ): Promise<any> {
     const skip = (page - 1) * limit;
 
+    let sessionIdQuery: any;
+    try {
+      sessionIdQuery = this.toObjectId(sessionId);
+    } catch {
+      sessionIdQuery = sessionId;
+    }
+
     const [messages, total] = await Promise.all([
       this.messageModel
         .find({
-          sessionId: this.toObjectId(sessionId),
+          sessionId: sessionIdQuery,
           content: { $regex: query, $options: 'i' },
           isDeleted: false
         })
@@ -549,9 +533,52 @@ async getConversationMessages(
         .limit(limit)
         .lean(),
       this.messageModel.countDocuments({
-        sessionId: this.toObjectId(sessionId),
+        sessionId: sessionIdQuery,
         content: { $regex: query, $options: 'i' },
         isDeleted: false
+      })
+    ]);
+
+    return {
+      messages,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  async getConversationStarredMessages(
+    orderId: string,
+    userId: string,
+    page: number = 1,
+    limit: number = 100
+  ): Promise<any> {
+    const skip = (page - 1) * limit;
+    const userObjectId = this.toObjectId(userId);
+
+    const [messages, total] = await Promise.all([
+      this.messageModel
+        .find({
+          orderId: orderId,
+          isStarred: true,
+          starredBy: userObjectId,
+          isDeleted: false,
+          deleteStatus: 'visible',
+        })
+        .populate('senderId', 'name profileImage profilePicture')
+        .sort({ starredAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.messageModel.countDocuments({
+        orderId: orderId,
+        isStarred: true,
+        starredBy: userObjectId,
+        isDeleted: false,
+        deleteStatus: 'visible',
       })
     ]);
 

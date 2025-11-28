@@ -11,7 +11,7 @@ import {
   ParseIntPipe,
   DefaultValuePipe,
 } from '@nestjs/common';
-import { AdminAuthGuard } from '../../admin/guards/admin-auth.guard';
+import { AdminAuthGuard } from '../../admin/core/guards/admin-auth.guard';
 import { StreamSessionService } from '../services/stream-session.service';
 import { StreamAnalyticsService } from '../services/stream-analytics.service';
 import { StreamAgoraService } from '../services/stream-agora.service';

@@ -32,14 +32,22 @@ export class FcmService {
     }
   }
 
-  async sendToDevice(
-    fcmToken: string,
-    title: string,
-    body: string,
-    data?: Record<string, any>,
-    imageUrl?: string,
-    isFullScreen?: boolean
-  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+ async sendToDevice(
+  fcmToken: string,
+  title: string,
+  body: string,
+  data?: Record<string, any>,
+  imageUrl?: string,
+  config?: {  // 🆕 NEW: configuration object
+    isFullScreen?: boolean;
+    priority?: 'low' | 'medium' | 'high' | 'urgent';
+    sound?: string;
+    channelId?: string;
+    category?: string;
+    badge?: number;
+    vibrate?: boolean;
+  }
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
     try {
       // Convert all data to strings for FCM
       const fcmData: Record<string, string> = {};
@@ -50,10 +58,16 @@ export class FcmService {
         }
       }
 
-      // Add fullScreen flag
-      if (isFullScreen) {
-        fcmData['fullScreen'] = 'true';
-      }
+      if (config?.isFullScreen) {
+  fcmData['fullScreen'] = 'true';
+  fcmData['showInForeground'] = 'full-screen';
+  fcmData['showInBackground'] = 'full-screen';
+}
+
+// 🆕 ADD priority and behavior flags
+if (config?.priority) {
+  fcmData['priority'] = config.priority;
+}
 
       // Build notification payload
       const notificationPayload: any = {
@@ -70,35 +84,39 @@ export class FcmService {
         notification: notificationPayload,
         data: fcmData,
         android: {
-          priority: 'high',
-          notification: {
-            sound: 'default',
-            channelId: 'vaidik_talk_notifications',
-            priority: 'high',
-            defaultVibrateTimings: true,
-            defaultSound: true,
-            ...(isFullScreen && {
-              visibility: 'public',
-              tag: 'full_screen_call',
-            }),
-          },
-        },
+  priority: 'high',
+  notification: {
+    sound: config?.sound || 'default',
+    channelId: config?.channelId || 'vaidik_talk_notifications',
+    priority: config?.priority === 'urgent' ? 'max' : 'high',
+    defaultVibrateTimings: config?.vibrate !== false,
+    defaultSound: !config?.sound, // Use default only if no custom sound
+    ...(config?.isFullScreen && {
+      visibility: 'public',
+      tag: 'full_screen_call',
+    }),
+  },
+},
         apns: {
-          payload: {
-            aps: {
-              sound: 'default',
-              badge: 1,
-              'content-available': 1,
-              ...(isFullScreen && {
-                'interruption-level': 'critical',
-              }),
-            },
-          },
-        },
+  payload: {
+    aps: {
+      sound: config?.sound?.replace('.mp3', '.wav') || 'default',
+      badge: config?.badge || 1,
+      'content-available': 1,
+      ...(config?.isFullScreen && {
+        'interruption-level': 'critical',
+      }),
+      ...(config?.category && {
+        category: config.category,
+      }),
+    },
+  },
+},
       };
 
       const response = await admin.messaging().send(message);
-      this.logger.log(`✅ Push sent successfully: ${response} (fullScreen: ${isFullScreen})`);
+      this.logger.log(`✅ Push sent: ${response} | Type: ${config?.priority || 'default'} | FullScreen: ${config?.isFullScreen || false}`);
+
 
       return {
         success: true,
@@ -114,13 +132,20 @@ export class FcmService {
   }
 
   async sendToMultipleDevices(
-    fcmTokens: string[],
-    title: string,
-    body: string,
-    data?: Record<string, string>,
-    imageUrl?: string,
-    isFullScreen?: boolean
-  ): Promise<{ successCount: number; failureCount: number; failedTokens?: string[] }> {
+  fcmTokens: string[],
+  title: string,
+  body: string,
+  data?: Record<string, string>,
+  imageUrl?: string,
+  config?: {  // 🆕 NEW: configuration object
+    isFullScreen?: boolean;
+    priority?: 'low' | 'medium' | 'high' | 'urgent';
+    sound?: string;
+    channelId?: string;
+    badge?: number;
+  }
+): Promise<{ successCount: number; failureCount: number; failedTokens?: string[] }>
+  {
     try {
       if (!fcmTokens || fcmTokens.length === 0) {
         return { successCount: 0, failureCount: 0, failedTokens: [] };
@@ -143,33 +168,34 @@ export class FcmService {
         data: data || {},
         tokens: validTokens,
         android: {
-          priority: 'high',
-          notification: {
-            sound: 'default',
-            channelId: 'vaidik_talk_notifications',
-            priority: 'high',
-            defaultVibrateTimings: true,
-            ...(isFullScreen && {
-              visibility: 'public',
-              tag: 'full_screen_call',
-            }),
-          },
-        },
-        apns: {
-          payload: {
-            aps: {
-              sound: 'default',
-              badge: 1,
-              'content-available': 1,
-              ...(isFullScreen && {
-                'interruption-level': 'critical',
-              }),
-            },
-          },
-        },
+  priority: 'high',
+  notification: {
+    sound: config?.sound || 'default',
+    channelId: config?.channelId || 'vaidik_talk_notifications',
+    priority: config?.priority === 'urgent' ? 'max' : 'high',
+    defaultVibrateTimings: true,
+    ...(config?.isFullScreen && {
+      visibility: 'public',
+      tag: 'full_screen_call',
+    }),
+  },
+},
+apns: {
+  payload: {
+    aps: {
+      sound: config?.sound?.replace('.mp3', '.wav') || 'default',
+      badge: config?.badge || 1,
+      'content-available': 1,
+      ...(config?.isFullScreen && {
+        'interruption-level': 'critical',
+      }),
+    },
+  },
+},
+
       };
 
-      this.logger.log(`📤 Sending to ${validTokens.length} FCM tokens (fullScreen: ${isFullScreen})`);
+      this.logger.log(`📤 Sending to ${validTokens.length} FCM tokens (fullScreen: ${config?.isFullScreen})`);
 
       const response = await admin.messaging().sendEachForMulticast(message);
 

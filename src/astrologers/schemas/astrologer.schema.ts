@@ -87,36 +87,39 @@ export class Astrologer {
     videoCall: number;
   };
 
-  // Ratings
   @Prop({
-    type: {
-      average: { type: Number, default: 0 },
-      total: { type: Number, default: 0 },
-      breakdown: {
-        5: { type: Number, default: 0 },
-        4: { type: Number, default: 0 },
-        3: { type: Number, default: 0 },
-        2: { type: Number, default: 0 },
-        1: { type: Number, default: 0 }
-      }
-    },
-    default: () => ({
-      average: 0,
-      total: 0,
-      breakdown: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 }
-    })
-  })
-  ratings: {
-    average: number;
-    total: number;
+  type: {
+    average: { type: Number, default: 0 },
+    total: { type: Number, default: 0 },
+    approvedReviews: { type: Number, default: 0 }, // ✅ NEW: Only approved shown publicly
     breakdown: {
-      5: number;
-      4: number;
-      3: number;
-      2: number;
-      1: number;
-    };
+      5: { type: Number, default: 0 },
+      4: { type: Number, default: 0 },
+      3: { type: Number, default: 0 },
+      2: { type: Number, default: 0 },
+      1: { type: Number, default: 0 }
+    }
+  },
+  default: () => ({
+    average: 0,
+    total: 0,
+    approvedReviews: 0,
+    breakdown: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 }
+  })
+})
+ratings: {
+  average: number;
+  total: number;
+  approvedReviews: number; // ✅ NEW
+  breakdown: {
+    5: number;
+    4: number;
+    3: number;
+    2: number;
+    1: number;
   };
+};
+
 
   // Stats
   @Prop({
@@ -253,6 +256,9 @@ export class Astrologer {
     isActive: boolean;
   }[];
 
+  @Prop({ default: true })
+singleDeviceMode: boolean;
+
   @Prop({ default: Date.now })
   createdAt: Date;
 
@@ -263,7 +269,6 @@ export class Astrologer {
 export const AstrologerSchema = SchemaFactory.createForClass(Astrologer);
 
 // Indexes
-AstrologerSchema.index({ userId: 1 }, { unique: true });
 AstrologerSchema.index({ registrationId: 1 });
 // Unique index for phoneNumber is created via @Prop({ unique: true })
 AstrologerSchema.index({ accountStatus: 1, 'availability.isOnline': 1 });

@@ -15,9 +15,10 @@ export class Notification {
   @Prop({ required: true, enum: ['User', 'Astrologer', 'Admin'] })
   recipientModel: string;
 
-  @Prop({ 
+@Prop({
     required: true,
     enum: [
+      // ✅ EXISTING TYPES (KEEP)
       'chat_message',
       'call_incoming',
       'call_missed',
@@ -28,18 +29,59 @@ export class Notification {
       'wallet_recharged',
       'remedy_suggested',
       'report_ready',
-      'stream_started',          // Followed astrologer went live
-      'stream_reminder',         // Livestream starting soon
+      'stream_started',
+      'stream_reminder',
       'stream_ended',
-      'gift_received',           // Received gift in livestream
+      'gift_received',
       'astrologer_approved',
       'astrologer_rejected',
       'payout_processed',
-      'admin_alert',             // Critical admin alerts
-      'system_announcement',     // Broadcast to all
-      'general'
+      'admin_alert',
+      'system_announcement',
+      'general',
+
+      // ✅ REFINED / NEW TYPES ALREADY USED IN SERVICE
+      'call_video',
+      'call_audio',
+      'message_direct',
+      'chat_group',
+      'live_event_started',
+      'live_event_reminder',
+      'system_promotional',
+      'force_logout',
+
+      // ✅ NEW APP-LEVEL TYPES (ADD THESE)
+      // Chat / call request lifecycle
+      'chat_request',
+      'call_request_audio',
+      'call_request_video',
+      'request_accepted',
+      'request_rejected',
+      'request_expired',
+
+      // Queue / waiting
+      'added_to_queue',
+      'queue_update',
+      'queue_position_update',
+      'your_turn',
+
+      // Session lifecycle
+      'session_starting',
+      'session_ending',
+      'session_ending_soon',
+      'session_ended',
+
+      // Balance / payments
+      'low_balance',
+      'low_balance_warning',
+      'payment_failed',
+      'earnings_credited',
+
+      // Misc
+      'gift_sent',
+      'promotional',
     ],
-    index: true
+    index: true,
   })
   type: string;
 
@@ -67,6 +109,22 @@ export class Notification {
   // FCM tracking
   @Prop({ default: false })
   isPushSent: boolean;
+
+  @Prop({ default: false })
+isFullScreen?: boolean;
+
+@Prop()
+soundFileName?: string;
+
+@Prop({ type: Object })
+notificationConfig?: {
+  showInForeground?: boolean;
+  showInBackground?: boolean;
+  vibrate?: boolean;
+  badge?: number;
+  channelId?: string;
+  category?: string;
+};
 
   @Prop()
   pushSentAt?: Date;

@@ -1,86 +1,72 @@
+// src/main.ts
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import * as bodyParser from 'body-parser';
-
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  const configService = app.get(ConfigService);
   const logger = new Logger('Bootstrap');
 
-  // ✅ CRITICAL: Trust proxy for Render
   app.set('trust proxy', true);
 
-  // ✅ CORS Configuration for Netlify frontend
   app.enableCors({
     origin: [
-      'https://vaidik-admin.netlify.app', // Your Netlify frontend
-      'http://localhost:3001', // Local development
+      'https://vaidik-admin.netlify.app',
+      'http://localhost:3001',
       'http://localhost:3000',
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'Accept',
-      'Origin',
-      'X-Requested-With',
-    ],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
     exposedHeaders: ['Authorization'],
     preflightContinue: false,
     optionsSuccessStatus: 204,
-    maxAge: 86400, // 24 hours
+    maxAge: 86400,
   });
 
-  // ✅ Helmet with relaxed settings
-  app.use(
-    helmet({
-      crossOriginResourcePolicy: false,
-      contentSecurityPolicy: false,
-    })
-  );
+  app.use(helmet({ crossOriginResourcePolicy: false, contentSecurityPolicy: false }));
 
-  // ✅ CRITICAL: Raw body for Shopify webhook verification
-  // This MUST be registered BEFORE global validation pipe
+  // ✅ CRITICAL FIX: Add body parser for REGULAR routes FIRST
+  app.use((req, res, next) => {
+    // Only use special body parser for webhook route
+    if (req.path.includes('/shopify/webhooks')) {
+      return next();
+    }
+    // Use regular JSON parser for everything else
+    bodyParser.json()(req, res, next);
+  });
+
+  // ✅ Then add webhook-specific raw body parser
   app.use(
     '/api/v1/shopify/webhooks',
     bodyParser.json({
       verify: (req: any, res, buf) => {
-        req.rawBody = buf; // Save raw buffer for HMAC verification
+        req.rawBody = buf;
       },
     })
   );
 
-  // Global validation pipe
+  // ✅ Global validation pipe (will work now that body is parsed)
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
-      forbidNonWhitelisted: true,
+      forbidNonWhitelisted: false,
       transform: true,
-      disableErrorMessages: false,
+      transformOptions: {
+        enableImplicitConversion: true,
+      },
     }),
   );
 
-  // API prefix
   app.setGlobalPrefix('api/v1');
 
-  // ✅ CRITICAL: Use PORT from environment (Render provides this)
   const port = process.env.PORT || 3001;
-
-  // ✅ Listen on 0.0.0.0 (required for Render)
   await app.listen(port, '0.0.0.0');
 
   logger.log(`🚀 Server running on port ${port}`);
-  logger.log(`🌍 CORS enabled for: https://vaidik-admin.netlify.app`);
-  logger.log(`📍 Webhook endpoint: https://your-app.onrender.com/api/v1/shopify/webhooks/orders/create`);
 }
 
-bootstrap().catch((error) => {
-  console.error('❌ Failed to start:', error);
-  process.exit(1);
-});
+bootstrap();

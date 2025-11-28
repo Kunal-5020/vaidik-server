@@ -9,6 +9,7 @@ import {
   TopAstrologerTier,
   CountryOption 
 } from '../dto/search-astrologers.dto';
+import { User, UserDocument } from '../../users/schemas/user.schema';
 
 export interface SearchResult {
   success: boolean;
@@ -44,9 +45,40 @@ export class AstrologersService {
   constructor(
     @InjectModel(Astrologer.name) 
     public readonly astrologerModel: Model<AstrologerDocument>,
+    @InjectModel(User.name)
+    private readonly userModel: Model<UserDocument>,
   ) {}
 
-  // ✅ ADD THIS: Convert Buffer ObjectId to hex string
+  // ✅ Helper: Get blocked astrologer IDs for a user
+  private async getBlockedAstrologerIds(userId: string): Promise<Types.ObjectId[]> {
+    if (!userId || !Types.ObjectId.isValid(userId)) {
+      return [];
+    }
+
+    const user = await this.userModel
+      .findById(userId)
+      .select('blockedAstrologers')
+      .lean()
+      .exec();
+    
+    if (!user?.blockedAstrologers || user.blockedAstrologers.length === 0) {
+      return [];
+    }
+
+    // Ensure we return an array of mongoose ObjectId instances
+    return user.blockedAstrologers.map(block => {
+      // block.astrologerId may be a string, Buffer-like, or already an ObjectId;
+      // constructing a new Types.ObjectId handles string/buffer/ObjectId inputs.
+      try {
+        return new Types.ObjectId(block.astrologerId as any);
+      } catch {
+        // Fallback: cast to Types.ObjectId if construction fails for unexpected shapes
+        return block.astrologerId as unknown as Types.ObjectId;
+      }
+    });
+  }
+
+  // Convert Buffer ObjectId to hex string
   private convertObjectIdToString(obj: any): any {
     if (!obj) return obj;
 
@@ -73,7 +105,7 @@ export class AstrologersService {
     return obj;
   }
 
-  // ✅ ADD THIS: Serialize astrologers array
+  // Serialize astrologers array
   private serializeAstrologers(astrologers: any[]): any[] {
     return astrologers.map(astro => {
       const plain = astro.toObject ? astro.toObject() : { ...astro };
@@ -120,12 +152,15 @@ export class AstrologersService {
     });
   }
 
-  // ===== NEW ENHANCED SEARCH METHOD =====
-
   /**
    * Advanced search with all filters
+   * @param searchDto - Search filters
+   * @param userId - Current user ID to exclude blocked astrologers
    */
-  async searchAstrologers(searchDto: SearchAstrologersDto): Promise<SearchResult> {
+  async searchAstrologers(
+    searchDto: SearchAstrologersDto, 
+    userId?: string
+  ): Promise<SearchResult> {
     const {
       search,
       skills,
@@ -154,6 +189,14 @@ export class AstrologersService {
       'profileCompletion.isComplete': true
     };
 
+    // ✅ CRITICAL: Exclude blocked astrologers if user is logged in
+    if (userId) {
+      const blockedIds = await this.getBlockedAstrologerIds(userId);
+      if (blockedIds.length > 0) {
+        query._id = { $nin: blockedIds };
+      }
+    }
+
     // Text search in name and bio
     if (search?.trim()) {
       query.$or = [
@@ -177,7 +220,7 @@ export class AstrologersService {
       query.gender = { $in: genders };
     }
 
-    // Filter by country (if you have country field in schema, otherwise skip)
+    // Filter by country
     if (countries && countries.length > 0) {
       if (countries.includes(CountryOption.INDIA)) {
         // query.country = 'India';
@@ -189,9 +232,8 @@ export class AstrologersService {
 
     // Filter by top astrologer tiers
     if (topAstrologers && topAstrologers.length > 0 && !topAstrologers.includes(TopAstrologerTier.ALL)) {
-      const tierConditions: any[] = []; // ✅ Fixed: Properly typed array
+      const tierConditions: any[] = [];
       
-      // Celebrity: Highest ratings and most orders
       if (topAstrologers.includes(TopAstrologerTier.CELEBRITY)) {
         tierConditions.push({
           'ratings.average': { $gte: 4.8 },
@@ -199,7 +241,6 @@ export class AstrologersService {
         });
       }
       
-      // Top Choice: High repeat customers
       if (topAstrologers.includes(TopAstrologerTier.TOP_CHOICE)) {
         tierConditions.push({
           'ratings.average': { $gte: 4.5 },
@@ -207,7 +248,6 @@ export class AstrologersService {
         });
       }
       
-      // Rising Star: Growing demand (created in last 6 months)
       if (topAstrologers.includes(TopAstrologerTier.RISING_STAR)) {
         const sixMonthsAgo = new Date();
         sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
@@ -219,11 +259,9 @@ export class AstrologersService {
       }
       
       if (tierConditions.length > 0) {
-        // Use $or for multiple tier conditions
         if (!query.$or) {
           query.$or = tierConditions;
         } else {
-          // If $or already exists (from text search), combine with $and
           query.$and = [
             { $or: query.$or },
             { $or: tierConditions }
@@ -282,41 +320,33 @@ export class AstrologersService {
       query.isLiveStreamEnabled = true;
     }
 
-    // Build sort criteria based on sortBy option
+    // Build sort criteria
     let sortCriteria: any = {};
     
     switch (sortBy) {
       case SortByOption.RATING_HIGH_LOW:
         sortCriteria = { 'ratings.average': -1, 'ratings.total': -1 };
         break;
-      
       case SortByOption.PRICE_LOW_HIGH:
         sortCriteria = { 'pricing.chat': 1 };
         break;
-      
       case SortByOption.PRICE_HIGH_LOW:
         sortCriteria = { 'pricing.chat': -1 };
         break;
-      
       case SortByOption.EXP_HIGH_LOW:
         sortCriteria = { experienceYears: -1 };
         break;
-      
       case SortByOption.EXP_LOW_HIGH:
         sortCriteria = { experienceYears: 1 };
         break;
-      
       case SortByOption.ORDERS_HIGH_LOW:
         sortCriteria = { 'stats.totalOrders': -1 };
         break;
-      
       case SortByOption.ORDERS_LOW_HIGH:
         sortCriteria = { 'stats.totalOrders': 1 };
         break;
-      
       case SortByOption.POPULARITY:
       default:
-        // Popularity: combination of online status, rating, and orders
         sortCriteria = { 
           'availability.isOnline': -1,
           'ratings.average': -1, 
@@ -324,10 +354,8 @@ export class AstrologersService {
         };
     }
 
-    // Calculate pagination
     const skip = (page - 1) * limit;
 
-    // Execute query with parallel operations for better performance
     const [astrologers, total] = await Promise.all([
       this.astrologerModel
         .find(query)
@@ -341,7 +369,6 @@ export class AstrologersService {
     ]);
 
     const serializedAstrologers = this.serializeAstrologers(astrologers);
-
     const totalPages = Math.ceil(total / limit);
 
     return {
@@ -374,9 +401,6 @@ export class AstrologersService {
     };
   }
 
-  /**
-   * Get filter options with counts (for building dynamic filter UI)
-   */
   async getFilterOptions(): Promise<any> {
     const baseMatch = {
       accountStatus: 'active',
@@ -392,29 +416,22 @@ export class AstrologersService {
       statusCounts,
       tierCounts
     ] = await Promise.all([
-      // Specializations with counts
       this.astrologerModel.aggregate([
         { $match: baseMatch },
         { $unwind: '$specializations' },
         { $group: { _id: '$specializations', count: { $sum: 1 } } },
         { $sort: { count: -1 } }
       ]),
-      
-      // Languages with counts
       this.astrologerModel.aggregate([
         { $match: baseMatch },
         { $unwind: '$languages' },
         { $group: { _id: '$languages', count: { $sum: 1 } } },
         { $sort: { count: -1 } }
       ]),
-      
-      // Gender distribution
       this.astrologerModel.aggregate([
         { $match: baseMatch },
         { $group: { _id: '$gender', count: { $sum: 1 } } }
       ]),
-      
-      // Price statistics
       this.astrologerModel.aggregate([
         { $match: baseMatch },
         { $group: { 
@@ -424,8 +441,6 @@ export class AstrologersService {
           avgPrice: { $avg: '$pricing.chat' }
         } }
       ]),
-      
-      // Experience statistics
       this.astrologerModel.aggregate([
         { $match: baseMatch },
         { $group: { 
@@ -435,8 +450,6 @@ export class AstrologersService {
           avgExperience: { $avg: '$experienceYears' }
         } }
       ]),
-      
-      // Status counts
       this.astrologerModel.aggregate([
         { $match: baseMatch },
         { $group: {
@@ -450,8 +463,6 @@ export class AstrologersService {
           }
         }}
       ]),
-      
-      // Tier counts
       this.astrologerModel.aggregate([
         { $match: baseMatch },
         {
@@ -533,14 +544,24 @@ export class AstrologersService {
   /**
    * Get featured astrologers (high rated, popular)
    */
-  async getFeaturedAstrologers(limit: number = 10): Promise<any> {
+  async getFeaturedAstrologers(limit: number = 10, userId?: string): Promise<any> {
+    const query: any = {
+      accountStatus: 'active',
+      'profileCompletion.isComplete': true,
+      'ratings.average': { $gte: 4.0 },
+      'ratings.total': { $gte: 10 }
+    };
+
+    // ✅ Filter blocked astrologers
+    if (userId) {
+      const blockedIds = await this.getBlockedAstrologerIds(userId);
+      if (blockedIds.length > 0) {
+        query._id = { $nin: blockedIds };
+      }
+    }
+
     const astrologers = await this.astrologerModel
-      .find({
-        accountStatus: 'active',
-        'profileCompletion.isComplete': true,
-        'ratings.average': { $gte: 4.0 },
-        'ratings.total': { $gte: 10 }
-      })
+      .find(query)
       .select('name bio profilePicture experienceYears specializations languages ratings pricing availability stats')
       .sort({ 'ratings.average': -1, 'stats.totalOrders': -1 })
       .limit(limit)
@@ -557,13 +578,23 @@ export class AstrologersService {
   /**
    * Get top rated astrologers
    */
-  async getTopRatedAstrologers(limit: number = 10): Promise<any> {
+  async getTopRatedAstrologers(limit: number = 10, userId?: string): Promise<any> {
+    const query: any = {
+      accountStatus: 'active',
+      'profileCompletion.isComplete': true,
+      'ratings.total': { $gte: 5 }
+    };
+
+    // ✅ Filter blocked astrologers
+    if (userId) {
+      const blockedIds = await this.getBlockedAstrologerIds(userId);
+      if (blockedIds.length > 0) {
+        query._id = { $nin: blockedIds };
+      }
+    }
+
     const astrologers = await this.astrologerModel
-      .find({
-        accountStatus: 'active',
-        'profileCompletion.isComplete': true,
-        'ratings.total': { $gte: 5 }
-      })
+      .find(query)
       .select('name bio profilePicture experienceYears specializations languages ratings pricing availability stats')
       .sort({ 'ratings.average': -1, 'ratings.total': -1 })
       .limit(limit)
@@ -580,14 +611,24 @@ export class AstrologersService {
   /**
    * Get online astrologers
    */
-  async getOnlineAstrologers(limit: number = 20): Promise<any> {
+  async getOnlineAstrologers(limit: number = 20, userId?: string): Promise<any> {
+    const query: any = {
+      accountStatus: 'active',
+      'profileCompletion.isComplete': true,
+      'availability.isOnline': true,
+      'availability.isAvailable': true
+    };
+
+    // ✅ Filter blocked astrologers
+    if (userId) {
+      const blockedIds = await this.getBlockedAstrologerIds(userId);
+      if (blockedIds.length > 0) {
+        query._id = { $nin: blockedIds };
+      }
+    }
+
     const astrologers = await this.astrologerModel
-      .find({
-        accountStatus: 'active',
-        'profileCompletion.isComplete': true,
-        'availability.isOnline': true,
-        'availability.isAvailable': true
-      })
+      .find(query)
       .select('name bio profilePicture experienceYears specializations languages ratings pricing availability stats')
       .sort({ 'ratings.average': -1, 'availability.lastActive': -1 })
       .limit(limit)
@@ -606,14 +647,25 @@ export class AstrologersService {
    */
   async getAstrologersBySpecialization(
     specialization: string,
-    limit: number = 10
+    limit: number = 10,
+    userId?: string
   ): Promise<any> {
+    const query: any = {
+      accountStatus: 'active',
+      'profileCompletion.isComplete': true,
+      specializations: { $regex: new RegExp(`^${specialization}$`, 'i') }
+    };
+
+    // ✅ Filter blocked astrologers
+    if (userId) {
+      const blockedIds = await this.getBlockedAstrologerIds(userId);
+      if (blockedIds.length > 0) {
+        query._id = { $nin: blockedIds };
+      }
+    }
+
     const astrologers = await this.astrologerModel
-      .find({
-        accountStatus: 'active',
-        'profileCompletion.isComplete': true,
-        specializations: { $regex: new RegExp(`^${specialization}$`, 'i') }
-      })
+      .find(query)
       .select('name bio profilePicture experienceYears specializations languages ratings pricing availability stats')
       .sort({ 'ratings.average': -1, 'stats.totalOrders': -1 })
       .limit(limit)
@@ -631,15 +683,23 @@ export class AstrologersService {
   /**
    * Get random astrologers (for discovery)
    */
-  async getRandomAstrologers(limit: number = 5): Promise<any> {
+  async getRandomAstrologers(limit: number = 5, userId?: string): Promise<any> {
+    const matchQuery: any = {
+      accountStatus: 'active',
+      'profileCompletion.isComplete': true,
+      'ratings.average': { $gte: 3.0 }
+    };
+
+    // ✅ Filter blocked astrologers
+    if (userId) {
+      const blockedIds = await this.getBlockedAstrologerIds(userId);
+      if (blockedIds.length > 0) {
+        matchQuery._id = { $nin: blockedIds };
+      }
+    }
+
     const astrologers = await this.astrologerModel.aggregate([
-      {
-        $match: {
-          accountStatus: 'active',
-          'profileCompletion.isComplete': true,
-          'ratings.average': { $gte: 3.0 }
-        }
-      },
+      { $match: matchQuery },
       { $sample: { size: limit } },
       {
         $project: {
@@ -664,8 +724,6 @@ export class AstrologersService {
     };
   }
 
-  // ===== EXISTING PUBLIC METHODS (Keep all your existing methods below) =====
-
   async getApprovedAstrologers(
     page: number = 1,
     limit: number = 20,
@@ -675,7 +733,8 @@ export class AstrologersService {
       minRating?: number;
       isOnline?: boolean;
       sortBy?: 'rating' | 'experience' | 'price';
-    }
+    },
+    userId?: string
   ): Promise<any> {
     const searchDto: Partial<SearchAstrologersDto> = {
       page,
@@ -693,17 +752,25 @@ export class AstrologersService {
         : SortByOption.POPULARITY
     };
 
-    return this.searchAstrologers(searchDto as SearchAstrologersDto);
+    return this.searchAstrologers(searchDto as SearchAstrologersDto, userId);
   }
 
   async getAstrologerDetails(astrologerId: string): Promise<any> {
-    if (!Types.ObjectId.isValid(astrologerId)) {
+    let validatedId: string;
+    
+    if (typeof astrologerId === 'object' && astrologerId !== null) {
+      validatedId = this.convertObjectIdToString(astrologerId);
+    } else {
+      validatedId = astrologerId;
+    }
+
+    if (!Types.ObjectId.isValid(validatedId)) {
       throw new BadRequestException('Invalid astrologer ID format');
     }
 
     const astrologer = await this.astrologerModel
       .findOne({
-        _id: astrologerId,
+        _id: validatedId,
         accountStatus: 'active',
         'profileCompletion.isComplete': true
       })
@@ -715,20 +782,32 @@ export class AstrologersService {
       throw new NotFoundException('Astrologer not found or not available');
     }
 
+    const serialized = this.serializeAstrologers([astrologer])[0];
+
     return {
       success: true,
-      data: astrologer
+      data: serialized
     };
   }
 
-  async getLiveAstrologers(limit: number = 20): Promise<any> {
+  async getLiveAstrologers(limit: number = 20, userId?: string): Promise<any> {
+    const query: any = {
+      'availability.isLive': true,
+      accountStatus: 'active',
+      'profileCompletion.isComplete': true,
+      isLiveStreamEnabled: true
+    };
+
+    // ✅ Filter blocked astrologers
+    if (userId) {
+      const blockedIds = await this.getBlockedAstrologerIds(userId);
+      if (blockedIds.length > 0) {
+        query._id = { $nin: blockedIds };
+      }
+    }
+
     const liveAstrologers = await this.astrologerModel
-      .find({
-        'availability.isLive': true,
-        accountStatus: 'active',
-        'profileCompletion.isComplete': true,
-        isLiveStreamEnabled: true
-      })
+      .find(query)
       .select('name profilePicture specializations ratings availability.liveStreamId availability.lastActive stats')
       .sort({ 'ratings.average': -1, 'availability.lastActive': -1 })
       .limit(limit)
@@ -738,7 +817,7 @@ export class AstrologersService {
     return {
       success: true,
       count: liveAstrologers.length,
-      data: liveAstrologers
+      data: this.serializeAstrologers(liveAstrologers)
     };
   }
 
@@ -757,9 +836,11 @@ export class AstrologersService {
       throw new NotFoundException('Astrologer not found');
     }
 
+    const serialized = this.serializeAstrologers([astrologer])[0];
+
     return {
       success: true,
-      data: astrologer
+      data: serialized
     };
   }
 
@@ -803,19 +884,13 @@ export class AstrologersService {
       throw new NotFoundException('Astrologer not found after update');
     }
 
+    const serialized = this.serializeAstrologers([updatedAstrologer])[0];
+
     return {
       success: true,
       message: 'Profile updated successfully',
-      data: updatedAstrologer
+      data: serialized
     };
-  }
-
-
-  async getAstrologerByUserId(userId: string): Promise<AstrologerDocument | null> {
-    if (!Types.ObjectId.isValid(userId)) {
-      return null;
-    }
-    return this.astrologerModel.findOne({ userId }).exec();
   }
 
   async canLogin(astrologerId: string): Promise<boolean> {

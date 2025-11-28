@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Astrologer, AstrologerDocument } from '../schemas/astrologer.schema';
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { Order, OrderDocument } from '../../orders/schemas/orders.schema';
@@ -30,139 +30,177 @@ export class RatingReviewService {
   ) {}
 
   async addReview(reviewData: ReviewData): Promise<ReviewResult> {
-    const { userId, astrologerId, orderId, rating, review, serviceType } = reviewData;
+  const { userId, astrologerId, orderId, rating, review, serviceType } = reviewData;
 
-    // Validate rating
-    if (rating < 1 || rating > 5) {
-      throw new BadRequestException('Rating must be between 1 and 5');
-    }
-
-    // ✅ Find the order from Order collection
-    const order = await this.orderModel.findOne({ orderId, userId });
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    // Check if order belongs to this astrologer
-    if (order.astrologerId.toString() !== astrologerId) {
-      throw new BadRequestException('Order does not belong to this astrologer');
-    }
-
-    // Check if order is completed
-    if (order.status !== 'completed') {
-      throw new BadRequestException('Can only review completed sessions');
-    }
-
-    // Check if already reviewed
-    if (order.reviewSubmitted || order.rating) {
-      throw new BadRequestException('This session has already been reviewed');
-    }
-
-    // Find the astrologer
-    const astrologer = await this.astrologerModel.findById(astrologerId);
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
-
-    // Find the user
-    const user = await this.userModel.findById(userId);
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    try {
-      // ✅ Update order with rating and review
-      order.rating = rating;
-      order.review = review || '';
-      order.reviewSubmitted = true;
-      await order.save();
-
-      // ✅ Update astrologer's ratings (using ratings object, not stats.rating)
-      const currentAverage = astrologer.ratings.average || 0;
-      const currentTotal = astrologer.ratings.total || 0;
-      
-      // Calculate new average rating
-      const newTotalRatings = currentTotal + 1;
-      const newAverageRating = ((currentAverage * currentTotal) + rating) / newTotalRatings;
-
-      // Update rating breakdown
-      astrologer.ratings.breakdown[rating as 1 | 2 | 3 | 4 | 5] += 1;
-      astrologer.ratings.average = Math.round(newAverageRating * 10) / 10;
-      astrologer.ratings.total = newTotalRatings;
-
-      // ✅ Update user stats
-      await this.userModel.findByIdAndUpdate(userId, {
-        $inc: { 'stats.totalRatings': 1 }
-      });
-
-      await astrologer.save();
-
-      console.log(`✅ Review added: ${rating}/5 for astrologer ${astrologer.name} (Order: ${orderId})`);
-
-      return {
-        success: true,
-        message: 'Review submitted successfully',
-        newRating: astrologer.ratings.average,
-        totalReviews: astrologer.ratings.total
-      };
-
-    } catch (error) {
-      console.error('❌ Error adding review:', error);
-      throw new BadRequestException('Failed to submit review. Please try again.');
-    }
+  // Validate rating
+  if (rating < 1 || rating > 5) {
+    throw new BadRequestException('Rating must be between 1 and 5');
   }
 
-  async getAstrologerReviews(
-    astrologerId: string, 
-    page: number = 1, 
-    limit: number = 10
-  ): Promise<any> {
-    const skip = (page - 1) * limit;
+  // ✅ Find the order from Order collection
+  const order = await this.orderModel.findOne({ orderId, userId });
+  if (!order) {
+    throw new NotFoundException('Order not found');
+  }
 
-    // ✅ Query from Order collection
-    const [reviews, totalReviews] = await Promise.all([
-      this.orderModel
-        .find({
-          astrologerId,
-          reviewSubmitted: true,
-          rating: { $gte: 1 }
-        })
-        .populate('userId', 'name profileImage')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      this.orderModel.countDocuments({
-        astrologerId,
-        reviewSubmitted: true,
-        rating: { $gte: 1 }
-      })
-    ]);
+  // ✅ Check if order belongs to this astrologer (compare ObjectIds properly)
+  if (order.astrologerId.toString() !== astrologerId) {
+    throw new BadRequestException('Order does not belong to this astrologer');
+  }
 
-    const formattedReviews = reviews.map(order => ({
-      userName: (order.userId as any)?.name || 'Anonymous',
-      userProfileImage: (order.userId as any)?.profileImage || 'default',
-      rating: order.rating,
-      review: order.review,
-      serviceType: order.type,
-      duration: order.actualDurationSeconds,
-      reviewDate: order.endedAt,
-      orderId: order.orderId
-    }));
+  // Check if order is completed
+  if (order.status !== 'completed') {
+    throw new BadRequestException('Can only review completed sessions');
+  }
 
-    const totalPages = Math.ceil(totalReviews / limit);
+  // Check if already reviewed
+  if (order.reviewSubmitted || order.rating) {
+    throw new BadRequestException('This session has already been reviewed');
+  }
+
+  // Find the astrologer
+  const astrologer = await this.astrologerModel.findById(astrologerId);
+  if (!astrologer) {
+    throw new NotFoundException('Astrologer not found');
+  }
+
+  try {
+    // ✅ Update order with rating and review (PENDING moderation)
+    order.rating = rating;
+    order.review = review || '';
+    order.reviewSubmitted = true;
+    order.reviewSubmittedAt = new Date();
+    order.reviewModerationStatus = 'pending'; // ✅ NEW: Needs admin approval
+    await order.save();
+
+    // ✅ Update user stats
+    await this.userModel.findByIdAndUpdate(userId, {
+      $inc: { 'stats.totalRatings': 1 }
+    });
+
+    console.log(`✅ Review submitted (pending moderation): ${rating}/5 for astrologer ${astrologer.name} (Order: ${orderId})`);
 
     return {
-      reviews: formattedReviews,
-      pagination: {
-        currentPage: page,
-        totalPages,
-        totalReviews,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1
-      }
+      success: true,
+      message: 'Review submitted successfully. It will be visible after admin approval.',
+      newRating: astrologer.ratings.average,
+      totalReviews: astrologer.ratings.total
     };
+
+  } catch (error) {
+    console.error('❌ Error adding review:', error);
+    throw new BadRequestException('Failed to submit review. Please try again.');
   }
+}
+
+async updateAstrologerRatings(astrologerId: string): Promise<void> {
+  const astrologer = await this.astrologerModel.findById(astrologerId);
+  if (!astrologer) {
+    throw new NotFoundException('Astrologer not found');
+  }
+
+  // Get all APPROVED reviews
+  const approvedReviews = await this.orderModel.find({
+    astrologerId: new Types.ObjectId(astrologerId),
+    reviewSubmitted: true,
+    reviewModerationStatus: 'approved',
+    rating: { $gte: 1 }
+  }).select('rating');
+
+  const totalApproved = approvedReviews.length;
+
+  if (totalApproved === 0) {
+    astrologer.ratings.average = 0;
+    astrologer.ratings.approvedReviews = 0;
+    astrologer.ratings.breakdown = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    await astrologer.save();
+    return;
+  }
+
+  // Calculate average from approved reviews only
+  const sum = approvedReviews.reduce((acc, r) => acc + (r.rating || 0), 0);
+  const average = sum / totalApproved;
+
+  // Calculate breakdown
+  const breakdown = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+  approvedReviews.forEach(r => {
+    const ratingKey = r.rating as 1 | 2 | 3 | 4 | 5;
+    breakdown[ratingKey]++;
+  });
+
+  // Get total reviews (including pending)
+  const totalReviews = await this.orderModel.countDocuments({
+    astrologerId: new Types.ObjectId(astrologerId),
+    reviewSubmitted: true,
+    rating: { $gte: 1 }
+  });
+
+  astrologer.ratings.average = Math.round(average * 10) / 10;
+  astrologer.ratings.total = totalReviews;
+  astrologer.ratings.approvedReviews = totalApproved;
+  astrologer.ratings.breakdown = breakdown;
+
+  await astrologer.save();
+
+  console.log(`✅ Astrologer ratings updated: ${astrologer.name} - ${astrologer.ratings.average}/5 (${totalApproved} approved, ${totalReviews} total)`);
+}
+
+  async getAstrologerReviews(
+  astrologerId: string, 
+  page: number = 1, 
+  limit: number = 10
+): Promise<any> {
+  const skip = (page - 1) * limit;
+
+  // ✅ Query from Order collection - ONLY APPROVED reviews
+  const [reviews, totalReviews] = await Promise.all([
+    this.orderModel
+      .find({
+        astrologerId: new Types.ObjectId(astrologerId),
+        reviewSubmitted: true,
+        reviewModerationStatus: 'approved', // ✅ Only show approved
+        rating: { $gte: 1 }
+      })
+      .populate('userId', 'name profileImage')
+      .sort({ reviewSubmittedAt: -1 }) // ✅ Sort by review date
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    this.orderModel.countDocuments({
+      astrologerId: new Types.ObjectId(astrologerId),
+      reviewSubmitted: true,
+      reviewModerationStatus: 'approved',
+      rating: { $gte: 1 }
+    })
+  ]);
+
+  const formattedReviews = reviews.map(order => ({
+    orderId: order.orderId,
+    userName: (order.userId as any)?.name || 'Anonymous',
+    userProfileImage: (order.userId as any)?.profileImage || 'default',
+    rating: order.rating,
+    review: order.review,
+    serviceType: order.type,
+    duration: order.actualDurationSeconds,
+    reviewDate: order.reviewSubmittedAt,
+    isEdited: order.reviewIsEdited || false,
+    editedAt: order.reviewEditedAt
+  }));
+
+  const totalPages = Math.ceil(totalReviews / limit);
+
+  return {
+    reviews: formattedReviews,
+    pagination: {
+      currentPage: page,
+      totalPages,
+      totalReviews,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1
+    }
+  };
+}
+
 
   async getReviewStats(astrologerId: string): Promise<any> {
     const astrologer = await this.astrologerModel.findById(astrologerId);

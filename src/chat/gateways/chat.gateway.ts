@@ -483,7 +483,6 @@ async handleStartChat(
     }
   }
 
-  // ===== SEND MESSAGE (Text, Image, Video, Voice Note) =====
 // ===== SEND MESSAGE - BROADCAST TO ALL IN ROOM =====
 @SubscribeMessage('send_message')
 async handleSendMessage(
@@ -492,12 +491,12 @@ async handleSendMessage(
 ) {
   try {
     const data = Array.isArray(payload) ? payload[0] : payload;
-    
+
     this.logger.log(`📤 send_message from ${client.id}`);
     this.logger.log(`🔍 SessionId: ${data.sessionId}`);
     this.logger.log(`🔍 Content: ${data.content?.substring(0, 50)}`);
-    
-    // Validate
+
+    // Basic validation
     if (!data?.sessionId || !data?.senderId || !data?.receiverId) {
       this.logger.error('❌ Missing required fields');
       return { success: false, message: 'Missing required fields' };
@@ -509,15 +508,80 @@ async handleSendMessage(
       return { success: false, message: 'Message content is required' };
     }
 
-    // Save to database
+    // ===== SESSION STATE ENFORCEMENT =====
+    const session = await this.chatSessionService.getSession(data.sessionId);
+    if (!session) {
+      this.logger.error(`❌ Session not found: ${data.sessionId}`);
+      return { success: false, message: 'Session not found' };
+    }
+
+    const now = new Date();
+
+    // Determine real role based on session participants
+    const currentUserId: string =
+      (client as any).data?.userId || data.senderId;
+
+    const isUser = session.userId.toString() === currentUserId;
+    const isAstrologer = session.astrologerId.toString() === currentUserId;
+
+    if (!isUser && !isAstrologer) {
+      this.logger.error(
+        `❌ Sender ${currentUserId} is not part of session ${data.sessionId}`,
+      );
+      return { success: false, message: 'Not allowed in this session' };
+    }
+
+    const type = data.type || 'text';
+
+    // 1) Active session: allow both sides
+    if (session.status === 'active') {
+      // allowed
+    } else if (session.status === 'ended') {
+      // 2) Ended session: allow only astrologer within grace window
+      const withinGrace =
+        session.postSessionWindowEndsAt &&
+        now <= new Date(session.postSessionWindowEndsAt);
+
+      if (!(isAstrologer && withinGrace)) {
+        this.logger.warn(
+          `🚫 Message blocked after end: session=${data.sessionId}, sender=${currentUserId}`,
+        );
+        return {
+          success: false,
+          message: 'Session has ended. Please continue chat to send messages.',
+        };
+      }
+
+      // Optional: in grace window, allow only text messages
+      if (type !== 'text') {
+        this.logger.warn(
+          `🚫 Non-text message blocked in grace window: session=${data.sessionId}, sender=${currentUserId}`,
+        );
+        return {
+          success: false,
+          message: 'Only text messages are allowed after session end.',
+        };
+      }
+    } else {
+      // 3) Any other status: waiting/pending/etc – block messaging
+      this.logger.warn(
+        `🚫 Message blocked; session not active: session=${data.sessionId}, status=${session.status}`,
+      );
+      return {
+        success: false,
+        message: 'Session is not active. Please wait for acceptance or continue chat.',
+      };
+    }
+
+    // ===== SAVE MESSAGE AFTER ALL CHECKS =====
     const message = await this.chatMessageService.sendMessage({
       sessionId: data.sessionId,
       senderId: data.senderId,
-      senderModel: data.senderModel || 'User',
+      senderModel: data.senderModel || (isUser ? 'User' : 'Astrologer'),
       receiverId: data.receiverId,
-      receiverModel: data.receiverModel || 'Astrologer',
+      receiverModel: data.receiverModel || (isUser ? 'Astrologer' : 'User'),
       orderId: data.orderId,
-      type: data.type || 'text',
+      type,
       content: messageContent,
       fileUrl: data.fileUrl,
       fileDuration: data.fileDuration,
@@ -555,7 +619,7 @@ async handleSendMessage(
         );
     }
 
-    // ✅ CRITICAL: Broadcast to ALL in room (including sender)
+    // ✅ Broadcast to ALL in room (including sender)
     this.server.to(data.sessionId).emit('chat_message', {
       messageId: message.messageId,
       sessionId: message.sessionId.toString(),
@@ -576,8 +640,8 @@ async handleSendMessage(
 
     this.logger.log(`✅ Message broadcasted to ${socketsInRoom.size} sockets`);
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       messageId: message.messageId,
     };
   } catch (error: any) {
@@ -585,6 +649,7 @@ async handleSendMessage(
     return { success: false, message: error.message };
   }
 }
+
 
 
   // ===== MESSAGE SENT (Grey double tick) =====

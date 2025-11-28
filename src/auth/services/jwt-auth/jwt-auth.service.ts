@@ -79,15 +79,13 @@ export class JwtAuthService {
  * Generate tokens for astrologers (includes astrologerId)
  */
 generateAstrologerTokens(
-  userId: Types.ObjectId,
   astrologerId: Types.ObjectId,
   phoneNumber: string,
   role: string
 ): TokenPair {
   const accessPayload = {
-    _id: userId.toString(), // ✅ ADD THIS - JWT Strategy looks for this
-    sub: userId.toString(),
-    userId: userId.toString(),
+    _id: astrologerId.toString(), // ✅ ADD THIS - JWT Strategy looks for this
+    sub: astrologerId.toString(),
     astrologerId: astrologerId.toString(),
     phoneNumber,
     role,
@@ -95,9 +93,8 @@ generateAstrologerTokens(
   };
 
   const refreshPayload = {
-    _id: userId.toString(), // ✅ ADD THIS
-    sub: userId.toString(),
-    userId: userId.toString(),
+    _id: astrologerId.toString(), // ✅ ADD THIS
+    sub: astrologerId.toString(),
     astrologerId: astrologerId.toString(),
     phoneNumber,
     role,

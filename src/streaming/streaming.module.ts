@@ -23,7 +23,7 @@ import { StreamRecordingService } from './services/stream-recording.service';
 import { StreamSession, StreamSessionSchema } from './schemas/stream-session.schema';
 import { StreamViewer, StreamViewerSchema } from './schemas/stream-viewer.schema';
 import { CallTransaction, CallTransactionSchema } from './schemas/call-transaction.schema';
-import { Admin, AdminSchema } from '../admin/schemas/admin.schema';
+import { Admin, AdminSchema } from '../admin/core/schemas/admin.schema';
 import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema'; // ✅ ADD THIS
 import { User, UserSchema } from '../users/schemas/user.schema';
 
