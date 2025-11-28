@@ -9,27 +9,49 @@ export class FcmService {
   private readonly logger = new Logger(FcmService.name);
 
   constructor() {
-    try {
-      const serviceAccountPath = path.resolve(
-        process.cwd(),
-        'src/config/firebase-service-account.json'
-      );
+   try {
+  // CHECK 1: Are we using Environment Variables? (Best for Production/Docker)
+  if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+    
+    const serviceAccount = {
+      projectId: process.env.FIREBASE_PROJECT_ID || 'vaidik-talk', // Fallback ID
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      // CRITICAL: Fix the newline characters from the .env string
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    };
 
-      if (!fs.existsSync(serviceAccountPath)) {
-        throw new Error(`Service account file not found at: ${serviceAccountPath}`);
-      }
+    if (!admin.apps.length) {
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+      this.logger.log('✅ Firebase Admin initialized via ENV VARIABLES');
+    }
 
+  } 
+  // CHECK 2: If no ENV, look for the File (Fallback for Local Dev)
+  else {
+    const serviceAccountPath = path.resolve(
+      process.cwd(),
+      'src/config/firebase-service-account.json'
+    );
+
+    if (fs.existsSync(serviceAccountPath)) {
       const serviceAccount = require(serviceAccountPath);
-
+      
       if (!admin.apps.length) {
         admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
         });
-        this.logger.log('✅ Firebase Admin initialized successfully');
+        this.logger.log('✅ Firebase Admin initialized via FILE');
       }
-    } catch (error: any) {
-      this.logger.error(`❌ Failed to initialize Firebase: ${error.message}`);
+    } else {
+      throw new Error('No Firebase credentials found (Checked ENV and File path)');
     }
+  }
+
+} catch (error: any) {
+  this.logger.error(`❌ Failed to initialize Firebase: ${error.message}`);
+}
   }
 
  async sendToDevice(
