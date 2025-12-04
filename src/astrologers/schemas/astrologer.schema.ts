@@ -203,7 +203,7 @@ ratings: {
   // ✅ NEW: Penalties/Fines tracking
   @Prop({
     type: [{
-      penaltyId: { type: String, required: true, unique: true },
+      penaltyId: { type: String, required: true },
       type: { 
         type: String, 
         enum: [
@@ -369,5 +369,5 @@ AstrologerSchema.index({ 'ratings.average': -1 });
 AstrologerSchema.index({ createdAt: -1 });
 AstrologerSchema.index({ tier: 1, 'ratings.average': -1 });
 AstrologerSchema.index({ tier: 1, isOnline: 1 });
-AstrologerSchema.index({ 'penalties.penaltyId': 1 }); // ✅ NEW
-AstrologerSchema.index({ 'penalties.status': 1 });  
+AstrologerSchema.index({ 'penalties.penaltyId': 1 }, { sparse: true });
+AstrologerSchema.index({ 'penalties.status': 1 });
