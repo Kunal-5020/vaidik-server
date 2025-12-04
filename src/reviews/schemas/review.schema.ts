@@ -1,52 +1,80 @@
+// src/reviews/schemas/review.schema.ts
+
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
 export type ReviewDocument = Review & Document;
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, collection: 'reviews' })
 export class Review {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ required: true, unique: true, index: true })
+  reviewId: string; // "REV_timestamp_random"
+
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
   userId: Types.ObjectId;
 
-  @Prop({ type: String, required: true, index: true })
-  astrologerId: string; // registrationId of astrologer
+  @Prop({ required: true, type: Types.ObjectId, ref: 'Astrologer', index: true })
+  astrologerId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Order', required: true })
-  orderId: Types.ObjectId;
+  @Prop({ required: true, index: true })
+  orderId: string; // Reference to order
 
-  @Prop({ type: Number, required: true, min: 1, max: 5 })
+  @Prop({ required: true, min: 1, max: 5 })
   rating: number;
 
-  @Prop({ type: String, maxlength: 500 })
-  comment?: string;
+  @Prop({ maxlength: 500, default: '' })
+  reviewText: string;
 
   @Prop({ 
-    type: String, 
-    enum: ['pending', 'approved', 'rejected', 'flagged'], 
+    required: true,
+    enum: ['pending', 'approved', 'rejected', 'flagged'],
     default: 'pending',
-    index: true 
+    index: true
   })
   moderationStatus: string;
 
-  @Prop({ type: String })
+  @Prop()
   moderationReason?: string;
 
   @Prop({ type: Types.ObjectId, ref: 'Admin' })
   moderatedBy?: Types.ObjectId;
 
-  @Prop({ type: Date })
+  @Prop()
   moderatedAt?: Date;
 
-  @Prop({ type: Boolean, default: false })
+  @Prop({ default: false })
   isEdited: boolean;
 
-  @Prop({ type: Date })
+  @Prop()
   editedAt?: Date;
+
+  @Prop({ 
+    required: true,
+    enum: ['chat', 'call', 'video_call'],
+  })
+  serviceType: string;
+
+  @Prop()
+  sessionDuration?: number; // in seconds
+
+  @Prop({ default: false, index: true })
+  isDeleted: boolean;
+
+  @Prop()
+  deletedAt?: Date;
+
+  @Prop({ default: Date.now })
+  createdAt: Date;
+
+  @Prop()
+  updatedAt: Date;
 }
 
 export const ReviewSchema = SchemaFactory.createForClass(Review);
 
-// Compound indexes for performance
-ReviewSchema.index({ astrologerId: 1, moderationStatus: 1 });
-ReviewSchema.index({ userId: 1, orderId: 1 }, { unique: true }); // One review per order
-ReviewSchema.index({ createdAt: -1 });
+// ✅ Compound Indexes
+ReviewSchema.index({ astrologerId: 1, moderationStatus: 1, createdAt: -1 });
+ReviewSchema.index({ userId: 1, astrologerId: 1 });
+ReviewSchema.index({ orderId: 1 }, { unique: true }); // One review per order
+ReviewSchema.index({ moderationStatus: 1, createdAt: -1 });
+ReviewSchema.index({ rating: 1, moderationStatus: 1 });

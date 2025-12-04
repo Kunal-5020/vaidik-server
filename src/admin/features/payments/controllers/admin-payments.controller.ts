@@ -24,6 +24,7 @@ import { ProcessPayoutDto } from '../dto/process-payout.dto';
 import { RejectPayoutDto } from '../dto/reject-payout.dto';
 import { CreateGiftCardDto } from '../dto/create-gift-card.dto';
 import { UpdateGiftCardDto } from '../dto/update-gift-card.dto';
+import { CompletePayoutDto } from '../dto/complete-payout.dto';
 import { ProcessWalletRefundDto } from '../dto/process-wallet-refund.dto';
 
 @Controller('admin/payments')
@@ -116,6 +117,35 @@ export class AdminPaymentsController {
     @Body(ValidationPipe) processDto: ProcessPayoutDto,
   ) {
     return this.adminPaymentsService.approvePayout(payoutId, admin._id, processDto);
+  }
+
+  /**
+   * POST /admin/payments/payouts/:payoutId/process
+   * Mark payout as processing (status: approved → processing)
+   */
+  @Post('payouts/:payoutId/process')
+  @RequirePermissions(Permissions.PAYOUTS_APPROVE)
+  async processPayout(
+    @Param('payoutId') payoutId: string,
+    @CurrentAdmin() admin: any,
+    @Body(ValidationPipe) processDto: ProcessPayoutDto,
+  ) {
+    return this.adminPaymentsService.processPayout(payoutId, admin._id, processDto);
+  }
+
+  /**
+   * POST /admin/payments/payouts/:payoutId/complete
+   * Complete payout (status: processing → completed)
+   * ✅ This deducts money from astrologer balance
+   */
+  @Post('payouts/:payoutId/complete')
+  @RequirePermissions(Permissions.PAYOUTS_APPROVE)
+  async completePayout(
+    @Param('payoutId') payoutId: string,
+    @CurrentAdmin() admin: any,
+    @Body(ValidationPipe) completeDto: CompletePayoutDto,
+  ) {
+    return this.adminPaymentsService.completePayout(payoutId, admin._id, completeDto);
   }
 
   /**

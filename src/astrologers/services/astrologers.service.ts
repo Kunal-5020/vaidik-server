@@ -844,13 +844,12 @@ export class AstrologersService {
     };
   }
 
-  async updateProfile(
-    astrologerId: string,
-    updateDto: UpdateAstrologerProfileDto
-  ): Promise<any> {
-    if (!Types.ObjectId.isValid(astrologerId)) {
-      throw new BadRequestException('Invalid astrologer ID format');
-    }
+  async updateProfile(astrologerId: string, updateDto: UpdateAstrologerProfileDto) {
+  try {
+    console.log('📝 [AstrologersService] Updating profile:', {
+      astrologerId,
+      updateData: updateDto,
+    });
 
     const astrologer = await this.astrologerModel.findById(astrologerId);
 
@@ -858,40 +857,108 @@ export class AstrologersService {
       throw new NotFoundException('Astrologer not found');
     }
 
-    if (astrologer.accountStatus !== 'active') {
-      throw new BadRequestException('Your account is not active. Contact support.');
+    // Update fields
+    if (updateDto.name !== undefined) {
+      astrologer.name = updateDto.name;
     }
 
-    const updateFields: any = {};
-
-    if (updateDto.bio !== undefined) updateFields.bio = updateDto.bio;
-    if (updateDto.profilePicture !== undefined) updateFields.profilePicture = updateDto.profilePicture;
-    if (updateDto.chatRate !== undefined) updateFields['pricing.chat'] = updateDto.chatRate;
-    if (updateDto.callRate !== undefined) updateFields['pricing.call'] = updateDto.callRate;
-    if (updateDto.videoCallRate !== undefined) updateFields['pricing.videoCall'] = updateDto.videoCallRate;
-    if (updateDto.isChatEnabled !== undefined) updateFields.isChatEnabled = updateDto.isChatEnabled;
-    if (updateDto.isCallEnabled !== undefined) updateFields.isCallEnabled = updateDto.isCallEnabled;
-
-    updateFields.updatedAt = new Date();
-
-    const updatedAstrologer = await this.astrologerModel.findByIdAndUpdate(
-      astrologerId,
-      { $set: updateFields },
-      { new: true, lean: true }
-    ).exec();
-
-    if (!updatedAstrologer) {
-      throw new NotFoundException('Astrologer not found after update');
+    if (updateDto.bio !== undefined) {
+      astrologer.bio = updateDto.bio;
     }
 
-    const serialized = this.serializeAstrologers([updatedAstrologer])[0];
+    if (updateDto.experienceYears !== undefined) {
+      astrologer.experienceYears = updateDto.experienceYears;
+    }
+
+    if (updateDto.specializations !== undefined) {
+      astrologer.specializations = updateDto.specializations;
+      astrologer.profileCompletion.steps.expertise = 
+        updateDto.specializations.length > 0 && 
+        astrologer.languages && 
+        astrologer.languages.length > 0;
+    }
+
+    if (updateDto.languages !== undefined) {
+      astrologer.languages = updateDto.languages;
+      astrologer.profileCompletion.steps.expertise = 
+        updateDto.languages.length > 0 && 
+        astrologer.specializations && 
+        astrologer.specializations.length > 0;
+    }
+
+    if (updateDto.profilePicture !== undefined) {
+      astrologer.profilePicture = updateDto.profilePicture;
+    }
+
+    if (updateDto.isChatEnabled !== undefined) {
+      astrologer.isChatEnabled = updateDto.isChatEnabled;
+    }
+
+    if (updateDto.isCallEnabled !== undefined) {
+      astrologer.isCallEnabled = updateDto.isCallEnabled;
+    }
+
+    // Check and update profile completion
+    await this.checkAndUpdateProfileCompletion(astrologer);
+
+    await astrologer.save();
+
+    console.log('✅ [AstrologersService] Profile updated successfully');
 
     return {
       success: true,
       message: 'Profile updated successfully',
-      data: serialized
+      data: {
+        _id: astrologer._id,
+        name: astrologer.name,
+        bio: astrologer.bio,
+        experienceYears: astrologer.experienceYears,
+        specializations: astrologer.specializations,
+        languages: astrologer.languages,
+        profilePicture: astrologer.profilePicture,
+        profileCompletion: astrologer.profileCompletion,
+      },
     };
+  } catch (error) {
+    console.error('❌ [AstrologersService] Update error:', error);
+    throw error;
   }
+}
+
+/**
+ * Helper: Check and update profile completion
+ */
+private async checkAndUpdateProfileCompletion(astrologer: any): Promise<void> {
+  const steps = astrologer.profileCompletion.steps;
+  
+  // Update basic info step
+  steps.basicInfo = !!(
+    astrologer.name && 
+    astrologer.email && 
+    astrologer.phoneNumber &&
+    astrologer.gender &&
+    astrologer.dateOfBirth
+  );
+
+  // Update expertise step
+  steps.expertise = !!(
+    astrologer.specializations?.length > 0 && 
+    astrologer.languages?.length > 0
+  );
+
+  // Check if all steps are complete
+  const allStepsComplete = Object.values(steps).every(step => step === true);
+
+  if (allStepsComplete && !astrologer.profileCompletion.isComplete) {
+    astrologer.profileCompletion.isComplete = true;
+    astrologer.profileCompletion.completedAt = new Date();
+    
+    // Enable services once profile is complete
+    astrologer.isChatEnabled = true;
+    astrologer.isCallEnabled = true;
+    astrologer.isLiveStreamEnabled = true;
+  }
+}
 
   async canLogin(astrologerId: string): Promise<boolean> {
     if (!Types.ObjectId.isValid(astrologerId)) {

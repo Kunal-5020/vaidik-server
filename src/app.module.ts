@@ -27,6 +27,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { RegistrationModule } from './registration/registration.module';
 import { UploadModule } from './upload/upload.module';
 import { ShopifyModule } from './shopify/shopify.module';
+import { BankAccountsModule } from './bank-accounts/bank-accounts.module';
+import { TransactionsModule } from './transactions/transactions.module';
 
 import { ScheduleModule } from '@nestjs/schedule';
 import { SupportModule } from './support/support.module';
@@ -112,6 +114,8 @@ import { AdminModule } from './admin/admin.module';
     UploadModule,
     ShopifyModule,
     SupportModule,
+    BankAccountsModule,
+    TransactionsModule,
   ],
   controllers: [AppController],
   providers: [

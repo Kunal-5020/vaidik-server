@@ -39,7 +39,17 @@ export class AstrologerProfileController {
   // ===== PROFILE MANAGEMENT =====
 
   /**
-   * Get my profile
+   * ✅ NEW: Get complete profile with all details
+   * GET /astrologer/profile/complete
+   */
+  @Get('profile/complete')
+  async getCompleteProfile(@Req() req: AuthenticatedRequest) {
+    const astrologerId = req.user.astrologerId || req.user._id;
+    return this.astrologerService.getCompleteProfile(astrologerId);
+  }
+
+  /**
+   * Get my profile (basic)
    * GET /astrologer/profile
    */
   @Get('profile')
@@ -151,28 +161,6 @@ export class AstrologerProfileController {
   }
 
   // ===== LIVE STREAMING =====
-
-  /**
-   * Start live stream
-   * POST /astrologer/live/start
-   */
-  @Post('live/start')
-  @HttpCode(HttpStatus.OK)
-  async startLiveStream(@Req() req: AuthenticatedRequest) {
-    const astrologerId = req.user.astrologerId || req.user._id;
-    return this.astrologerService.startLiveStream(astrologerId);
-  }
-
-  /**
-   * Stop live stream
-   * POST /astrologer/live/stop
-   */
-  @Post('live/stop')
-  @HttpCode(HttpStatus.OK)
-  async stopLiveStream(@Req() req: AuthenticatedRequest) {
-    const astrologerId = req.user.astrologerId || req.user._id;
-    return this.astrologerService.stopLiveStream(astrologerId);
-  }
 
   /**
    * Get live stream status

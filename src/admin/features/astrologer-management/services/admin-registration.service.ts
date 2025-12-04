@@ -303,64 +303,11 @@ export class AdminRegistrationService {
     adminNotes?: string
   ): Promise<void> {
     try {
-      // Check if user already exists
-      const existingUser = await this.userModel.findOne({ 
-        phoneNumber: registration.phoneNumber 
-      });
 
-      let userId: Types.ObjectId;
-
-      if (existingUser) {
-        userId = existingUser._id as Types.ObjectId;
-        this.logger.log(`User already exists: ${userId}`);
-      } else {
-        // Create new user
-        const phoneHash = this.generatePhoneHash(registration.phoneNumber);
-        const countryCode = this.extractCountryCode(registration.phoneNumber);
-
-        const newUser = new this.userModel({
-          phoneNumber: registration.phoneNumber,
-          phoneHash: phoneHash,
-          countryCode: countryCode,
-          name: registration.name,
-          email: registration.email,
-          gender: registration.gender,
-          dateOfBirth: registration.dateOfBirth,
-          profileImage: registration.profilePicture,
-          status: 'active',
-          isPhoneVerified: true,
-          appLanguage: 'en',
-          registrationMethod: 'otp',
-          wallet: {
-            balance: 0,
-            totalRecharged: 0,
-            totalSpent: 0,
-            currency: 'INR',
-          },
-          stats: {
-            totalSessions: 0,
-            totalMinutesSpent: 0,
-            totalAmount: 0,
-            totalRatings: 0
-          },
-          orders: [],
-          walletTransactions: [],
-          remedies: [],
-          reports: [],
-          favoriteAstrologers: [],
-          createdAt: new Date(),
-          updatedAt: new Date()
-        });
-
-        await newUser.save();
-        userId = newUser._id as Types.ObjectId;
-        this.logger.log(`New user created: ${userId}`);
-      }
 
       // Create Astrologer Profile
       const astrologer = new this.astrologerModel({
         registrationId: registration._id as Types.ObjectId,
-        userId: userId,
         name: registration.name,
         phoneNumber: registration.phoneNumber,
         email: registration.email,
@@ -440,7 +387,6 @@ export class AdminRegistrationService {
           candidateName: registration.name,
           ticketNumber: registration.ticketNumber,
           astrologerId: astrologer._id,
-          userId: userId
         }
       });
 

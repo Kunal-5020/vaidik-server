@@ -20,15 +20,17 @@ import { AstrologerProfileController } from './controllers/astrologer-profile.co
 // ✅ Import UsersModule for UserBlockingService
 import { UsersModule } from '../users/users.module';
 import { AuthModule } from 'src/auth/auth.module';
+import { Review, ReviewSchema } from '../reviews/schemas/review.schema';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Astrologer.name, schema: AstrologerSchema },
       { name: ProfileChangeRequest.name, schema: ProfileChangeRequestSchema },
+      { name: Review.name, schema: ReviewSchema },
     ]),
     JwtModule.register({
-      secret: process.env.JWT_SECRET || 'your-secret-key',
+      secret: process.env.JWT_SECRET,
       signOptions: { expiresIn: '7d' },
     }), // ✅ ADD for JWT verification in controller
     UsersModule, // ✅ This imports UserBlockingService

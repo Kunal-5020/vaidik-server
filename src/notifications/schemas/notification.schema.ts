@@ -9,8 +9,12 @@ export class Notification {
   @Prop({ required: true, unique: true, index: true })
   notificationId: string;
 
-  @Prop({ required: true, type: Types.ObjectId, refPath: 'recipientModel', index: true })
-  recipientId: Types.ObjectId;
+  @Prop({ 
+    required: true, 
+    type: String,
+    index: true 
+  })
+  recipientId: string;
 
   @Prop({ required: true, enum: ['User', 'Astrologer', 'Admin'] })
   recipientModel: string;
@@ -70,6 +74,14 @@ export class Notification {
       'session_ending',
       'session_ending_soon',
       'session_ended',
+
+      // ✅ Payouts (ADD THESE)
+      'payout_requested',      // When astrologer requests payout
+      'payout_approved',        // When admin approves
+      'payout_processing',      // When admin marks as processing
+      'payout_completed',       // When payout is completed
+      'payout_rejected',        // When payout is rejected
+      'payout_processed',       // Legacy - keep for compatibility
 
       // Balance / payments
       'low_balance',

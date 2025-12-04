@@ -1,7 +1,7 @@
 // notifications/services/notification.service.ts (UPDATED)
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Notification, NotificationDocument } from '../schemas/notification.schema';
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
@@ -309,19 +309,29 @@ export class NotificationService {
     }
   }
 
-  async getUserNotifications(
-    userId: string,
-    page: number = 1,
-    limit: number = 20,
-    unreadOnly: boolean = false
-  ): Promise<any> {
-    const skip = (page - 1) * limit;
-    const query: any = { recipientId: userId };
+async getUserNotifications(
+  userId: string,
+  page: number = 1,
+  limit: number = 20,
+  unreadOnly: boolean = false
+): Promise<any> {
+  const skip = (page - 1) * limit;
+  
+  // ✅ Query both string AND ObjectId formats
+  const query: any = {
+    $or: [
+      { recipientId: userId },  // String format
+      { recipientId: new Types.ObjectId(userId) }  // ObjectId format
+    ]
+  };
 
-    if (unreadOnly) {
-      query.isRead = false;
-    }
+  if (unreadOnly) {
+    query.isRead = false;
+  }
 
+  this.logger.log(`📊 Query with $or: userId=${userId}, page=${page}, limit=${limit}`);
+
+  try {
     const [notifications, total, unreadCount] = await Promise.all([
       this.notificationModel
         .find(query)
@@ -329,10 +339,17 @@ export class NotificationService {
         .skip(skip)
         .limit(limit)
         .lean()
-        .exec() as any,
+        .exec(),
       this.notificationModel.countDocuments(query),
-      this.notificationModel.countDocuments({ recipientId: userId, isRead: false }),
+      this.notificationModel.countDocuments({ 
+        $or: [
+          { recipientId: userId, isRead: false },
+          { recipientId: new Types.ObjectId(userId), isRead: false }
+        ]
+      }),
     ]);
+
+    this.logger.log(`✅ Found ${notifications.length} notifications (Total: ${total}, Unread: ${unreadCount})`);
 
     return {
       success: true,
@@ -347,7 +364,12 @@ export class NotificationService {
         },
       },
     };
+  } catch (error) {
+    this.logger.error(`❌ Error fetching notifications: ${error.message}`);
+    throw error;
   }
+}
+
 
   async markAsRead(notificationIds: string[]): Promise<void> {
     await this.notificationModel.updateMany(
@@ -361,9 +383,15 @@ export class NotificationService {
     );
   }
 
-  async markAllAsRead(userId: string): Promise<void> {
+ async markAllAsRead(userId: string): Promise<void> {
+    let recipientId: any = userId;
+    
+    if (Types.ObjectId.isValid(userId)) {
+      recipientId = new Types.ObjectId(userId);
+    }
+
     await this.notificationModel.updateMany(
-      { recipientId: userId, isRead: false },
+      { recipientId, isRead: false },
       {
         $set: {
           isRead: true,
@@ -374,15 +402,39 @@ export class NotificationService {
   }
 
   async deleteNotification(notificationId: string, userId: string): Promise<void> {
-    await this.notificationModel.deleteOne({ notificationId, recipientId: userId });
+    let recipientId: any = userId;
+    
+    if (Types.ObjectId.isValid(userId)) {
+      recipientId = new Types.ObjectId(userId);
+    }
+
+    await this.notificationModel.deleteOne({ 
+      notificationId, 
+      recipientId 
+    });
   }
 
-  async clearAllNotifications(userId: string): Promise<void> {
-    await this.notificationModel.deleteMany({ recipientId: userId });
+ async clearAllNotifications(userId: string): Promise<void> {
+    let recipientId: any = userId;
+    
+    if (Types.ObjectId.isValid(userId)) {
+      recipientId = new Types.ObjectId(userId);
+    }
+
+    await this.notificationModel.deleteMany({ recipientId });
   }
 
   async getUnreadCount(userId: string): Promise<number> {
-    return this.notificationModel.countDocuments({ recipientId: userId, isRead: false });
+    let recipientId: any = userId;
+    
+    if (Types.ObjectId.isValid(userId)) {
+      recipientId = new Types.ObjectId(userId);
+    }
+
+    return this.notificationModel.countDocuments({ 
+      recipientId, 
+      isRead: false 
+    });
   }
 
   async getNotificationStats(): Promise<any> {

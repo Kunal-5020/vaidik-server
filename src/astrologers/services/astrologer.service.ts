@@ -15,7 +15,92 @@ export class AstrologerService {
   ) {}
 
   /**
-   * Get astrologer profile (requires auth)
+   * ✅ NEW: Get complete profile with ALL details
+   */
+  async getCompleteProfile(astrologerId: string): Promise<any> {
+    const astrologer = await this.astrologerModel
+      .findById(astrologerId)
+      .populate('registrationId', 'ticketNumber status')
+      .select('-__v -devices.fcmToken') // Exclude sensitive data
+      .lean();
+
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer profile not found');
+    }
+
+    // Calculate profile completion percentage
+    const steps = astrologer.profileCompletion.steps;
+    const completedSteps = Object.values(steps).filter(step => step === true).length;
+    const totalSteps = Object.keys(steps).length;
+    const completionPercentage = Math.round((completedSteps / totalSteps) * 100);
+
+    return {
+      success: true,
+      data: {
+        // Personal Information
+        _id: astrologer._id,
+        name: astrologer.name,
+        email: astrologer.email,
+        phoneNumber: astrologer.phoneNumber,
+        dateOfBirth: astrologer.dateOfBirth,
+        gender: astrologer.gender,
+        profilePicture: astrologer.profilePicture,
+        bio: astrologer.bio,
+
+        // Professional Details
+        experienceYears: astrologer.experienceYears,
+        specializations: astrologer.specializations,
+        languages: astrologer.languages,
+        tier: astrologer.tier,
+
+        // Pricing
+        pricing: astrologer.pricing,
+
+        // Availability
+        availability: {
+          isOnline: astrologer.availability.isOnline,
+          isAvailable: astrologer.availability.isAvailable,
+          isLive: astrologer.availability.isLive,
+          workingHours: astrologer.availability.workingHours,
+          lastActive: astrologer.availability.lastActive,
+        },
+
+        // Services Status
+        isChatEnabled: astrologer.isChatEnabled,
+        isCallEnabled: astrologer.isCallEnabled,
+        isLiveStreamEnabled: astrologer.isLiveStreamEnabled,
+
+        // Account Status
+        accountStatus: astrologer.accountStatus,
+        singleDeviceMode: astrologer.singleDeviceMode,
+
+        // Profile Completion
+        profileCompletion: {
+          isComplete: astrologer.profileCompletion.isComplete,
+          completedAt: astrologer.profileCompletion.completedAt,
+          percentage: completionPercentage,
+          completedSteps,
+          totalSteps,
+          steps: astrologer.profileCompletion.steps,
+        },
+
+        // Stats & Ratings
+        ratings: astrologer.ratings,
+        stats: astrologer.stats,
+        earnings: astrologer.earnings,
+
+        // Registration Info
+        registrationId: astrologer.registrationId,
+
+        // Timestamps
+        createdAt: astrologer.createdAt,
+        updatedAt: astrologer.updatedAt,
+      },
+    };
+  }
+
+  /**
+   * Get astrologer profile (basic - kept for backward compatibility)
    */
   async getProfile(astrologerId: string): Promise<any> {
     const astrologer = await this.astrologerModel
@@ -321,18 +406,14 @@ export class AstrologerService {
   }
 
   /**
- * Helper: Get missing profile steps
- */
-private getMissingProfileSteps(steps: any): string[] {
-  const missing: string[] = []; // ✅ Fixed: Explicit type
-  if (!steps.basicInfo) missing.push('Basic Information');
-  if (!steps.expertise) missing.push('Expertise & Languages');
-  if (!steps.pricing) missing.push('Pricing Setup');
-  if (!steps.gallery) missing.push('Photo Gallery');
-  if (!steps.introAudio) missing.push('Intro Audio Message');
-  if (!steps.availability) missing.push('Availability & Working Hours');
-  return missing;
-}
-
-
+   * Helper: Get missing profile steps
+   */
+  private getMissingProfileSteps(steps: any): string[] {
+    const missing: string[] = [];
+    if (!steps.basicInfo) missing.push('Basic Information');
+    if (!steps.expertise) missing.push('Expertise & Languages');
+    if (!steps.pricing) missing.push('Pricing Setup');
+    if (!steps.availability) missing.push('Availability & Working Hours');
+    return missing;
+  }
 }

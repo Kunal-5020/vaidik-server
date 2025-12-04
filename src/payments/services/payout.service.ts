@@ -93,90 +93,150 @@ export class PayoutService {
 
   // ===== GET PAYOUT REQUESTS =====
 
-  async getAstrologerPayouts(
-    astrologerId: string,
-    page: number = 1,
-    limit: number = 20,
-    status?: string
-  ): Promise<any> {
-    const skip = (page - 1) * limit;
-    const query: any = { astrologerId };
+// src/payouts/services/payout.service.ts
 
-    if (status) query.status = status;
+/**
+ * Get payout requests with full details
+ */
+async getAstrologerPayouts(
+  astrologerId: string,
+  page: number = 1,
+  limit: number = 20,
+  status?: string
+): Promise<any> {
+  const skip = (page - 1) * limit;
+  const query: any = { astrologerId };
 
-    const [payouts, total] = await Promise.all([
-      this.payoutModel
-        .find(query)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      this.payoutModel.countDocuments(query)
-    ]);
+  if (status) query.status = status;
 
-    return {
-      success: true,
-      data: {
-        payouts,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit)
-        }
+  const [payouts, total] = await Promise.all([
+    this.payoutModel
+      .find(query)
+      .populate('astrologerId', 'name phoneNumber email') // ✅ Add email
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    this.payoutModel.countDocuments(query)
+  ]);
+
+  return {
+    success: true,
+    data: {
+      payouts,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
       }
-    };
-  }
-
-  async getPayoutDetails(payoutId: string, astrologerId: string): Promise<any> {
-    const payout = await this.payoutModel
-      .findOne({ payoutId, astrologerId })
-      .lean();
-
-    if (!payout) {
-      throw new NotFoundException('Payout request not found');
     }
+  };
+}
 
-    return {
-      success: true,
-      data: payout
-    };
+/**
+ * Get payout details with full bank info
+ */
+async getPayoutDetails(payoutId: string, astrologerId: string): Promise<any> {
+  const payout = await this.payoutModel
+    .findOne({ payoutId, astrologerId })
+    .populate('astrologerId', 'name phoneNumber email') // ✅ Include email
+    .lean();
+
+  if (!payout) {
+    throw new NotFoundException('Payout request not found');
   }
+
+  return {
+    success: true,
+    data: payout
+  };
+}
+
 
   // ===== STATISTICS =====
 
   async getPayoutStats(astrologerId: string): Promise<any> {
-    const astrologer = await this.astrologerModel
-      .findById(astrologerId)
-      .select('earnings')
-      .lean();
+  const astrologer = await this.astrologerModel
+    .findById(astrologerId)
+    .select('earnings penalties')
+    .lean();
 
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
-
-    const [totalPayouts, completedPayouts, pendingAmount] = await Promise.all([
-      this.payoutModel.countDocuments({ astrologerId }),
-      this.payoutModel.aggregate([
-        { $match: { astrologerId: astrologerId, status: 'completed' } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]),
-      this.payoutModel.aggregate([
-        { $match: { astrologerId: astrologerId, status: { $in: ['pending', 'approved', 'processing'] } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ])
-    ]);
-
-    return {
-      success: true,
-      data: {
-        totalEarned: astrologer.earnings.totalEarned,
-        withdrawableAmount: astrologer.earnings.withdrawableAmount,
-        totalWithdrawn: completedPayouts[0]?.total || 0,
-        pendingWithdrawal: pendingAmount[0]?.total || 0,
-        totalPayoutRequests: totalPayouts,
-        platformCommission: astrologer.earnings.platformCommission
-      }
-    };
+  if (!astrologer) {
+    throw new NotFoundException('Astrologer not found');
   }
+
+  const [totalPayouts, completedPayouts, pendingAmount] = await Promise.all([
+    this.payoutModel.countDocuments({ astrologerId }),
+    this.payoutModel.aggregate([
+      { $match: { astrologerId: astrologerId, status: 'completed' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]),
+    this.payoutModel.aggregate([
+      { 
+        $match: { 
+          astrologerId: astrologerId, 
+          status: { $in: ['pending', 'approved', 'processing'] } 
+        } 
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ])
+  ]);
+
+  const totalWithdrawn = completedPayouts[0]?.total || 0;
+  const pendingWithdrawal = pendingAmount[0]?.total || 0;
+
+  // ✅ Calculate earnings with penalties
+  const totalEarned = astrologer.earnings?.totalEarned || 0;
+  const platformCommissionRate = astrologer.earnings?.platformCommissionRate || 30;
+  const platformCommission = (totalEarned * platformCommissionRate) / 100;
+  
+  // ✅ Calculate total applied penalties
+  const appliedPenalties = astrologer.penalties
+    ?.filter(p => p.status === 'applied')
+    .reduce((sum, p) => sum + p.amount, 0) || 0;
+  
+  // Net earnings after commission
+  const netEarnings = totalEarned - platformCommission;
+  
+  // ✅ Withdrawable = Net Earnings - Penalties - Withdrawn - Pending
+  const withdrawableAmount = Math.max(
+    0, 
+    netEarnings - appliedPenalties - totalWithdrawn - pendingWithdrawal
+  );
+
+  // ✅ Update astrologer document
+  await this.astrologerModel.findByIdAndUpdate(astrologerId, {
+    'earnings.platformCommission': platformCommission,
+    'earnings.netEarnings': netEarnings,
+    'earnings.totalPenalties': appliedPenalties,
+    'earnings.totalWithdrawn': totalWithdrawn,
+    'earnings.pendingWithdrawal': pendingWithdrawal,
+    'earnings.withdrawableAmount': withdrawableAmount,
+    'earnings.lastUpdated': new Date(),
+  });
+
+  return {
+    success: true,
+    data: {
+      totalEarned,
+      platformCommission,
+      platformCommissionRate,
+      netEarnings,
+      totalPenalties: appliedPenalties,
+      withdrawableAmount,
+      totalWithdrawn,
+      pendingWithdrawal,
+      totalPayoutRequests: totalPayouts,
+      
+      // ✅ Penalty breakdown
+      penalties: {
+        total: appliedPenalties,
+        count: astrologer.penalties?.filter(p => p.status === 'applied').length || 0,
+        pending: astrologer.penalties?.filter(p => p.status === 'pending').length || 0,
+        waived: astrologer.penalties?.filter(p => p.status === 'waived').length || 0,
+      }
+    }
+  };
+}
 }

@@ -74,6 +74,19 @@ export class Astrologer {
   languages: string[];
 
   @Prop({
+    enum: ['none', 'rising_star', 'top_choice', 'celebrity'],
+    default: 'none',
+    index: true
+  })
+  tier: string;
+
+  @Prop()
+  tierAssignedAt?: Date;
+
+  @Prop()
+  tierAssignedBy?: Types.ObjectId; // Admin who assigned tier
+
+  @Prop({
     type: {
       chat: { type: Number, required: true, default: 0 },
       call: { type: Number, required: true, default: 0 },
@@ -150,23 +163,101 @@ ratings: {
   };
 
   // Earnings
+  // ✅ UPDATED: Earnings with proper calculation fields
   @Prop({
     type: {
-      totalEarned: { type: Number, default: 0 },
-      platformCommission: { type: Number, default: 20 },
-      withdrawableAmount: { type: Number, default: 0 }
+      totalEarned: { type: Number, default: 0 },           // Total revenue generated
+      platformCommission: { type: Number, default: 0 },     // Platform's cut (₹)
+      platformCommissionRate: { type: Number, default: 30 }, // Commission rate (%)
+      netEarnings: { type: Number, default: 0 },           // totalEarned - platformCommission
+      totalPenalties: { type: Number, default: 0 },        // ✅ Total penalties/fines
+      withdrawableAmount: { type: Number, default: 0 },    // Available to withdraw
+      totalWithdrawn: { type: Number, default: 0 },        // Already withdrawn
+      pendingWithdrawal: { type: Number, default: 0 },     // In pending payout requests
+      lastUpdated: { type: Date, default: Date.now }
     },
     default: () => ({
       totalEarned: 0,
-      platformCommission: 20,
-      withdrawableAmount: 0
+      platformCommission: 0,
+      platformCommissionRate: 30,
+      netEarnings: 0,
+      totalPenalties: 0,
+      withdrawableAmount: 0,
+      totalWithdrawn: 0,
+      pendingWithdrawal: 0,
+      lastUpdated: new Date()
     })
   })
   earnings: {
     totalEarned: number;
     platformCommission: number;
+    platformCommissionRate: number;
+    netEarnings: number;
+    totalPenalties: number;
     withdrawableAmount: number;
+    totalWithdrawn: number;
+    pendingWithdrawal: number;
+    lastUpdated: Date;
   };
+
+  // ✅ NEW: Penalties/Fines tracking
+  @Prop({
+    type: [{
+      penaltyId: { type: String, required: true, unique: true },
+      type: { 
+        type: String, 
+        enum: [
+          'late_response',           // Late to respond to call/chat
+          'missed_appointment',      // Missed scheduled session
+          'policy_violation',        // Violated platform policies
+          'customer_complaint',      // Customer complaint upheld
+          'quality_issue',          // Poor service quality
+          'no_show',                // Didn't show up for session
+          'refund_issued',          // Refund due to astrologer fault
+          'inappropriate_behavior',  // Misconduct
+          'other'
+        ],
+        required: true 
+      },
+      amount: { type: Number, required: true },
+      reason: { type: String, required: true },
+      description: String,
+      orderId: String,                    // Related order if any
+      userId: { type: Types.ObjectId, ref: 'User' }, // User who reported
+      status: { 
+        type: String, 
+        enum: ['pending', 'applied', 'waived', 'disputed'],
+        default: 'applied'
+      },
+      appliedBy: { type: Types.ObjectId, ref: 'Admin' },
+      appliedAt: { type: Date, default: Date.now },
+      waivedBy: { type: Types.ObjectId, ref: 'Admin' },
+      waivedAt: Date,
+      waiverReason: String,
+      disputeNote: String,
+      disputedAt: Date,
+      createdAt: { type: Date, default: Date.now }
+    }],
+    default: []
+  })
+  penalties: {
+    penaltyId: string;
+    type: string;
+    amount: number;
+    reason: string;
+    description?: string;
+    orderId?: string;
+    userId?: Types.ObjectId;
+    status: 'pending' | 'applied' | 'waived' | 'disputed';
+    appliedBy?: Types.ObjectId;
+    appliedAt?: Date;
+    waivedBy?: Types.ObjectId;
+    waivedAt?: Date;
+    waiverReason?: string;
+    disputeNote?: string;
+    disputedAt?: Date;
+    createdAt: Date;
+  }[];
 
   // Availability & Live Status
   @Prop({
@@ -276,3 +367,7 @@ AstrologerSchema.index({ 'availability.isLive': 1 }); // ✅ NEW: For finding li
 AstrologerSchema.index({ specializations: 1 });
 AstrologerSchema.index({ 'ratings.average': -1 });
 AstrologerSchema.index({ createdAt: -1 });
+AstrologerSchema.index({ tier: 1, 'ratings.average': -1 });
+AstrologerSchema.index({ tier: 1, isOnline: 1 });
+AstrologerSchema.index({ 'penalties.penaltyId': 1 }); // ✅ NEW
+AstrologerSchema.index({ 'penalties.status': 1 });  

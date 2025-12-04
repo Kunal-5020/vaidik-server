@@ -13,6 +13,8 @@ import { NotificationService } from '../../../../notifications/services/notifica
 import { WalletService } from '../../../../payments/services/wallet.service';
 import { ProcessPayoutDto } from '../dto/process-payout.dto';
 import { ProcessWalletRefundDto } from '../dto/process-wallet-refund.dto';
+import { Astrologer, AstrologerDocument } from '../../../../astrologers/schemas/astrologer.schema';
+import { CompletePayoutDto } from '../dto/complete-payout.dto';
 
 @Injectable()
 export class AdminPaymentsService {
@@ -23,6 +25,7 @@ export class AdminPaymentsService {
     @InjectModel(PayoutRequest.name) private payoutModel: Model<PayoutRequestDocument>,
     @InjectModel(WalletRefundRequest.name) private walletRefundModel: Model<WalletRefundRequestDocument>,
     @InjectModel(GiftCard.name) private giftCardModel: Model<GiftCardDocument>,
+     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>, // ✅ Add this
     private activityLogService: AdminActivityLogService,
     private notificationService: NotificationService,
     private walletService: WalletService,
@@ -196,7 +199,8 @@ export class AdminPaymentsService {
   }
 
   /**
-   * Approve payout
+   * Approve payout (pending → approved)
+   * ❌ Does NOT deduct money yet
    */
   async approvePayout(payoutId: string, adminId: string, processDto: ProcessPayoutDto): Promise<any> {
     const payout = await this.payoutModel.findOne({ payoutId });
@@ -205,14 +209,18 @@ export class AdminPaymentsService {
     }
 
     if (payout.status !== 'pending') {
-      throw new BadRequestException('Payout request already processed');
+      throw new BadRequestException('Only pending payouts can be approved');
     }
 
     payout.status = 'approved';
     payout.approvedBy = adminId as any;
     payout.approvedAt = new Date();
-    payout.transactionReference = processDto.transactionReference;
-    payout.adminNotes = processDto.adminNotes;
+    if (processDto.transactionReference) {
+      payout.transactionReference = processDto.transactionReference;
+    }
+    if (processDto.adminNotes) {
+      payout.adminNotes = processDto.adminNotes;
+    }
     await payout.save();
 
     // Log activity
@@ -226,6 +234,62 @@ export class AdminPaymentsService {
       details: {
         amount: payout.amount,
         astrologerId: payout.astrologerId.toString(),
+      },
+    });
+
+    // Notify astrologer
+    await this.notificationService.sendNotification({
+      recipientId: payout.astrologerId.toString(),
+      recipientModel: 'Astrologer',
+      type: 'payout_approved',
+      title: 'Payout Approved ✅',
+      message: `Your payout request of ₹${payout.amount} has been approved and will be processed soon.`,
+      priority: 'high',
+    });
+
+    this.logger.log(`✅ Payout approved: ${payoutId} | Amount: ₹${payout.amount}`);
+
+    return {
+      success: true,
+      message: 'Payout approved successfully. It will be processed shortly.',
+      data: payout,
+    };
+  }
+
+  /**
+   * Process payout (approved → processing)
+   * ❌ Does NOT deduct money yet
+   */
+  async processPayout(payoutId: string, adminId: string, processDto: ProcessPayoutDto): Promise<any> {
+    const payout = await this.payoutModel.findOne({ payoutId });
+    if (!payout) {
+      throw new NotFoundException('Payout request not found');
+    }
+
+    if (payout.status !== 'approved') {
+      throw new BadRequestException('Only approved payouts can be processed');
+    }
+
+    payout.status = 'processing';
+    payout.processedAt = new Date();
+    if (processDto.transactionReference) {
+      payout.transactionReference = processDto.transactionReference;
+    }
+    if (processDto.adminNotes) {
+      payout.adminNotes = processDto.adminNotes;
+    }
+    await payout.save();
+
+    // Log activity
+    await this.activityLogService.log({
+      adminId,
+      action: 'payout.processing',
+      module: 'payments',
+      targetId: payoutId,
+      targetType: 'PayoutRequest',
+      status: 'success',
+      details: {
+        amount: payout.amount,
         transactionReference: processDto.transactionReference,
       },
     });
@@ -234,18 +298,115 @@ export class AdminPaymentsService {
     await this.notificationService.sendNotification({
       recipientId: payout.astrologerId.toString(),
       recipientModel: 'Astrologer',
-      type: 'payout_processed',
-      title: 'Payout Approved ✅',
-      message: `Your payout request of ₹${payout.amount} has been approved and processed.`,
-      priority: 'high',
+      type: 'payout_processing',
+      title: 'Payout Processing 🔄',
+      message: `Your payout of ₹${payout.amount} is being processed. Money will be credited soon.`,
+      priority: 'low',
     });
 
-    this.logger.log(`Payout approved: ${payoutId} | Amount: ₹${payout.amount}`);
+    this.logger.log(`🔄 Payout processing: ${payoutId} | Amount: ₹${payout.amount}`);
 
     return {
       success: true,
-      message: 'Payout approved successfully',
+      message: 'Payout marked as processing',
       data: payout,
+    };
+  }
+
+  /**
+   * Complete payout (processing → completed)
+   * ✅ THIS DEDUCTS MONEY FROM ASTROLOGER BALANCE
+   */
+  async completePayout(
+    payoutId: string,
+    adminId: string,
+    completeDto: CompletePayoutDto,
+  ): Promise<any> {
+    const payout = await this.payoutModel.findOne({ payoutId });
+    if (!payout) {
+      throw new NotFoundException('Payout request not found');
+    }
+
+    if (payout.status !== 'processing') {
+      throw new BadRequestException('Only processing payouts can be completed');
+    }
+
+    // ✅ Get astrologer to verify balance
+    const astrologer = await this.astrologerModel.findById(payout.astrologerId);
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer not found');
+    }
+
+    // ✅ Double-check withdrawable amount
+    if (astrologer.earnings.withdrawableAmount < payout.amount) {
+      throw new BadRequestException(
+        `Insufficient balance. Available: ₹${astrologer.earnings.withdrawableAmount}, Required: ₹${payout.amount}`
+      );
+    }
+
+    // ✅ Update payout status
+    payout.status = 'completed';
+    payout.completedAt = new Date();
+    payout.transactionReference = completeDto.transactionReference;
+    if (completeDto.adminNotes) {
+      payout.adminNotes = completeDto.adminNotes;
+    }
+    await payout.save();
+
+    // ✅ Deduct from astrologer earnings
+    const previousWithdrawable = astrologer.earnings.withdrawableAmount;
+    const previousWithdrawn = astrologer.earnings.totalWithdrawn || 0;
+    const previousPending = astrologer.earnings.pendingWithdrawal || 0;
+
+    astrologer.earnings.totalWithdrawn = previousWithdrawn + payout.amount;
+    astrologer.earnings.pendingWithdrawal = Math.max(0, previousPending - payout.amount);
+    astrologer.earnings.withdrawableAmount = Math.max(0, previousWithdrawable - payout.amount);
+    astrologer.earnings.lastUpdated = new Date();
+
+    await astrologer.save();
+
+    // ✅ Log activity
+    await this.activityLogService.log({
+      adminId,
+      action: 'payout.completed',
+      module: 'payments',
+      targetId: payoutId,
+      targetType: 'PayoutRequest',
+      status: 'success',
+      details: {
+        amount: payout.amount,
+        astrologerId: payout.astrologerId.toString(),
+        transactionReference: completeDto.transactionReference,
+        previousBalance: previousWithdrawable,
+        newBalance: astrologer.earnings.withdrawableAmount,
+      },
+    });
+
+    // ✅ Notify astrologer
+    await this.notificationService.sendNotification({
+      recipientId: payout.astrologerId.toString(),
+      recipientModel: 'Astrologer',
+      type: 'payout_completed',
+      title: 'Payout Completed 💰',
+      message: `Your payout of ₹${payout.amount} has been successfully transferred to your bank account.`,
+      priority: 'high',
+    });
+
+    this.logger.log(
+      `✅ Payout completed: ${payoutId} | Amount: ₹${payout.amount} | Ref: ${completeDto.transactionReference}`
+    );
+
+    return {
+      success: true,
+      message: 'Payout completed successfully. Amount deducted from astrologer balance.',
+      data: {
+        payout,
+        astrologerBalance: {
+          previousWithdrawable,
+          newWithdrawable: astrologer.earnings.withdrawableAmount,
+          totalWithdrawn: astrologer.earnings.totalWithdrawn,
+        },
+      },
     };
   }
 
@@ -258,12 +419,13 @@ export class AdminPaymentsService {
       throw new NotFoundException('Payout request not found');
     }
 
-    if (payout.status !== 'pending') {
-      throw new BadRequestException('Payout request already processed');
+    if (payout.status !== 'pending' && payout.status !== 'approved') {
+      throw new BadRequestException('Cannot reject this payout');
     }
 
     payout.status = 'rejected';
     payout.rejectedAt = new Date();
+
     payout.rejectionReason = reason;
     await payout.save();
 
@@ -285,13 +447,13 @@ export class AdminPaymentsService {
     await this.notificationService.sendNotification({
       recipientId: payout.astrologerId.toString(),
       recipientModel: 'Astrologer',
-      type: 'payout_processed',
-      title: 'Payout Rejected',
+      type: 'payout_rejected',
+      title: 'Payout Rejected ❌',
       message: `Your payout request has been rejected. Reason: ${reason}`,
       priority: 'high',
     });
 
-    this.logger.log(`Payout rejected: ${payoutId} | Reason: ${reason}`);
+    this.logger.log(`❌ Payout rejected: ${payoutId} | Reason: ${reason}`);
 
     return {
       success: true,
