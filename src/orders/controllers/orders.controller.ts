@@ -113,19 +113,58 @@ async getConversationStats(
 
   // ===== ADD REVIEW =====
 
-  @Post(':orderId/review')
-  async addReview(
-    @Param('orderId') orderId: string,
-    @Req() req: AuthenticatedRequest,
-    @Body(ValidationPipe) reviewDto: AddReviewDto
-  ) {
-    return this.ordersService.addReview(
+ @Get(':orderId/review-status')
+async getReviewStatus(
+  @Param('orderId') orderId: string,
+  @Req() req: AuthenticatedRequest
+) {
+  const order = await this.ordersService.getOrderDetails(orderId, req.user._id);
+  
+  return {
+    success: true,
+    data: {
       orderId,
-      req.user._id,
-      reviewDto.rating,
-      reviewDto.review
-    );
-  }
+      reviewGiven: order.data.reviewGiven,
+      reviewGivenAt: order.data.reviewGivenAt,
+      canReview: order.data.status === 'completed' && !order.data.reviewGiven
+    }
+  };
+}
+
+/**
+ * Get astrologer's orders
+ * GET /orders/astrologer/my-orders
+ */
+@Get('astrologer/my-orders')
+async getAstrologerOrders(
+  @Req() req: AuthenticatedRequest,
+  @Query('page') page: string = '1',
+  @Query('limit') limit: string = '20',
+  @Query('status') status?: string,
+  @Query('type') type?: 'chat' | 'call' | 'conversation'
+) {
+  return this.ordersService.getAstrologerOrders(
+    req.user._id,
+    {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      status,
+      type
+    }
+  );
+}
+
+/**
+ * Get astrologer order details
+ * GET /orders/astrologer/:orderId
+ */
+@Get('astrologer/:orderId')
+async getAstrologerOrderDetails(
+  @Param('orderId') orderId: string,
+  @Req() req: AuthenticatedRequest
+) {
+  return this.ordersService.getAstrologerOrderDetails(orderId, req.user._id);
+}
 
   // ===== CANCEL ORDER =====
 

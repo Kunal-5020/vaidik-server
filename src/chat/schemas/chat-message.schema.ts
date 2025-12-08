@@ -196,6 +196,7 @@ export const ChatMessageSchema = SchemaFactory.createForClass(ChatMessage);
 // Unique index for messageId is created via @Prop({ unique: true })
 ChatMessageSchema.index({ sessionId: 1, sentAt: -1 });
 ChatMessageSchema.index({ orderId: 1, sentAt: -1 });
+ChatMessageSchema.index({ orderId: 1, isStarred: 1, starredBy: 1 });
 ChatMessageSchema.index({ senderId: 1, sentAt: -1 });
 ChatMessageSchema.index({ receiverId: 1, deliveryStatus: 1 });
 ChatMessageSchema.index({ isDeleted: 1, deleteStatus: 1 });

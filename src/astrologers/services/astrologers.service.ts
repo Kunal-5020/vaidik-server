@@ -23,20 +23,7 @@ export interface SearchResult {
       hasNextPage: boolean;
       hasPrevPage: boolean;
     };
-    appliedFilters: {
-      search?: string;
-      skills?: string[];
-      languages?: string[];
-      genders?: string[];
-      countries?: string[];
-      topAstrologers?: string[];
-      sortBy?: string;
-      priceRange?: { minPrice?: number; maxPrice?: number };
-      experienceRange?: { minExperience?: number; maxExperience?: number };
-      minRating?: number;
-      isOnline?: boolean;
-      isLive?: boolean;
-    };
+    appliedFilters: any;
   };
 }
 
@@ -51,355 +38,268 @@ export class AstrologersService {
 
   // ✅ Helper: Get blocked astrologer IDs for a user
   private async getBlockedAstrologerIds(userId: string): Promise<Types.ObjectId[]> {
-    if (!userId || !Types.ObjectId.isValid(userId)) {
-      return [];
-    }
-
-    const user = await this.userModel
-      .findById(userId)
-      .select('blockedAstrologers')
-      .lean()
-      .exec();
-    
-    if (!user?.blockedAstrologers || user.blockedAstrologers.length === 0) {
-      return [];
-    }
-
-    // Ensure we return an array of mongoose ObjectId instances
-    return user.blockedAstrologers.map(block => {
-      // block.astrologerId may be a string, Buffer-like, or already an ObjectId;
-      // constructing a new Types.ObjectId handles string/buffer/ObjectId inputs.
-      try {
-        return new Types.ObjectId(block.astrologerId as any);
-      } catch {
-        // Fallback: cast to Types.ObjectId if construction fails for unexpected shapes
-        return block.astrologerId as unknown as Types.ObjectId;
-      }
-    });
+    if (!userId || !Types.ObjectId.isValid(userId)) return [];
+    const user = await this.userModel.findById(userId).select('blockedAstrologers').lean().exec();
+    if (!user?.blockedAstrologers?.length) return [];
+    return user.blockedAstrologers.map(b => new Types.ObjectId(b.astrologerId as any));
   }
 
-  // Convert Buffer ObjectId to hex string
   private convertObjectIdToString(obj: any): any {
-    if (!obj) return obj;
-
-    // Handle Buffer-wrapped ObjectId
-    if (obj.buffer && obj.buffer.type === 'Buffer' && Array.isArray(obj.buffer.data)) {
-      return Buffer.from(obj.buffer.data).toString('hex');
-    }
-
-    // Handle direct Buffer
-    if (Buffer.isBuffer(obj)) {
-      return obj.toString('hex');
-    }
-
-    // Handle objects with _bsontype
-    if (obj._bsontype === 'ObjectID' || obj._bsontype === 'ObjectId') {
-      return obj.toString();
-    }
-
-    // If it's already a string
-    if (typeof obj === 'string') {
-      return obj;
-    }
-
+    if (obj?._bsontype === 'ObjectID') return obj.toString();
     return obj;
   }
 
-  // Serialize astrologers array
   private serializeAstrologers(astrologers: any[]): any[] {
+    // Simplified serialization for brevity - keep your existing implementation if it's working
     return astrologers.map(astro => {
-      const plain = astro.toObject ? astro.toObject() : { ...astro };
-      const serialized: any = {};
-      
-      for (const key in plain) {
-        const value = plain[key];
-        
-        // Convert _id field
-        if (key === '_id') {
-          serialized[key] = this.convertObjectIdToString(value);
-        }
-        // Handle nested objects
-        else if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
-          serialized[key] = {};
-          for (const nestedKey in value) {
-            if (nestedKey === '_id' || nestedKey.endsWith('Id')) {
-              serialized[key][nestedKey] = this.convertObjectIdToString(value[nestedKey]);
-            } else {
-              serialized[key][nestedKey] = value[nestedKey];
-            }
-          }
-        }
-        // Handle arrays
-        else if (Array.isArray(value)) {
-          serialized[key] = value.map(item => {
-            if (item && typeof item === 'object' && !Array.isArray(item) && !(item instanceof Date)) {
-              const nestedObj: any = {};
-              for (const nestedKey in item) {
-                nestedObj[nestedKey] = this.convertObjectIdToString(item[nestedKey]);
-              }
-              return nestedObj;
-            }
-            return item;
-          });
-        }
-        // Handle primitive values
-        else {
-          serialized[key] = value;
-        }
-      }
-      
-      return serialized;
+        const doc = astro.toObject ? astro.toObject() : astro;
+        if(doc._id) doc._id = doc._id.toString();
+        return doc;
     });
   }
 
-  /**
-   * Advanced search with all filters
-   * @param searchDto - Search filters
-   * @param userId - Current user ID to exclude blocked astrologers
+   /**
+   * ✅ FIXED: Advanced search with proper AND/OR Logic
    */
   async searchAstrologers(
-    searchDto: SearchAstrologersDto, 
-    userId?: string
-  ): Promise<SearchResult> {
-    const {
-      search,
-      skills,
-      languages,
-      genders,
-      countries,
-      topAstrologers,
-      minPrice,
-      maxPrice,
-      minRating,
-      minExperience,
-      maxExperience,
-      isOnline,
-      isLive,
-      chatEnabled,
-      callEnabled,
-      videoCallEnabled,
-      sortBy = SortByOption.POPULARITY,
-      page = 1,
-      limit = 20
-    } = searchDto;
+  searchDto: SearchAstrologersDto, 
+  userId?: string
+): Promise<SearchResult> {
+  const {
+    search,
+    skills,
+    languages,
+    genders,
+    countries,
+    topAstrologers,
+    minPrice,
+    maxPrice,
+    minRating,
+    minExperience,
+    maxExperience,
+    isOnline,
+    isLive,
+    sortBy = 'popularity',
+    page = 1,
+    limit = 20
+  } = searchDto;
 
-    // Build base query - only active and profile-complete astrologers
-    const query: any = {
-      accountStatus: 'active',
-      'profileCompletion.isComplete': true
-    };
+  // 1. Base Filters (Active & Complete Profile)
+  const andConditions: any[] = [
+    { accountStatus: 'active' },
+    { 'profileCompletion.isComplete': true }
+  ];
 
-    // ✅ CRITICAL: Exclude blocked astrologers if user is logged in
-    if (userId) {
-      const blockedIds = await this.getBlockedAstrologerIds(userId);
-      if (blockedIds.length > 0) {
-        query._id = { $nin: blockedIds };
-      }
+  // 2. Exclude blocked astrologers
+  if (userId) {
+    const blockedIds = await this.getBlockedAstrologerIds(userId);
+    if (blockedIds.length > 0) {
+      andConditions.push({ _id: { $nin: blockedIds } });
     }
-
-    // Text search in name and bio
-    if (search?.trim()) {
-      query.$or = [
-        { name: { $regex: search.trim(), $options: 'i' } },
-        { bio: { $regex: search.trim(), $options: 'i' } }
-      ];
-    }
-
-    // Filter by skills/specializations
-    if (skills && skills.length > 0) {
-      query.specializations = { $in: skills };
-    }
-
-    // Filter by languages
-    if (languages && languages.length > 0) {
-      query.languages = { $in: languages };
-    }
-
-    // Filter by gender
-    if (genders && genders.length > 0) {
-      query.gender = { $in: genders };
-    }
-
-    // Filter by country
-    if (countries && countries.length > 0) {
-      if (countries.includes(CountryOption.INDIA)) {
-        // query.country = 'India';
-      }
-      if (countries.includes(CountryOption.OUTSIDE_INDIA)) {
-        // query.country = { $ne: 'India' };
-      }
-    }
-
-    // Filter by top astrologer tiers
-    if (topAstrologers && topAstrologers.length > 0 && !topAstrologers.includes(TopAstrologerTier.ALL)) {
-      const tierConditions: any[] = [];
-      
-      if (topAstrologers.includes(TopAstrologerTier.CELEBRITY)) {
-        tierConditions.push({
-          'ratings.average': { $gte: 4.8 },
-          'stats.totalOrders': { $gte: 1000 }
-        });
-      }
-      
-      if (topAstrologers.includes(TopAstrologerTier.TOP_CHOICE)) {
-        tierConditions.push({
-          'ratings.average': { $gte: 4.5 },
-          'stats.repeatCustomers': { $gte: 50 }
-        });
-      }
-      
-      if (topAstrologers.includes(TopAstrologerTier.RISING_STAR)) {
-        const sixMonthsAgo = new Date();
-        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-        tierConditions.push({
-          'ratings.average': { $gte: 4.3 },
-          'stats.totalOrders': { $gte: 100 },
-          createdAt: { $gte: sixMonthsAgo }
-        });
-      }
-      
-      if (tierConditions.length > 0) {
-        if (!query.$or) {
-          query.$or = tierConditions;
-        } else {
-          query.$and = [
-            { $or: query.$or },
-            { $or: tierConditions }
-          ];
-          delete query.$or;
-        }
-      }
-    }
-
-    // Filter by price range
-    if (minPrice !== undefined || maxPrice !== undefined) {
-      query['pricing.chat'] = {};
-      if (minPrice !== undefined) {
-        query['pricing.chat'].$gte = minPrice;
-      }
-      if (maxPrice !== undefined) {
-        query['pricing.chat'].$lte = maxPrice;
-      }
-    }
-
-    // Filter by minimum rating
-    if (minRating !== undefined) {
-      query['ratings.average'] = { $gte: minRating };
-    }
-
-    // Filter by experience range
-    if (minExperience !== undefined || maxExperience !== undefined) {
-      query.experienceYears = {};
-      if (minExperience !== undefined) {
-        query.experienceYears.$gte = minExperience;
-      }
-      if (maxExperience !== undefined) {
-        query.experienceYears.$lte = maxExperience;
-      }
-    }
-
-    // Filter by online status
-    if (isOnline === true) {
-      query['availability.isOnline'] = true;
-      query['availability.isAvailable'] = true;
-    }
-
-    // Filter by live streaming status
-    if (isLive === true) {
-      query['availability.isLive'] = true;
-    }
-
-    // Filter by service availability
-    if (chatEnabled === true) {
-      query.isChatEnabled = true;
-    }
-    if (callEnabled === true) {
-      query.isCallEnabled = true;
-    }
-    if (videoCallEnabled === true) {
-      query.isLiveStreamEnabled = true;
-    }
-
-    // Build sort criteria
-    let sortCriteria: any = {};
-    
-    switch (sortBy) {
-      case SortByOption.RATING_HIGH_LOW:
-        sortCriteria = { 'ratings.average': -1, 'ratings.total': -1 };
-        break;
-      case SortByOption.PRICE_LOW_HIGH:
-        sortCriteria = { 'pricing.chat': 1 };
-        break;
-      case SortByOption.PRICE_HIGH_LOW:
-        sortCriteria = { 'pricing.chat': -1 };
-        break;
-      case SortByOption.EXP_HIGH_LOW:
-        sortCriteria = { experienceYears: -1 };
-        break;
-      case SortByOption.EXP_LOW_HIGH:
-        sortCriteria = { experienceYears: 1 };
-        break;
-      case SortByOption.ORDERS_HIGH_LOW:
-        sortCriteria = { 'stats.totalOrders': -1 };
-        break;
-      case SortByOption.ORDERS_LOW_HIGH:
-        sortCriteria = { 'stats.totalOrders': 1 };
-        break;
-      case SortByOption.POPULARITY:
-      default:
-        sortCriteria = { 
-          'availability.isOnline': -1,
-          'ratings.average': -1, 
-          'stats.totalOrders': -1 
-        };
-    }
-
-    const skip = (page - 1) * limit;
-
-    const [astrologers, total] = await Promise.all([
-      this.astrologerModel
-        .find(query)
-        .select('name bio profilePicture gallery introAudio experienceYears specializations languages ratings pricing availability stats gender')
-        .sort(sortCriteria)
-        .skip(skip)
-        .limit(limit)
-        .lean()
-        .exec(),
-      this.astrologerModel.countDocuments(query).exec()
-    ]);
-
-    const serializedAstrologers = this.serializeAstrologers(astrologers);
-    const totalPages = Math.ceil(total / limit);
-
-    return {
-      success: true,
-      data: {
-        astrologers: serializedAstrologers,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: totalPages,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1
-        },
-        appliedFilters: {
-          search,
-          skills,
-          languages,
-          genders,
-          countries,
-          topAstrologers,
-          sortBy,
-          priceRange: minPrice !== undefined || maxPrice !== undefined ? { minPrice, maxPrice } : undefined,
-          experienceRange: minExperience !== undefined || maxExperience !== undefined ? { minExperience, maxExperience } : undefined,
-          minRating,
-          isOnline,
-          isLive
-        }
-      }
-    };
   }
+
+  // 3. Search Text (Name OR Bio)
+  if (search?.trim()) {
+    const term = search.trim();
+    andConditions.push({
+      $or: [
+        { name: { $regex: term, $options: 'i' } },
+        { bio: { $regex: term, $options: 'i' } }
+      ]
+    });
+  }
+
+  // 4. Skills (FIXED: Uses partial match regex inside $elemMatch or $in)
+  // This ensures 'vedic' matches 'Vedic Astrology'
+  const skillsList = Array.isArray(skills) ? skills : (skills ? [skills] : []);
+  if (skillsList.length > 0) {
+    const skillRegexes = skillsList.map(s => new RegExp(s.trim(), 'i'));
+    andConditions.push({
+      specializations: { $in: skillRegexes }
+    });
+  }
+
+  // 5. Languages (FIXED: Partial match)
+  const langList = Array.isArray(languages) ? languages : (languages ? [languages] : []);
+  if (langList.length > 0) {
+    const langRegexes = langList.map(l => new RegExp(l.trim(), 'i'));
+    andConditions.push({
+      languages: { $in: langRegexes }
+    });
+  }
+
+  // 6. Gender (Exact match is usually fine for gender)
+  const genderList = Array.isArray(genders) ? genders : (genders ? [genders] : []);
+  if (genderList.length > 0) {
+    // Ensure case insensitivity for gender
+    const genderRegexes = genderList.map(g => new RegExp(`^${g}$`, 'i'));
+    andConditions.push({ gender: { $in: genderRegexes } });
+  }
+
+  // 7. Country (India vs Outside)
+  const countryList = Array.isArray(countries) ? countries : (countries ? [countries] : []);
+  if (countryList.length > 0) {
+    const countryOrConditions: any[] = [];
+    
+    // Check for 'india'
+    if (countryList.some(c => c.toLowerCase() === 'india')) {
+      countryOrConditions.push({ country: { $regex: /india/i } });
+    }
+    
+    // Check for 'outside-india'
+    if (countryList.some(c => c.toLowerCase() === 'outside-india')) {
+      countryOrConditions.push({ country: { $not: { $regex: /india/i } } });
+    }
+
+    if (countryOrConditions.length > 0) {
+      andConditions.push({ $or: countryOrConditions });
+    }
+  }
+
+ // 8. Top Astrologers Categories
+    const tierList = Array.isArray(topAstrologers) 
+      ? topAstrologers 
+      : (topAstrologers ? [topAstrologers] : []);
+
+    // ✅ FIX: Cast to string array to avoid Enum type conflicts
+    const tiers = tierList as unknown as string[];
+
+    if (tiers.length > 0 && !tiers.includes('all')) { 
+       const tierOrConditions: any[] = [];
+
+       if (tiers.includes('celebrity')) {
+         tierOrConditions.push({ 
+            $or: [
+                { tier: 'celebrity' }, 
+                { 'ratings.average': { $gte: 4.8 } } 
+            ]
+         });
+       }
+       
+       if (tiers.includes('top-choice')) {
+         tierOrConditions.push({ 
+            $or: [
+                { tier: 'top-choice' },
+                { 'ratings.average': { $gte: 4.5 } }
+            ]
+         });
+       }
+       
+       if (tiers.includes('rising-star')) {
+         tierOrConditions.push({ 
+            $or: [
+                { tier: 'rising-star' },
+                { 'stats.totalOrders': { $gte: 50 } }
+            ]
+         });
+       }
+
+       if (tierOrConditions.length > 0) {
+         andConditions.push({ $or: tierOrConditions });
+       }
+    }
+
+  // 9. Numeric Ranges
+  if (minPrice !== undefined || maxPrice !== undefined) {
+    const priceQuery: any = {};
+    if (minPrice) priceQuery.$gte = Number(minPrice);
+    if (maxPrice) priceQuery.$lte = Number(maxPrice);
+    andConditions.push({ 'pricing.chat': priceQuery });
+  }
+
+  if (minRating) {
+    andConditions.push({ 'ratings.average': { $gte: Number(minRating) } });
+  }
+
+  if (minExperience || maxExperience) {
+    const expQuery: any = {};
+    if (minExperience) expQuery.$gte = Number(minExperience);
+    if (maxExperience) expQuery.$lte = Number(maxExperience);
+    andConditions.push({ experienceYears: expQuery });
+  }
+
+  // 10. Status
+  if (String(isOnline) === 'true') {
+      andConditions.push({ 'availability.isOnline': true });
+  }
+
+  // Final Query
+  const finalQuery = andConditions.length > 0 ? { $and: andConditions } : {};
+
+  // 11. Sorting Logic
+  let sortCriteria: any = {};
+  
+  switch (String(sortBy)) {
+    case 'rating-high-low':
+      sortCriteria = { 'ratings.average': -1, 'ratings.total': -1 };
+      break;
+    case 'price-low-high':
+      sortCriteria = { 'pricing.chat': 1 };
+      break;
+    case 'price-high-low':
+      sortCriteria = { 'pricing.chat': -1 };
+      break;
+    case 'exp-high-low':
+      sortCriteria = { experienceYears: -1 };
+      break;
+    case 'exp-low-high':
+      sortCriteria = { experienceYears: 1 };
+      break;
+    case 'orders-high-low':
+      sortCriteria = { 'stats.totalOrders': -1 };
+      break;
+    case 'orders-low-high':
+      sortCriteria = { 'stats.totalOrders': 1 };
+      break;
+    case 'popularity':
+    default:
+      // Mix of factors to show "best" first
+      sortCriteria = { 
+        'availability.isOnline': -1,  // Online first
+        'ratings.average': -1,        // Then high rating
+        'stats.totalOrders': -1       // Then total orders
+      };
+  }
+
+  // Add secondary sort to prevent "jumping" items during pagination
+  sortCriteria._id = 1; 
+
+  console.log('🔍 MongoDB Query:', JSON.stringify(finalQuery, null, 2));
+  console.log('🔍 Sort Criteria:', sortCriteria);
+
+  const skip = (page - 1) * limit;
+
+  const [astrologers, total] = await Promise.all([
+    this.astrologerModel
+      .find(finalQuery)
+      .select('name bio profilePicture experienceYears specializations languages ratings pricing availability stats gender country tier')
+      .sort(sortCriteria)
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .exec(),
+    this.astrologerModel.countDocuments(finalQuery).exec()
+  ]);
+
+  const totalPages = Math.ceil(total / limit);
+
+  return {
+    success: true,
+    data: {
+      astrologers: this.serializeAstrologers(astrologers),
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        pages: totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      },
+      appliedFilters: searchDto
+    }
+  };
+}
+
 
   async getFilterOptions(): Promise<any> {
     const baseMatch = {

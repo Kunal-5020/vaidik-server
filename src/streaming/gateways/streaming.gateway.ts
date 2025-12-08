@@ -263,63 +263,7 @@ async handleJoinStream(
     return { success: true };
   }
 
-  // ==================== INTERACTION EVENTS ====================
-
-  /**
-   * Send like
-   */
-  @SubscribeMessage('send_like')
-  async handleSendLike(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { streamId: string; userId: string; userName: string }
-  ) {
-    this.server.to(data.streamId).emit('new_like', {
-      userId: data.userId,
-      userName: data.userName,
-      timestamp: new Date()
-    });
-
-    await this.streamSessionService.updateStreamAnalytics(data.streamId, {
-      incrementLikes: 1
-    });
-
-    return { success: true };
-  }
-
-  /**
-   * Send gift (with animation)
-   */
-  @SubscribeMessage('send_gift')
-  async handleSendGift(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { 
-      streamId: string; 
-      userId: string; 
-      userName: string; 
-      userAvatar?: string;
-      giftType: string; 
-      giftName: string;
-      amount: number 
-    }
-  ) {
-    // Broadcast gift animation to all viewers
-    this.server.to(data.streamId).emit('new_gift', {
-      userId: data.userId,
-      userName: data.userName,
-      userAvatar: data.userAvatar,
-      giftType: data.giftType,
-      giftName: data.giftName,
-      amount: data.amount,
-      timestamp: new Date()
-    });
-
-    await this.streamSessionService.updateStreamAnalytics(data.streamId, {
-      incrementGifts: 1,
-      addRevenue: data.amount
-    });
-
-    return { success: true };
-  }
+  
 
   // ==================== CALL EVENTS ====================
 
@@ -541,85 +485,8 @@ handleCallEnded(
 }
 
 
-  /**
-   * Call mode changed
-   */
-  @SubscribeMessage('call_mode_changed')
-  handleCallModeChanged(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      streamId: string;
-      mode: 'public' | 'private';
-    }
-  ) {
-    // Notify all viewers
-    this.server.to(data.streamId).emit('call_mode_updated', {
-      mode: data.mode,
-      timestamp: new Date()
-    });
-
-    return { success: true };
-  }
-
-  /**
-   * User camera toggled
-   */
-  @SubscribeMessage('user_camera_toggled')
-  handleUserCameraToggled(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      streamId: string;
-      enabled: boolean;
-    }
-  ) {
-    // Notify all viewers
-    this.server.to(data.streamId).emit('user_camera_updated', {
-      enabled: data.enabled,
-      timestamp: new Date()
-    });
-
-    return { success: true };
-  }
-
   // ==================== HOST CONTROL EVENTS ====================
 
-  /**
-   * Host mic toggled
-   */
-  @SubscribeMessage('host_mic_toggled')
-  handleHostMicToggled(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      streamId: string;
-      enabled: boolean;
-    }
-  ) {
-    this.server.to(data.streamId).emit('host_mic_updated', {
-      enabled: data.enabled,
-      timestamp: new Date()
-    });
-
-    return { success: true };
-  }
-
-  /**
-   * Host camera toggled
-   */
-  @SubscribeMessage('host_camera_toggled')
-  handleHostCameraToggled(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: {
-      streamId: string;
-      enabled: boolean;
-    }
-  ) {
-    this.server.to(data.streamId).emit('host_camera_updated', {
-      enabled: data.enabled,
-      timestamp: new Date()
-    });
-
-    return { success: true };
-  }
 
   /**
    * Stream state changed

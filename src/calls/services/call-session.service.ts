@@ -9,6 +9,10 @@ import { OrderPaymentService } from '../../orders/services/order-payment.service
 import { WalletService } from '../../payments/services/wallet.service';
 import { NotificationService } from '../../notifications/services/notification.service';
 import { ChatMessageService } from '../../chat/services/chat-message.service';
+import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
+import { EarningsService } from '../../astrologers/services/earnings.service';
+import { User, UserDocument } from '../../users/schemas/user.schema';
+import { PenaltyService } from '../../astrologers/services/penalty.service';
 
 @Injectable()
 export class CallSessionService {
@@ -18,11 +22,15 @@ export class CallSessionService {
 
   constructor(
     @InjectModel(CallSession.name) private sessionModel: Model<CallSessionDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
     private ordersService: OrdersService,
     private orderPaymentService: OrderPaymentService,
     private walletService: WalletService,
     private notificationService: NotificationService,
-    private chatMessageService: ChatMessageService
+    private chatMessageService: ChatMessageService,
+    private earningsService: EarningsService,
+    private penaltyService: PenaltyService,
   ) {}
 
   private generateSessionId(): string {
@@ -260,6 +268,24 @@ this.notificationService
     session.endTime = new Date();
     await session.save();
 
+    // ✅ NEW: Apply penalty for rejection
+    try {
+      await this.penaltyService.applyPenalty({
+        astrologerId,
+        type: 'missed_appointment',
+        amount: 50, // ₹50 penalty for rejecting call
+        reason: 'Call request rejected',
+        description: `Rejected ${session.callType} call request from user`,
+        orderId: session.orderId,
+        userId: session.userId.toString(),
+        appliedBy: 'system',
+      });
+      this.logger.log(`✅ Penalty applied: ₹50 to astrologer ${astrologerId} for rejecting call`);
+    } catch (error: any) {
+      this.logger.error(`❌ Failed to apply penalty: ${error.message}`);
+    }
+
+
     // Update order (no wallet logic here)
     await this.ordersService.cancelOrder(
       session.orderId,
@@ -414,177 +440,271 @@ this.notificationService
   }
 
   // ===== END CALL SESSION =====
-  async endSession(
-    sessionId: string,
-    endedBy: string,
-    reason: string,
-    recordingUrl?: string,
-    recordingS3Key?: string,
-    recordingDuration?: number
-  ): Promise<any> {
-    const session = await this.sessionModel.findOne({ sessionId });
-    if (!session) {
-      throw new NotFoundException('Session not found');
+/**
+ * END CALL SESSION
+ */
+async endSession(
+  sessionId: string,
+  endedBy: string,
+  reason: string,
+  recordingUrl?: string,
+  recordingS3Key?: string,
+  recordingDuration?: number,
+): Promise<any> {
+  const session = await this.sessionModel.findOne({ sessionId });
+
+  if (!session) {
+    throw new NotFoundException('Session not found');
+  }
+
+  // Clear timeout
+  if (this.sessionTimers.has(sessionId)) {
+    clearTimeout(this.sessionTimers.get(sessionId)!);
+    this.sessionTimers.delete(sessionId);
+  }
+
+  this.clearUserJoinTimeout(sessionId);
+
+  let actualDurationSeconds = 0;
+
+  // Calculate actual duration only if session was ACTIVE
+  if (session.status === 'active' && session.startTime) {
+    const endTime = new Date();
+    actualDurationSeconds = Math.floor((endTime.getTime() - session.startTime.getTime()) / 1000);
+
+    // Cap to max duration if timeout
+    if (reason === 'timeout' && actualDurationSeconds > session.maxDurationSeconds) {
+      actualDurationSeconds = session.maxDurationSeconds;
     }
 
-    // Clear timeout
-    if (this.sessionTimers.has(sessionId)) {
-      clearTimeout(this.sessionTimers.get(sessionId)!);
-      this.sessionTimers.delete(sessionId);
-    }
-    this.clearUserJoinTimeout(sessionId);
-
-    let actualDurationSeconds = 0;
-
-    // Calculate actual duration only if session was ACTIVE
-    if (session.status === 'active' && session.startTime) {
-      const endTime = new Date();
-      actualDurationSeconds = Math.floor(
-        (endTime.getTime() - session.startTime.getTime()) / 1000
-      );
-
-      // Cap to max duration if timeout
-      if (reason === 'timeout' && actualDurationSeconds > session.maxDurationSeconds) {
-        actualDurationSeconds = session.maxDurationSeconds;
-      }
-
-      session.duration = actualDurationSeconds;
-      session.billedMinutes = Math.ceil(actualDurationSeconds / 60);
-      session.totalAmount = session.billedMinutes * session.ratePerMinute;
-      session.platformCommission = (session.totalAmount * 20) / 100;
-      session.astrologerEarning = session.totalAmount - session.platformCommission;
-
-      this.logger.log(
-        `Call billing prepared: ${sessionId} | Actual: ${actualDurationSeconds}s | Billed: ${session.billedMinutes}m | Amount: ₹${session.totalAmount}`
-      );
-    }
-
-    // WALLET DEDUCTION (only if call had actual duration)
-    if (actualDurationSeconds > 0 && session.totalAmount > 0) {
-      try {
-        const description = `Call (${session.callType}) with astrologer ${session.astrologerId.toString()} (session ${sessionId})`;
-        await this.walletService.deductFromWallet(
-          session.userId.toString(),
-          session.totalAmount,
-          session.orderId,
-          description,
-        );
-        this.logger.log(
-          `💰 Wallet charged for call: User=${session.userId} | Order=${session.orderId} | Amount=₹${session.totalAmount}`,
-        );
-      } catch (error: any) {
-        this.logger.error(
-          `❌ Wallet deduction failed for call session ${sessionId}: ${error.message}`,
-        );
-        session.isPaid = false;
-      }
-    }
-
-    session.status = 'ended';
-    session.endTime = new Date();
-    session.endedBy = endedBy;
-    session.endReason = reason;
-    session.timerStatus = 'ended';
-
-    // Add recording if available
-    if (recordingUrl && actualDurationSeconds > 0) {
-      session.hasRecording = true;
-      session.recordingUrl = recordingUrl;
-      session.recordingS3Key = recordingS3Key;
-      session.recordingDuration = recordingDuration || actualDurationSeconds;
-      session.recordingType = session.callType === 'audio' ? 'voice_note' : 'video';
-      session.recordingStartedAt = session.startTime;
-      session.recordingEndedAt = new Date();
-
-      try {
-        const recordingMessageId = await this.createRecordingChatMessage(
-          sessionId,
-          session.orderId,
-          session.conversationThreadId!,
-          session.userId.toString(),
-          session.astrologerId.toString(),
-          session.callType as 'audio' | 'video',
-          recordingUrl,
-          recordingS3Key || '',
-          session.recordingDuration,
-          actualDurationSeconds
-        );
-
-        session.recordingMessageId = recordingMessageId;
-        this.logger.log(`✅ Recording saved to chat: ${recordingMessageId}`);
-      } catch (error: any) {
-        this.logger.error(`Failed to save recording to chat: ${error.message}`);
-      }
-    }
-
-    // Update participant status
-    if (session.userStatus) {
-      session.userStatus.isOnline = false;
-      session.userStatus.connectionQuality = 'offline';
-    }
-    if (session.astrologerStatus) {
-      session.astrologerStatus.isOnline = false;
-      session.astrologerStatus.connectionQuality = 'offline';
-    }
-
-    await session.save();
-
-    // Complete session in orders
-    await this.ordersService.completeSession(session.orderId, {
-      sessionId,
-      sessionType: session.callType === 'audio' ? 'audio_call' : 'video_call',
-      actualDurationSeconds,
-      billedMinutes: session.billedMinutes,
-      chargedAmount: session.totalAmount,
-      recordingUrl,
-      recordingS3Key,
-      recordingDuration: session.recordingDuration
-    });
-
-    // Optional: notify user with call summary if there was real duration
-    if (actualDurationSeconds > 0 && session.totalAmount > 0) {
-      try {
-        await this.notificationService.sendNotification({
-          recipientId: session.userId.toString(),
-          recipientModel: 'User',
-          type: 'call_ended',
-          title: 'Call ended',
-          message: `Your call session ended. Duration: ${session.billedMinutes} min, Charged: ₹${session.totalAmount}.`,
-          data: {
-            mode: 'call',
-            step: 'session_ended',
-            sessionId: session.sessionId,
-            orderId: session.orderId,
-            callType: session.callType,
-            billedMinutes: session.billedMinutes,
-            amount: session.totalAmount,
-            recordingUrl: session.recordingUrl,
-          },
-          priority: 'medium',
-        });
-      } catch (err: any) {
-        this.logger.error(`Call end notification error: ${err.message}`);
-      }
-    }
+    session.duration = actualDurationSeconds;
+    session.billedMinutes = Math.ceil(actualDurationSeconds / 60);
+    session.totalAmount = session.billedMinutes * session.ratePerMinute;
+    session.platformCommission = (session.totalAmount * 40) / 100;
+    session.astrologerEarning = session.totalAmount - session.platformCommission;
 
     this.logger.log(
-      `Call session ended: ${sessionId} | Duration: ${actualDurationSeconds}s | Type: ${session.callType}`,
+      `💰 Call billing prepared: ${sessionId} | Actual: ${actualDurationSeconds}s | Billed: ${session.billedMinutes}m | Amount: ₹${session.totalAmount}`,
     );
-
-    return {
-      success: true,
-      message: 'Call session ended',
-      data: {
-        sessionId,
-        actualDuration: actualDurationSeconds,
-        billedMinutes: session.billedMinutes,
-        chargeAmount: session.totalAmount,
-        recordingUrl: recordingUrl,
-        recordingMessageId: session.recordingMessageId,
-        status: 'ended'
-      }
-    };
   }
+
+  // ✅ WALLET DEDUCTION & CREDIT (only if call had actual duration)
+  if (actualDurationSeconds > 0 && session.totalAmount > 0) {
+    try {
+      // GET USER AND ASTROLOGER DETAILS
+      const [user, astrologer] = await Promise.all([
+        this.userModel.findById(session.userId).select('name').lean(),
+        this.astrologerModel.findById(session.astrologerId).select('name').lean(),
+      ]);
+
+      // ✅ USE UNIFIED PAYMENT METHOD
+      const paymentResult = await this.walletService.processSessionPayment({
+        userId: session.userId.toString(),
+        astrologerId: session.astrologerId.toString(),
+        amount: session.totalAmount,
+        orderId: session.orderId,
+        sessionId: session.sessionId,
+        sessionType: session.callType === 'audio' ? 'audio_call' : 'video_call',
+        userName: user?.name || 'User',
+        astrologerName: astrologer?.name || 'Astrologer',
+        durationMinutes: session.billedMinutes,
+      });
+
+      if (!paymentResult.success) {
+        throw new Error(paymentResult.message || 'Payment failed');
+      }
+
+      this.logger.log(`✅ User wallet charged: User(${session.userId}) | Amount: ₹${session.totalAmount}`);
+      this.logger.log(`✅ Astrologer credited: ${session.astrologerId} | Amount: ₹${session.astrologerEarning}`);
+
+      // ✅ UPDATE ASTROLOGER EARNINGS
+      await this.earningsService.updateEarnings(
+        session.astrologerId.toString(),
+        session.totalAmount,
+        'call',
+      );
+
+      session.isPaid = true;
+    } catch (error: any) {
+      this.logger.error(`❌ Payment processing failed for call session ${sessionId}: ${error.message}`);
+      session.isPaid = false;
+    }
+  }
+
+  session.status = 'ended';
+  session.endTime = new Date();
+  session.endedBy = endedBy;
+  session.endReason = reason;
+  session.timerStatus = 'ended';
+
+  // Add recording if available
+  if (recordingUrl && actualDurationSeconds > 0) {
+    session.hasRecording = true;
+    session.recordingUrl = recordingUrl;
+    session.recordingS3Key = recordingS3Key;
+    session.recordingDuration = recordingDuration || actualDurationSeconds;
+    session.recordingType = session.callType === 'audio' ? 'voicenote' : 'video';
+    session.recordingStartedAt = session.startTime;
+    session.recordingEndedAt = new Date();
+
+    try {
+      const recordingMessageId = await this.createRecordingChatMessage(
+        sessionId,
+        session.orderId,
+        session.conversationThreadId!,
+        session.userId.toString(),
+        session.astrologerId.toString(),
+        session.callType as 'audio' | 'video',
+        recordingUrl,
+        recordingS3Key!,
+        session.recordingDuration,
+        actualDurationSeconds,
+      );
+      session.recordingMessageId = recordingMessageId;
+      this.logger.log(`Recording saved to chat: ${recordingMessageId}`);
+    } catch (error: any) {
+      this.logger.error('Failed to save recording to chat:', error.message);
+    }
+  }
+
+  // Update participant status
+  if (session.userStatus) {
+    session.userStatus.isOnline = false;
+    session.userStatus.connectionQuality = 'offline';
+  }
+  if (session.astrologerStatus) {
+    session.astrologerStatus.isOnline = false;
+    session.astrologerStatus.connectionQuality = 'offline';
+  }
+
+  await session.save();
+
+  // Complete session in orders
+ await this.ordersService.completeSession(session.orderId, {
+  sessionId: sessionId,
+  sessionType: session.callType === 'audio' ? 'audio_call' : 'video_call',
+  actualDurationSeconds: actualDurationSeconds,
+  billedMinutes: session.billedMinutes,
+  chargedAmount: session.totalAmount,
+  recordingUrl: recordingUrl,
+  recordingS3Key: recordingS3Key,
+  recordingDuration: session.recordingDuration,
+});
+
+  // Optional: notify user with call summary (if there was real duration)
+  if (actualDurationSeconds > 0 && session.totalAmount > 0) {
+    try {
+      await this.notificationService.sendNotification({
+        recipientId: session.userId.toString(),
+        recipientModel: 'User',
+        type: 'call_ended',
+        title: 'Call ended',
+        message: `Your call session ended. Duration: ${session.billedMinutes} min, Charged: ₹${session.totalAmount}.`,
+        data: {
+          mode: 'call',
+          step: 'session_ended',
+          sessionId: session.sessionId,
+          orderId: session.orderId,
+          callType: session.callType,
+          billedMinutes: session.billedMinutes,
+          amount: session.totalAmount,
+          recordingUrl: session.recordingUrl,
+        },
+        priority: 'medium',
+      });
+    } catch (err: any) {
+      this.logger.error('Call end notification error:', err.message);
+    }
+  }
+
+  this.logger.log(`Call session ended: ${sessionId} | Duration: ${actualDurationSeconds}s | Type: ${session.callType}`);
+
+  return {
+    success: true,
+    message: 'Call session ended',
+    data: {
+      sessionId,
+      actualDuration: actualDurationSeconds,
+      billedMinutes: session.billedMinutes,
+      chargeAmount: session.totalAmount,
+      recordingUrl: recordingUrl,
+      recordingMessageId: session.recordingMessageId,
+      status: 'ended',
+    },
+  };
+}
+
+  /**
+ * Get astrologer's call sessions
+ */
+async getAstrologerCallSessions(
+  astrologerId: string,
+  filters: {
+    page: number;
+    limit: number;
+    status?: string;
+  }
+): Promise<any> {
+  const query: any = {
+    astrologerId: this.toObjectId(astrologerId)
+  };
+
+  if (filters.status) {
+    query.status = filters.status;
+  }
+
+  const skip = (filters.page - 1) * filters.limit;
+
+  const [sessions, total] = await Promise.all([
+    this.sessionModel
+      .find(query)
+      .populate('userId', 'name profileImage phoneNumber')
+      .select('sessionId userId callType ratePerMinute status duration billedMinutes totalAmount startTime endTime createdAt hasRecording recordingUrl')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(filters.limit)
+      .lean(),
+    this.sessionModel.countDocuments(query)
+  ]);
+
+  return {
+    success: true,
+    data: {
+      sessions,
+      pagination: {
+        page: filters.page,
+        limit: filters.limit,
+        total,
+        pages: Math.ceil(total / filters.limit)
+      }
+    }
+  };
+}
+
+/**
+ * Get astrologer call session details
+ */
+async getAstrologerCallSessionDetails(
+  sessionId: string,
+  astrologerId: string
+): Promise<any> {
+  const session = await this.sessionModel
+    .findOne({
+      sessionId,
+      astrologerId: this.toObjectId(astrologerId)
+    })
+    .populate('userId', 'name profileImage phoneNumber email')
+    .lean();
+
+  if (!session) {
+    throw new NotFoundException('Call session not found');
+  }
+
+  return {
+    success: true,
+    data: session
+  };
+}
 
   // ===== REQUEST TIMEOUT (3 mins) =====
   private setRequestTimeout(sessionId: string, orderId: string, userId: string) {
@@ -599,6 +719,22 @@ this.notificationService
         session.endReason = 'astrologer_no_response';
         session.endTime = new Date();
         await session.save();
+
+        try {
+          await this.penaltyService.applyPenalty({
+            astrologerId: session.astrologerId.toString(),
+            type: 'late_response',
+            amount: 100, // ₹100 penalty for not responding
+            reason: 'No response to call request',
+            description: `Did not respond to ${session.callType} call request within 3 minutes`,
+            orderId: session.orderId,
+            userId: session.userId.toString(),
+            appliedBy: 'system',
+          });
+          this.logger.log(`✅ Penalty applied: ₹100 to astrologer for no response`);
+        } catch (error: any) {
+          this.logger.error(`❌ Failed to apply penalty: ${error.message}`);
+        }
 
         // Update order (sends timeout notification with "no charge" wording)
         await this.ordersService.handleOrderTimeout(orderId);

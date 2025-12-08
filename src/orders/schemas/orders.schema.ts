@@ -219,38 +219,14 @@ export class Order {
   @Prop()
   lastSessionEndTime?: Date;
 
-  @Prop({ min: 1, max: 5 })
-  rating?: number;
-
-  @Prop({ maxlength: 500 })
-  review?: string;
-
   @Prop({ default: false })
-  reviewSubmitted: boolean;
-
-  @Prop()
-  reviewSubmittedAt?: Date;
-
-  @Prop({ 
-  enum: ['pending', 'approved', 'rejected', 'flagged'], 
-  default: 'pending'
-})
-reviewModerationStatus?: string;
+reviewGiven: boolean; // Just track if review was submitted
 
 @Prop()
-reviewModerationReason?: string;
+reviewGivenAt?: Date;
 
-@Prop({ type: Types.ObjectId, ref: 'Admin' })
-reviewModeratedBy?: Types.ObjectId;
-
-@Prop()
-reviewModeratedAt?: Date;
-
-@Prop({ default: false })
-reviewIsEdited?: boolean;
-
-@Prop()
-reviewEditedAt?: Date;
+@Prop({ type: Types.ObjectId, ref: 'Review' })
+reviewId?: Types.ObjectId; 
 
   @Prop({
     type: {

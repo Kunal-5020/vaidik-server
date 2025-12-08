@@ -1,3 +1,5 @@
+// src/payments/controllers/wallet.controller.ts
+
 import {
   Controller,
   Get,
@@ -30,19 +32,30 @@ export class WalletController {
     private giftService: GiftService,
   ) {}
 
-  // Get wallet statistics
+  // ===== WALLET STATS =====
+
+  /**
+   * Get wallet statistics
+   * GET /wallet/stats
+   */
   @Get('stats')
   async getWalletStats(@Req() req: AuthenticatedRequest) {
     return this.walletService.getWalletStats(req.user._id);
   }
 
-  // Get wallet with hold status
+  /**
+   * Get wallet with hold status
+   * GET /wallet/stats/with-hold
+   */
   @Get('stats/with-hold')
   async getWalletWithHold(@Req() req: AuthenticatedRequest) {
     return this.walletService.getWalletWithHold(req.user._id);
   }
 
-  // Get payment logs
+  /**
+   * Get payment logs
+   * GET /wallet/payment-logs
+   */
   @Get('payment-logs')
   async getPaymentLogs(
     @Req() req: AuthenticatedRequest,
@@ -50,15 +63,15 @@ export class WalletController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('status') status?: string,
   ) {
-    return this.walletService.getPaymentLogs(
-      req.user._id,
-      page,
-      limit,
-      status,
-    );
+    return this.walletService.getPaymentLogs(req.user._id, page, limit, status);
   }
 
-  // ✅ FIXED: Create recharge transaction (Razorpay only)
+  // ===== RECHARGE =====
+
+  /**
+   * Create recharge transaction (Razorpay only)
+   * POST /wallet/recharge
+   */
   @Post('recharge')
   async rechargeWallet(
     @Req() req: AuthenticatedRequest,
@@ -67,11 +80,14 @@ export class WalletController {
     return this.walletService.createRechargeTransaction(
       req.user._id,
       rechargeDto.amount,
-      rechargeDto.currency || 'INR', // ✅ Removed paymentGateway reference
+      rechargeDto.currency || 'INR',
     );
   }
 
-  // Verify payment
+  /**
+   * Verify payment
+   * POST /wallet/verify-payment
+   */
   @Post('verify-payment')
   async verifyPayment(
     @Req() req: AuthenticatedRequest,
@@ -86,16 +102,21 @@ export class WalletController {
     );
   }
 
-  // Redeem gift card (adds non-withdrawable bonus balance)
+  /**
+   * Redeem gift card (adds non-withdrawable bonus balance)
+   * POST /wallet/redeem-giftcard
+   */
   @Post('redeem-giftcard')
-  async redeemGiftCard(
-    @Req() req: AuthenticatedRequest,
-    @Body('code') code: string,
-  ) {
+  async redeemGiftCard(@Req() req: AuthenticatedRequest, @Body('code') code: string) {
     return this.walletService.redeemGiftCard(req.user._id, code);
   }
 
-  // Get wallet transactions
+  // ===== TRANSACTIONS =====
+
+  /**
+   * Get wallet transactions
+   * GET /wallet/transactions
+   */
   @Get('transactions')
   async getTransactions(
     @Req() req: AuthenticatedRequest,
@@ -110,18 +131,24 @@ export class WalletController {
     });
   }
 
-  // Get transaction details
+  /**
+   * Get transaction details
+   * GET /wallet/transactions/:transactionId
+   */
   @Get('transactions/:transactionId')
   async getTransactionDetails(
     @Param('transactionId') transactionId: string,
     @Req() req: AuthenticatedRequest,
   ) {
-    return this.walletService.getTransactionDetails(
-      transactionId,
-      req.user._id,
-    );
+    return this.walletService.getTransactionDetails(transactionId, req.user._id);
   }
 
+  // ===== GIFTS =====
+
+  /**
+   * Send direct gift
+   * POST /wallet/gifts/direct
+   */
   @Post('gifts/direct')
   async sendDirectGift(
     @Req() req: AuthenticatedRequest,
@@ -143,6 +170,54 @@ export class WalletController {
         newBalance: result.newBalance,
         astrologerId: result.astrologerId,
         astrologerName: result.astrologerName,
+        astrologerEarning: result.astrologerEarning,
+        platformCommission: result.platformCommission,
+      },
+    };
+  }
+
+  /**
+   * ✅ NEW: Get user's gift history
+   * GET /wallet/gifts/history
+   */
+  @Get('gifts/history')
+  async getGiftHistory(
+    @Req() req: AuthenticatedRequest,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('context') context?: 'direct' | 'stream',
+  ) {
+    return this.giftService.getUserGiftHistory(req.user._id, {
+      page,
+      limit,
+      context,
+    });
+  }
+
+  /**
+   * ✅ NEW: Get gift statistics
+   * GET /wallet/gifts/stats
+   */
+  @Get('gifts/stats')
+  async getGiftStats(@Req() req: AuthenticatedRequest) {
+    const result = await this.giftService.getUserGiftHistory(req.user._id, {
+      page: 1,
+      limit: 1000, // Get all for stats
+    });
+
+    const totalGifts = result.data.gifts.length;
+    const totalAmount = result.data.gifts.reduce((sum, gift) => sum + Math.abs(gift.amount), 0);
+    const directGifts = result.data.gifts.filter((g) => g.context === 'direct').length;
+    const streamGifts = result.data.gifts.filter((g) => g.context === 'stream').length;
+
+    return {
+      success: true,
+      data: {
+        totalGifts,
+        totalAmount,
+        directGifts,
+        streamGifts,
+        recentGifts: result.data.gifts.slice(0, 5),
       },
     };
   }

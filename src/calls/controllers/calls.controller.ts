@@ -147,6 +147,39 @@ async rejectCallAsAstrologer(
   };
 }
 
+/**
+ * Get astrologer's call sessions
+ * GET /calls/astrologer/sessions
+ */
+@Get('astrologer/sessions')
+async getAstrologerCallSessions(
+  @Req() req: AuthenticatedRequest,
+  @Query('page') page: string = '1',
+  @Query('limit') limit: string = '20',
+  @Query('status') status?: string
+) {
+  return this.callSessionService.getAstrologerCallSessions(
+    req.user._id,
+    {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      status
+    }
+  );
+}
+
+/**
+ * Get astrologer call session details
+ * GET /calls/astrologer/sessions/:sessionId
+ */
+@Get('astrologer/sessions/:sessionId')
+async getAstrologerCallSessionDetails(
+  @Param('sessionId') sessionId: string,
+  @Req() req: AuthenticatedRequest
+) {
+  return this.callSessionService.getAstrologerCallSessionDetails(sessionId, req.user._id);
+}
+
 
   // ===== CONTINUE CALL =====
   @Post('sessions/:sessionId/continue')

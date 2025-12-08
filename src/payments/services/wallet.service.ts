@@ -13,13 +13,15 @@ import { RazorpayService } from './razorpay.service';
 import { GiftCard, GiftCardDocument } from '../schemas/gift-card.schema';
 import { WalletRefundRequest, WalletRefundRequestDocument } from '../schemas/wallet-refund-request.schema';
 
+const GST_PERCENTAGE = 18;
+
 @Injectable()
 export class WalletService {
   private readonly logger = new Logger(WalletService.name);
 
   constructor(
     @InjectModel(WalletTransaction.name)
-    private transactionModel: Model<WalletTransactionDocument>,
+    public transactionModel: Model<WalletTransactionDocument>,
     @InjectModel(User.name)
     private userModel: Model<UserDocument>,
     @InjectModel(GiftCard.name)
@@ -106,35 +108,46 @@ export class WalletService {
     return { cashDebited, bonusDebited };
   }
 
+  // ✅ NEW HELPER: Check if user already got bonus for this amount
+  private async hasReceivedBonusForAmount(userId: string, amount: number): Promise<boolean> {
+    const count = await this.transactionModel.countDocuments({
+      userId: new Types.ObjectId(userId),
+      type: 'recharge',
+      status: 'completed',
+      amount: amount,
+      bonusAmount: { $gt: 0 }, // Check if bonus was given
+    });
+    return count > 0;
+  }
+
   // ===== CREATE RECHARGE TRANSACTION (RAZORPAY ONLY) =====
 
-  async createRechargeTransaction(
+async createRechargeTransaction(
     userId: string,
-    amount: number,
+    amount: number, // Expecting Base Amount (e.g., 100)
     currency: string = 'INR',
   ): Promise<any> {
-    // ✅ Validate user exists
     const user = await this.userModel.findById(userId);
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    // ✅ Validate amount
-    if (amount < 100) {
-      throw new BadRequestException('Minimum recharge amount is ₹100');
-    }
+    if (!user) throw new NotFoundException('User not found');
+    if (amount < 50) throw new BadRequestException('Minimum recharge amount is ₹50'); // Adjusted to 50 based on your UI
 
     const transactionId = this.generateTransactionId('TXN');
 
+    // ✅ Calculate GST
+    const gstAmount = Math.ceil((amount * GST_PERCENTAGE) / 100);
+    const totalPayable = amount + gstAmount;
+
     try {
-      // ✅ Create pending transaction record
+      // ✅ Store BASE AMOUNT in transaction (Credit this to wallet later)
       const transaction = new this.transactionModel({
         transactionId,
         userId: new Types.ObjectId(userId),
         type: 'recharge',
-        amount,
+        amount: amount, // Store 100, not 118
+        taxAmount: gstAmount, // Optional: Store tax if your schema supports it
+        totalPayable: totalPayable, // Optional
         balanceBefore: user.wallet?.balance || 0,
-        balanceAfter: user.wallet?.balance || 0, // Will update on success
+        balanceAfter: user.wallet?.balance || 0,
         description: `Wallet recharge of ${currency} ${amount}`,
         paymentGateway: 'razorpay',
         status: 'pending',
@@ -143,45 +156,41 @@ export class WalletService {
 
       await transaction.save();
 
-      // ✅ Create Razorpay order
+      // ✅ Ask Razorpay for TOTAL AMOUNT (118)
       const razorpayOrder = await this.razorpayService.createOrder(
-        amount,
+        totalPayable, // Razorpay charges 118
         currency,
         userId,
         transactionId,
       );
 
-      this.logger.log(
-        `Recharge transaction created: ${transactionId} | Amount: ${currency} ${amount}`,
-      );
-
       return {
         success: true,
-        message: 'Recharge transaction created successfully',
+        message: 'Recharge initiated',
         data: {
           transactionId: transaction.transactionId,
-          amount: transaction.amount,
+          amount: transaction.amount, // 100
+          gst: gstAmount,             // 18
+          totalPayable: totalPayable, // 118
           currency: razorpayOrder.currency,
           status: transaction.status,
           razorpay: {
             orderId: razorpayOrder.gatewayOrderId,
-            amount: razorpayOrder.amount,
+            amount: razorpayOrder.amount, // 11800 (paise)
             currency: razorpayOrder.currency,
-            key: this.razorpayService.getKeyId(), // For frontend
+            key: this.razorpayService.getKeyId(),
           },
         },
       };
     } catch (error: any) {
       this.logger.error(`Recharge creation failed: ${error.message}`);
-      throw new InternalServerErrorException(
-        `Failed to create recharge transaction: ${error.message}`,
-      );
+      throw new InternalServerErrorException(`Failed to create recharge: ${error.message}`);
     }
   }
 
   // ===== VERIFY PAYMENT (WITH TRANSACTION) =====
 
-  async verifyPayment(
+ async verifyPayment(
     transactionId: string,
     paymentId: string,
     status: 'completed' | 'failed',
@@ -192,102 +201,146 @@ export class WalletService {
     session.startTransaction();
 
     try {
-      // ✅ Find transaction
-      const transaction = await this.transactionModel
-        .findOne({ transactionId })
-        .session(session);
+      const transaction = await this.transactionModel.findOne({ transactionId }).session(session);
+      if (!transaction) throw new NotFoundException('Transaction not found');
+      if (transaction.status !== 'pending') throw new BadRequestException(`Transaction already ${transaction.status}`);
 
-      if (!transaction) {
-        throw new NotFoundException('Transaction not found');
-      }
+      const user = await this.userModel.findById(transaction.userId).session(session);
+      if (!user) throw new NotFoundException('User not found');
 
-      if (transaction.status !== 'pending') {
-        throw new BadRequestException(
-          `Transaction already ${transaction.status}`,
-        );
-      }
-
-      // ✅ Find user
-      const user = await this.userModel
-        .findById(transaction.userId)
-        .session(session);
-
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-
-      // ✅ Update transaction
       transaction.paymentId = paymentId;
       transaction.status = status;
 
       if (status === 'completed') {
-        // ✅ Ensure wallet structure
         this.ensureWallet(user as any);
 
-        // Optional promotion/bonus handling
+        // ✅ Bonus Logic
+        let finalBonusPercentage = bonusPercentage || 0;
+        const alreadyGotBonus = await this.hasReceivedBonusForAmount(user._id.toString(), transaction.amount);
+        
+        if (alreadyGotBonus) {
+          finalBonusPercentage = 0; // Disable bonus if already claimed
+        }
+        
         let bonusAmount = 0;
-        if (bonusPercentage && bonusPercentage > 0) {
-          bonusAmount = Math.floor((transaction.amount * bonusPercentage) / 100);
+        if (finalBonusPercentage > 0) {
+          bonusAmount = Math.floor((transaction.amount * finalBonusPercentage) / 100);
         }
 
-        if (promotionId) {
-          (transaction as any).promotionId = promotionId;
-        }
-        if (bonusAmount > 0) {
-          transaction.bonusAmount = bonusAmount;
-        }
+        if (promotionId) (transaction as any).promotionId = promotionId;
+        if (bonusAmount > 0) transaction.bonusAmount = bonusAmount;
 
-        // ✅ Update user wallet split balances
+        // ✅ Credit Wallet (transaction.amount is BASE amount e.g., 100)
         user.wallet.cashBalance = (user.wallet.cashBalance || 0) + transaction.amount;
         user.wallet.bonusBalance = (user.wallet.bonusBalance || 0) + bonusAmount;
         user.wallet.balance = user.wallet.cashBalance + user.wallet.bonusBalance;
-        user.wallet.totalRecharged =
-          (user.wallet.totalRecharged || 0) + transaction.amount;
-        user.wallet.totalBonusReceived =
-          (user.wallet.totalBonusReceived || 0) + bonusAmount;
+        
+        user.wallet.totalRecharged = (user.wallet.totalRecharged || 0) + transaction.amount;
+        user.wallet.totalBonusReceived = (user.wallet.totalBonusReceived || 0) + bonusAmount;
+        
         user.wallet.lastRechargeAt = new Date();
         user.wallet.lastTransactionAt = new Date();
 
         transaction.balanceAfter = user.wallet.balance;
-        transaction.description = `Wallet recharged successfully with ₹${transaction.amount}${
-          bonusAmount > 0 ? ` + bonus ₹${bonusAmount}` : ''
-        }`;
-
-        this.logger.log(
-          `Payment verified: ${transactionId} | New balance: ₹${user.wallet.balance} (cash=${user.wallet.cashBalance}, bonus=${user.wallet.bonusBalance})`,
-        );
-      } else {
+        transaction.description = bonusAmount > 0
+          ? `Recharge ₹${transaction.amount} + ${finalBonusPercentage}% Bonus`
+          : `Wallet recharge of ₹${transaction.amount}`;
       }
 
-      // ✅ Save changes atomically
       await user.save({ session });
       await transaction.save({ session });
-
       await session.commitTransaction();
 
       return {
         success: true,
-        message:
-          status === 'completed'
-            ? 'Payment verified and wallet updated successfully'
-            : 'Payment verification failed',
+        message: status === 'completed' ? 'Payment verified successfully' : 'Payment verification failed',
         data: {
           transactionId: transaction.transactionId,
-          amount: transaction.amount,
-          status: transaction.status,
+          amount: transaction.amount, // 100
           newBalance: status === 'completed' ? user.wallet.balance : null,
         },
       };
     } catch (error: any) {
       await session.abortTransaction();
-      this.logger.error(`Payment verification failed: ${error.message}`);
-      throw new InternalServerErrorException(
-        `Payment verification failed: ${error.message}`,
-      );
+      this.logger.error(`Verification failed: ${error.message}`);
+      throw new InternalServerErrorException(error.message);
     } finally {
       session.endSession();
     }
   }
+
+  /**
+ * Credit astrologer earnings (from chat/call sessions)
+ */
+async creditAstrologerEarnings(
+  astrologerId: string,
+  amount: number,
+  orderId: string,
+  sessionType: 'chat' | 'audio_call' | 'video_call',
+  userName?: string,
+  sessionId?: string,
+  session: ClientSession | undefined = undefined,
+): Promise<WalletTransactionDocument> {
+  if (amount <= 0) {
+    throw new BadRequestException('Amount must be greater than 0');
+  }
+
+  const useExternalSession = !!session;
+  const localSession = session || (await this.startSession());
+
+  if (!useExternalSession) {
+    localSession.startTransaction();
+  }
+
+  try {
+    const transactionId = this.generateTransactionId('EARN');
+
+    const description = userName
+      ? `Earnings from ${sessionType.replace('_', ' ')} - ${userName}`
+      : `Earnings from ${sessionType.replace('_', ' ')}`;
+
+    // ✅ Create transaction for astrologer
+    const transaction = new this.transactionModel({
+      transactionId,
+      userId: new Types.ObjectId(astrologerId),
+      userModel: 'Astrologer', // ✅ Important: Identify as astrologer transaction
+      type: 'earning',
+      amount,
+      orderId,
+      description,
+      status: 'completed',
+      metadata: {
+        userName,
+        sessionType,
+        sessionId,
+        transactionType: 'astrologer_earning'
+      },
+      createdAt: new Date(),
+    });
+
+    await transaction.save({ session: localSession });
+
+    if (!useExternalSession) {
+      await localSession.commitTransaction();
+    }
+
+    this.logger.log(
+      `Astrologer credited: ${astrologerId} | Amount=₹${amount} | Type=${sessionType}`
+    );
+
+    return transaction;
+  } catch (error: any) {
+    if (!useExternalSession) {
+      await localSession.abortTransaction();
+    }
+    this.logger.error(`Astrologer credit failed: ${error.message}`);
+    throw error;
+  } finally {
+    if (!useExternalSession) {
+      localSession.endSession();
+    }
+  }
+}
 
   // ===== DEDUCT FROM WALLET (WITH TRANSACTION) =====
 
@@ -296,8 +349,9 @@ export class WalletService {
   amount: number,
   orderId: string,
   description: string,
-  session: ClientSession | undefined = undefined, // ✅ Fixed: Explicit default
+  session: ClientSession | undefined = undefined,
   metadata: Record<string, any> = {},
+  astrologerName?: string, // ✅ ADD THIS
 ): Promise<WalletTransactionDocument> {
   if (amount <= 0) {
     throw new BadRequestException('Amount must be greater than 0');
@@ -333,18 +387,28 @@ export class WalletService {
 
     const transactionId = this.generateTransactionId('TXN');
 
+    // ✅ Include astrologer name in description and metadata
+    const finalDescription = astrologerName 
+      ? `${description} - ${astrologerName}`
+      : description;
+
+    const finalMetadata = astrologerName 
+      ? { ...metadata, astrologerName }
+      : metadata;
+
     const transaction = new this.transactionModel({
       transactionId,
       userId: new Types.ObjectId(userId),
+      userModel: 'User', // ✅ Identify as user transaction
       type: 'deduction',
       amount,
       cashAmount: cashDebited,
       bonusAmount: bonusDebited,
       balanceBefore: user.wallet.balance + amount,
       balanceAfter: user.wallet.balance,
-      description,
+      description: finalDescription, // ✅ Includes astrologer name
       orderId,
-      metadata,
+      metadata: finalMetadata, // ✅ Includes astrologerName in metadata too
       status: 'completed',
       createdAt: new Date(),
     });
@@ -371,6 +435,322 @@ export class WalletService {
     if (!useExternalSession) {
       localSession.endSession();
     }
+  }
+}
+
+/**
+ * ✅ DEDUCT FROM USER (Simple wrapper for stream/call/chat)
+ */
+async deductFromUser(
+  userId: string,
+  amount: number,
+  type: string,
+  description: string,
+  metadata: Record<string, any> = {},
+): Promise<{ success: boolean; message?: string; transactionId?: string; newBalance?: number }> {
+  try {
+    if (amount <= 0) {
+      return {
+        success: false,
+        message: 'Amount must be greater than 0'
+      };
+    }
+
+    const user = await this.userModel.findById(userId);
+    if (!user) {
+      return {
+        success: false,
+        message: 'User not found'
+      };
+    }
+
+    this.ensureWallet(user as any);
+
+    const totalAvailable = (user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0);
+    if (totalAvailable < amount) {
+      return {
+        success: false,
+        message: `Insufficient balance. Required: ₹${amount}, Available: ₹${totalAvailable}`
+      };
+    }
+
+    const { cashDebited, bonusDebited } = this.applyDebit(user.wallet, amount);
+
+    const transactionId = this.generateTransactionId('TXN');
+
+    const transaction = new this.transactionModel({
+      transactionId,
+      userId: new Types.ObjectId(userId),
+      userModel: 'User',
+      type: 'deduction',
+      amount,
+      cashAmount: cashDebited,
+      bonusAmount: bonusDebited,
+      balanceBefore: totalAvailable,
+      balanceAfter: user.wallet.balance,
+      description,
+      metadata,
+      status: 'completed',
+      createdAt: new Date(),
+    });
+
+    user.wallet.lastTransactionAt = new Date();
+
+    await transaction.save();
+    await user.save();
+
+    this.logger.log(`Deducted ₹${amount} from user ${userId} | Type: ${type}`);
+
+    return {
+      success: true,
+      transactionId: transaction.transactionId,
+      newBalance: user.wallet.balance,
+      message: 'Deducted successfully'
+    };
+  } catch (error: any) {
+    this.logger.error(`Deduct from user failed: ${error.message}`);
+    return {
+      success: false,
+      message: error.message || 'Deduction failed'
+    };
+  }
+}
+
+/**
+ * ✅ FIXED: Credit to astrologer (Simple wrapper for stream/call/chat)
+ */
+async creditToAstrologer(
+  astrologerId: string,
+  amount: number,
+  type: string,
+  description: string,
+  metadata: Record<string, any> = {},
+): Promise<{ success: boolean; message?: string; transactionId?: string }> {
+  try {
+    if (amount <= 0) {
+      return {
+        success: false,
+        message: 'Amount must be greater than 0',
+      };
+    }
+
+    const transactionId = this.generateTransactionId('EARN');
+
+    // ✅ FIXED: Add balanceBefore and balanceAfter (set to 0 for astrologers)
+    const transaction = new this.transactionModel({
+      transactionId,
+      userId: new Types.ObjectId(astrologerId),
+      userModel: 'Astrologer',
+      type: 'earning',
+      amount,
+      balanceBefore: 0, // ✅ Astrologers don't have wallet balance
+      balanceAfter: 0, // ✅ Earnings tracked in Astrologer schema
+      description,
+      status: 'completed',
+      metadata: {
+        ...metadata,
+        transactionType: 'astrologer_earning',
+        serviceType: type,
+      },
+      createdAt: new Date(),
+    });
+
+    await transaction.save();
+
+    this.logger.log(`Astrologer credited: ${astrologerId} | Amount: ₹${amount} | Type: ${type}`);
+
+    return {
+      success: true,
+      transactionId: transaction.transactionId,
+      message: 'Credited successfully',
+    };
+  } catch (error: any) {
+    this.logger.error(`Credit to astrologer failed: ${error.message}`);
+    return {
+      success: false,
+      message: error.message || 'Credit failed',
+    };
+  }
+}
+
+/**
+ * ✅ NEW: Process session payment (user pays, astrologer earns)
+ * Creates ONE transaction that records both sides of the payment
+ */
+
+async processSessionPayment(data: {
+  userId: string;
+  astrologerId: string;
+  amount: number;
+  orderId: string;
+  sessionId: string;
+  sessionType: 'audio_call' | 'video_call' | 'chat' | 'stream_call';
+  userName?: string;
+  astrologerName?: string;
+  durationMinutes?: number;
+}): Promise<{
+  success: boolean;
+  message?: string;
+  transactionId?: string;
+  userTransaction?: any;
+  astrologerTransaction?: any;
+}> {
+  const session = await this.startSession();
+  session.startTransaction();
+
+  try {
+    // 1. Get user
+    const user = await this.userModel.findById(data.userId).session(session);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    this.ensureWallet(user as any);
+
+    // 2. Check user balance
+    const totalAvailable = (user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0);
+    if (totalAvailable < data.amount) {
+      throw new BadRequestException(
+        `Insufficient balance. Required: ₹${data.amount}, Available: ₹${totalAvailable}`,
+      );
+    }
+
+    // 3. Calculate commission split (40% platform, 60% astrologer)
+    const platformCommission = (data.amount * 40) / 100;
+    const astrologerEarning = data.amount - platformCommission;
+
+    // 4. Deduct from user wallet (bonus first, then cash)
+    const beforeBalance = user.wallet.balance;
+    const { cashDebited, bonusDebited } = this.applyDebit(user.wallet, data.amount);
+
+    // 5. Generate descriptions based on session type
+    const astrologerName = data.astrologerName || 'Astrologer';
+    const userName = data.userName || 'User';
+
+    let userDescription = '';
+    let astrologerDescription = '';
+
+    switch (data.sessionType) {
+      case 'audio_call':
+        userDescription = `Call with ${astrologerName}`;
+        astrologerDescription = `Call with ${userName}`;
+        break;
+      case 'video_call':
+        userDescription = `Video call with ${astrologerName}`;
+        astrologerDescription = `Video call with ${userName}`;
+        break;
+      case 'chat':
+        userDescription = `Chat with ${astrologerName}`;
+        astrologerDescription = `Chat with ${userName}`;
+        break;
+      case 'stream_call':
+        userDescription = `Livestream call with ${astrologerName}`;
+        astrologerDescription = `Livestream call with ${userName}`;
+        break;
+      default:
+        userDescription = `Session with ${astrologerName}`;
+        astrologerDescription = `Session with ${userName}`;
+    }
+
+    // 6. Generate transaction IDs
+    const userTransactionId = this.generateTransactionId('PAY');
+    const astrologerTransactionId = this.generateTransactionId('EARN');
+
+    // 7. Create USER transaction (deduction)
+    const userTransaction = new this.transactionModel({
+      transactionId: userTransactionId,
+      userId: new Types.ObjectId(data.userId),
+      userModel: 'User',
+      type: 'session_payment',
+      amount: data.amount,
+      cashAmount: cashDebited,
+      bonusAmount: bonusDebited,
+      balanceBefore: beforeBalance,
+      balanceAfter: user.wallet.balance,
+      description: userDescription,
+      orderId: data.orderId,
+      sessionId: data.sessionId,
+      sessionType: data.sessionType,
+      relatedAstrologerId: new Types.ObjectId(data.astrologerId),
+      grossAmount: data.amount,
+      platformCommission: platformCommission,
+      netAmount: astrologerEarning,
+      status: 'completed',
+      metadata: {
+        astrologerId: data.astrologerId,
+        astrologerName: data.astrologerName,
+        sessionType: data.sessionType,
+        durationMinutes: data.durationMinutes || 0,
+        paymentType: 'user_payment',
+      },
+      linkedTransactionId: astrologerTransactionId,
+      createdAt: new Date(),
+    });
+
+    // 8. Create ASTROLOGER transaction (earning)
+    const astrologerTransaction = new this.transactionModel({
+      transactionId: astrologerTransactionId,
+      userId: new Types.ObjectId(data.astrologerId),
+      userModel: 'Astrologer',
+      type: 'session_payment',
+      amount: astrologerEarning,
+      grossAmount: data.amount,
+      platformCommission: platformCommission,
+      netAmount: astrologerEarning,
+      description: astrologerDescription,
+      orderId: data.orderId,
+      sessionId: data.sessionId,
+      sessionType: data.sessionType,
+      relatedUserId: new Types.ObjectId(data.userId),
+      status: 'completed',
+      metadata: {
+        userId: data.userId,
+        userName: data.userName,
+        sessionType: data.sessionType,
+        durationMinutes: data.durationMinutes || 0,
+        paymentType: 'astrologer_earning',
+      },
+      linkedTransactionId: userTransactionId,
+      createdAt: new Date(),
+    });
+
+    // 9. Save both transactions
+    await userTransaction.save({ session });
+    await astrologerTransaction.save({ session });
+
+    // 10. Update user wallet timestamps
+    user.wallet.lastTransactionAt = new Date();
+    await user.save({ session });
+
+    // 11. Commit transaction
+    await session.commitTransaction();
+
+    this.logger.log(
+      `✅ Session payment processed | User: ${data.userId} (-₹${data.amount}) | Astrologer: ${data.astrologerId} (+₹${astrologerEarning}) | Type: ${data.sessionType}`,
+    );
+
+    return {
+      success: true,
+      transactionId: userTransactionId,
+      userTransaction: {
+        id: userTransactionId,
+        amount: data.amount,
+        description: userDescription,
+        balanceAfter: user.wallet.balance,
+      },
+      astrologerTransaction: {
+        id: astrologerTransactionId,
+        amount: astrologerEarning,
+        description: astrologerDescription,
+      },
+      message: 'Session payment processed successfully',
+    };
+  } catch (error: any) {
+    await session.abortTransaction();
+    this.logger.error(`❌ Session payment failed: ${error.message}`);
+    throw error;
+  } finally {
+    session.endSession();
   }
 }
 
@@ -656,28 +1036,21 @@ export class WalletService {
 
   // ===== GET PAYMENT LOGS =====
 
-  async getPaymentLogs(
-    userId: string,
-    page: number = 1,
-    limit: number = 20,
-    status?: string,
-  ): Promise<any> {
+  // ===== GET PAYMENT LOGS (For Add Cash Screen History) =====
+  async getPaymentLogs(userId: string, page: number = 1, limit: number = 20, status?: string): Promise<any> {
     const skip = (page - 1) * limit;
+    // ✅ Include 'giftcard' type here so gift redemptions show up in payment logs if desired
     const query: any = {
       userId: new Types.ObjectId(userId),
-      type: 'recharge',
+      type: { $in: ['recharge', 'giftcard'] }, // Show both recharges and gift cards
     };
 
-    if (status) {
-      query.status = status;
-    }
+    if (status) query.status = status;
 
     const [logs, total] = await Promise.all([
       this.transactionModel
         .find(query)
-        .select(
-          'transactionId amount paymentGateway paymentId status description createdAt',
-        )
+        .select('transactionId amount paymentGateway paymentId status description createdAt type giftCardCode') // Select relevant fields
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -689,12 +1062,7 @@ export class WalletService {
       success: true,
       data: {
         logs,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit),
-        },
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
       },
     };
   }
@@ -1027,91 +1395,54 @@ export class WalletService {
 
   // ===== GIFT CARD REDEMPTION =====
 
-  async redeemGiftCard(userId: string, code: string): Promise<any> {
+async redeemGiftCard(userId: string, code: string): Promise<any> {
     const session = await this.startSession();
     session.startTransaction();
     try {
       const normalizedCode = code.trim().toUpperCase();
+      const giftCard = await this.giftCardModel.findOne({ code: normalizedCode }).session(session);
 
-      const giftCard = await this.giftCardModel
-        .findOne({ code: normalizedCode })
-        .session(session);
-
-      if (!giftCard || giftCard.status !== 'active') {
-        throw new BadRequestException('Invalid or inactive gift card');
-      }
-
-      if (giftCard.expiresAt && giftCard.expiresAt < new Date()) {
-        giftCard.status = 'expired';
-        await giftCard.save({ session });
-        throw new BadRequestException('Gift card has expired');
-      }
-
-      if (giftCard.redemptionsCount >= giftCard.maxRedemptions) {
-        giftCard.status = 'exhausted';
-        await giftCard.save({ session });
-        throw new BadRequestException('Gift card already redeemed');
-      }
+      if (!giftCard || giftCard.status !== 'active') throw new BadRequestException('Invalid Gift Card');
+      if (giftCard.redemptionsCount >= giftCard.maxRedemptions) throw new BadRequestException('Card already redeemed');
 
       const user = await this.userModel.findById(userId).session(session);
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
+      if (!user) throw new NotFoundException('User not found');
 
       this.ensureWallet(user as any);
-
       const beforeBalance = user.wallet.balance;
 
-      // As per business rule: gift cards are non-withdrawable bonus
       user.wallet.bonusBalance = (user.wallet.bonusBalance || 0) + giftCard.amount;
       user.wallet.balance = (user.wallet.cashBalance || 0) + user.wallet.bonusBalance;
       user.wallet.lastTransactionAt = new Date();
 
       const transactionId = this.generateTransactionId('GIFT');
+      
       const txn = new this.transactionModel({
         transactionId,
         userId: user._id,
-        type: 'giftcard',
-        amount: giftCard.amount,
+        // ✅ Using 'credit' or 'giftcard' type ensures Frontend colors it Green
+        type: 'giftcard', 
+        amount: giftCard.amount, 
         bonusAmount: giftCard.amount,
         isBonus: true,
         balanceBefore: beforeBalance,
         balanceAfter: user.wallet.balance,
-        description: `Gift card redemption (${normalizedCode})`,
+        description: `Redeemed Gift Card: ${normalizedCode}`,
         status: 'completed',
-        giftCardCode: normalizedCode,
         createdAt: new Date(),
       });
 
       giftCard.redemptionsCount += 1;
-      giftCard.redeemedBy = user._id as any;
-      giftCard.redeemedAt = new Date();
-      giftCard.redemptionTransactionId = transactionId;
-      if (giftCard.redemptionsCount >= giftCard.maxRedemptions) {
-        giftCard.status = 'exhausted';
-      }
-
-      await Promise.all([
-        user.save({ session }),
-        txn.save({ session }),
-        giftCard.save({ session }),
-      ]);
-
+      await Promise.all([user.save({ session }), txn.save({ session }), giftCard.save({ session })]);
       await session.commitTransaction();
 
       return {
         success: true,
         message: 'Gift card redeemed successfully',
-        data: {
-          transactionId,
-          amount: giftCard.amount,
-          newBalance: user.wallet.balance,
-          bonusBalance: user.wallet.bonusBalance,
-        },
+        data: { newBalance: user.wallet.balance },
       };
     } catch (error: any) {
       await session.abortTransaction();
-      this.logger.error(`Gift card redeem failed: ${error.message}`);
       throw error;
     } finally {
       session.endSession();

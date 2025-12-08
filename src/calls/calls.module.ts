@@ -14,11 +14,16 @@ import { PaymentsModule } from '../payments/payments.module';
 import { AstrologersModule } from '../astrologers/astrologers.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ChatModule } from '../chat/chat.module';
+import { User, UserSchema } from '../users/schemas/user.schema';
+import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema';
+import { EarningsService } from '../astrologers/services/earnings.service'; 
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: CallSession.name, schema: CallSessionSchema },
+      { name: User.name, schema: UserSchema },
+      { name: Astrologer.name, schema: AstrologerSchema },
     ]),
     OrdersModule,
     PaymentsModule,
@@ -33,6 +38,7 @@ import { ChatModule } from '../chat/chat.module';
     CallRecordingService,
     AgoraService, // ✅ ADD
     CallBillingService, // ✅ ADD
+    EarningsService,
   ],
   exports: [CallSessionService, CallRecordingService, AgoraService, CallBillingService],
 })

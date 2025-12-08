@@ -942,41 +942,88 @@ async handleJoinSession(
   }
 
   // ===== END SESSION =====
-  @SubscribeMessage('end_chat')
+ /**
+ * ✅ FIXED: END CHAT (WebSocket)
+ */
+@SubscribeMessage('end_chat')
 async handleEndChat(
   @ConnectedSocket() client: Socket,
-  @MessageBody() data: { sessionId: string; endedBy: string; reason: string }
+  @MessageBody() payload: any,
 ) {
   try {
-    this.logger.log(`🔴 end_chat from ${client.id}: ${data.sessionId}`);
+    // ✅ Handle array or object payload
+    const data = Array.isArray(payload) ? payload[0] : payload;
     
-    // ✅ CRITICAL: Stop timer immediately
-    if (this.sessionTimers.has(data.sessionId)) {
-      clearInterval(this.sessionTimers.get(data.sessionId)!);
-      this.sessionTimers.delete(data.sessionId);
-      this.logger.log(`⏹️ Timer stopped for session: ${data.sessionId}`);
+    this.logger.log(`🔴 end_chat from ${client.id}: ${JSON.stringify(data)}`);
+
+    // ✅ Validate sessionId
+    if (!data || !data.sessionId) {
+      this.logger.error('❌ Missing sessionId in end_chat');
+      return { success: false, message: 'Session ID is required' };
     }
 
+    const sessionId = data.sessionId;
+    const reason = data.reason || 'user_ended';
+    const userId = data.userId || (client as any).handshake?.auth?.userId;
+
+    // ✅ Check if session exists and is not already ended
+    const session = await this.chatSessionService.getSession(sessionId);
+    
+    if (!session) {
+      this.logger.warn(`⚠️ Session ${sessionId} not found (may be already ended)`);
+      return { 
+        success: true, 
+        message: 'Session already ended or not found',
+        data: { sessionId, status: 'ended' }
+      };
+    }
+
+    // ✅ If already ended, return gracefully
+    if (session.status === 'ended') {
+      this.logger.log(`✅ Session ${sessionId} already ended, skipping`);
+      return {
+        success: true,
+        message: 'Session already ended',
+        data: {
+          sessionId,
+          status: 'ended',
+          billedMinutes: session.billedMinutes,
+          chargeAmount: session.totalAmount,
+        },
+      };
+    }
+
+    // ✅ End the session
     const result = await this.chatSessionService.endSession(
-      data.sessionId,
-      data.endedBy,
-      data.reason
+      sessionId,
+      userId || 'user',
+      reason,
     );
 
-    // ✅ Broadcast to ALL in room
-    this.server.to(data.sessionId).emit('session_ended', {
-      sessionId: data.sessionId,
-      endedBy: data.endedBy,
-      endTime: new Date(),
-      actualDuration: result.data.actualDuration,
+    // ✅ Stop timer if exists
+    if (this.sessionTimers.has(sessionId)) {
+      clearInterval(this.sessionTimers.get(sessionId)!);
+      this.sessionTimers.delete(sessionId);
+      this.logger.log(`⏹️ Timer cleared for session ${sessionId}`);
+    }
+
+    // ✅ Notify all participants
+    this.server.to(sessionId).emit('chat_ended', {
+      sessionId,
+      reason,
       billedMinutes: result.data.billedMinutes,
       chargeAmount: result.data.chargeAmount,
-      message: 'Chat session ended'
+      status: 'ended',
+      timestamp: new Date(),
     });
 
-    this.logger.log(`✅ Session ended successfully: ${data.sessionId}`);
+    this.logger.log(`✅ Chat ended via WebSocket: ${sessionId}`);
 
-    return { success: true, message: 'Chat ended', data: result.data };
+    return {
+      success: true,
+      message: 'Chat ended successfully',
+      data: result.data,
+    };
   } catch (error: any) {
     this.logger.error(`❌ End chat error: ${error.message}`);
     return { success: false, message: error.message };

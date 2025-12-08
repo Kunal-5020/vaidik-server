@@ -1,8 +1,11 @@
+// src/astrologers/core/services/astrologer.service.ts
+
 import { 
   Injectable, 
   NotFoundException, 
   BadRequestException,
-  ForbiddenException 
+  ForbiddenException,
+  Logger
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -10,6 +13,8 @@ import { Astrologer, AstrologerDocument } from '../schemas/astrologer.schema';
 
 @Injectable()
 export class AstrologerService {
+  private readonly logger = new Logger(AstrologerService.name);
+
   constructor(
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
   ) {}
@@ -21,14 +26,13 @@ export class AstrologerService {
     const astrologer = await this.astrologerModel
       .findById(astrologerId)
       .populate('registrationId', 'ticketNumber status')
-      .select('-__v -devices.fcmToken') // Exclude sensitive data
+      .select('-__v -devices.fcmToken')
       .lean();
 
     if (!astrologer) {
       throw new NotFoundException('Astrologer profile not found');
     }
 
-    // Calculate profile completion percentage
     const steps = astrologer.profileCompletion.steps;
     const completedSteps = Object.values(steps).filter(step => step === true).length;
     const totalSteps = Object.keys(steps).length;
@@ -37,7 +41,6 @@ export class AstrologerService {
     return {
       success: true,
       data: {
-        // Personal Information
         _id: astrologer._id,
         name: astrologer.name,
         email: astrologer.email,
@@ -46,17 +49,11 @@ export class AstrologerService {
         gender: astrologer.gender,
         profilePicture: astrologer.profilePicture,
         bio: astrologer.bio,
-
-        // Professional Details
         experienceYears: astrologer.experienceYears,
         specializations: astrologer.specializations,
         languages: astrologer.languages,
         tier: astrologer.tier,
-
-        // Pricing
         pricing: astrologer.pricing,
-
-        // Availability
         availability: {
           isOnline: astrologer.availability.isOnline,
           isAvailable: astrologer.availability.isAvailable,
@@ -64,17 +61,11 @@ export class AstrologerService {
           workingHours: astrologer.availability.workingHours,
           lastActive: astrologer.availability.lastActive,
         },
-
-        // Services Status
         isChatEnabled: astrologer.isChatEnabled,
         isCallEnabled: astrologer.isCallEnabled,
         isLiveStreamEnabled: astrologer.isLiveStreamEnabled,
-
-        // Account Status
         accountStatus: astrologer.accountStatus,
         singleDeviceMode: astrologer.singleDeviceMode,
-
-        // Profile Completion
         profileCompletion: {
           isComplete: astrologer.profileCompletion.isComplete,
           completedAt: astrologer.profileCompletion.completedAt,
@@ -83,16 +74,10 @@ export class AstrologerService {
           totalSteps,
           steps: astrologer.profileCompletion.steps,
         },
-
-        // Stats & Ratings
         ratings: astrologer.ratings,
         stats: astrologer.stats,
         earnings: astrologer.earnings,
-
-        // Registration Info
         registrationId: astrologer.registrationId,
-
-        // Timestamps
         createdAt: astrologer.createdAt,
         updatedAt: astrologer.updatedAt,
       },
@@ -156,7 +141,7 @@ export class AstrologerService {
   }
 
   /**
-   * Update pricing (part of profile completion)
+   * ✅ UPDATED: Update pricing & auto-complete profile
    */
   async updatePricing(astrologerId: string, pricing: any): Promise<any> {
     const astrologer = await this.astrologerModel.findById(astrologerId);
@@ -165,6 +150,7 @@ export class AstrologerService {
       throw new NotFoundException('Astrologer not found');
     }
 
+    // Update pricing
     astrologer.pricing = {
       chat: pricing.chat,
       call: pricing.call,
@@ -172,15 +158,48 @@ export class AstrologerService {
     };
     astrologer.profileCompletion.steps.pricing = true;
 
-    await this.checkAndUpdateProfileCompletion(astrologer);
+    // ✅ NEW: Auto-complete availability step (working hours are optional)
+    astrologer.profileCompletion.steps.availability = true;
+
+    // ✅ NEW: Force complete profile after pricing update
+    const allStepsComplete = Object.values(astrologer.profileCompletion.steps).every(step => step === true);
+    
+    if (allStepsComplete) {
+      astrologer.profileCompletion.isComplete = true;
+      astrologer.profileCompletion.completedAt = new Date();
+      
+      // ✅ Enable all services
+      astrologer.isChatEnabled = true;
+      astrologer.isCallEnabled = true;
+      astrologer.isLiveStreamEnabled = true;
+
+      // ✅ Make astrologer available
+      astrologer.availability.isOnline = true;
+      astrologer.availability.isAvailable = true;
+      astrologer.availability.lastActive = new Date();
+
+      this.logger.log(`✅ Profile auto-completed for astrologer ${astrologerId}`);
+    }
+
     await astrologer.save();
 
     return {
       success: true,
-      message: 'Pricing updated successfully',
+      message: allStepsComplete 
+        ? 'Pricing updated & profile completed! You are now available for orders.' 
+        : 'Pricing updated successfully',
       data: {
         pricing: astrologer.pricing,
-        profileCompletion: astrologer.profileCompletion
+        profileCompletion: astrologer.profileCompletion,
+        availability: {
+          isOnline: astrologer.availability.isOnline,
+          isAvailable: astrologer.availability.isAvailable,
+        },
+        servicesEnabled: {
+          chat: astrologer.isChatEnabled,
+          call: astrologer.isCallEnabled,
+          liveStream: astrologer.isLiveStreamEnabled,
+        }
       }
     };
   }
@@ -196,7 +215,7 @@ export class AstrologerService {
     }
 
     astrologer.availability.workingHours = availabilityData.workingHours;
-    astrologer.profileCompletion.steps.availability = availabilityData.workingHours.length > 0;
+    astrologer.profileCompletion.steps.availability = true; // Always mark as complete
 
     await this.checkAndUpdateProfileCompletion(astrologer);
     await astrologer.save();
@@ -219,6 +238,14 @@ export class AstrologerService {
 
     if (!astrologer) {
       throw new NotFoundException('Astrologer not found');
+    }
+
+    // ✅ Check if profile is complete before going online
+    if (isOnline && !astrologer.profileCompletion.isComplete) {
+      throw new BadRequestException({
+        message: 'Please complete your profile before going online',
+        missingSteps: this.getMissingProfileSteps(astrologer.profileCompletion.steps)
+      });
     }
 
     astrologer.availability.isOnline = isOnline;
@@ -363,31 +390,6 @@ export class AstrologerService {
   }
 
   /**
-   * Get live stream status
-   */
-  async getLiveStreamStatus(astrologerId: string): Promise<any> {
-    const astrologer = await this.astrologerModel
-      .findById(astrologerId)
-      .select('availability.isLive availability.liveStreamId name profilePicture specializations')
-      .lean();
-
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer not found');
-    }
-
-    return {
-      success: true,
-      data: {
-        isLive: astrologer.availability.isLive,
-        liveStreamId: astrologer.availability.liveStreamId,
-        astrologerName: astrologer.name,
-        profilePicture: astrologer.profilePicture,
-        specializations: astrologer.specializations
-      }
-    };
-  }
-
-  /**
    * Helper: Check and update profile completion status
    */
   private async checkAndUpdateProfileCompletion(astrologer: AstrologerDocument): Promise<void> {
@@ -402,6 +404,13 @@ export class AstrologerService {
       astrologer.isChatEnabled = true;
       astrologer.isCallEnabled = true;
       astrologer.isLiveStreamEnabled = true;
+
+      // ✅ Make available
+      astrologer.availability.isOnline = true;
+      astrologer.availability.isAvailable = true;
+      astrologer.availability.lastActive = new Date();
+
+      this.logger.log(`✅ Profile completed for astrologer ${astrologer._id}`);
     }
   }
 

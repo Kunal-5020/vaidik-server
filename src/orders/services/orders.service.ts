@@ -41,63 +41,56 @@ export class OrdersService {
 
   // ===== FIND OR CREATE CONVERSATION THREAD =====
   async findOrCreateConversationThread(
-    userId: string,
-    astrologerId: string,
-    astrologerName: string,
-    ratePerMinute: number
-  ): Promise<OrderDocument> {
-    // Generate conversation thread ID
-    const conversationThreadId = this.generateConversationThreadId(userId, astrologerId);
+  userId: string,
+  astrologerId: string,
+  astrologerName: string,
+  ratePerMinute: number
+): Promise<OrderDocument> {
+  const conversationThreadId = this.generateConversationThreadId(userId, astrologerId);
 
-    // Try to find existing conversation thread
-    let order = await this.orderModel.findOne({
-      conversationThreadId,
-      isDeleted: false
-    });
-
-    if (order) {
-      this.logger.log(`Found existing conversation thread: ${order.orderId}`);
-      return order;
-    }
-
-    // Create new conversation thread
-    const orderId = this.generateOrderId();
-
-    order = new this.orderModel({
-      orderId,
-      conversationThreadId,
-      userId: this.toObjectId(userId),
-      astrologerId: this.toObjectId(astrologerId),
-      astrologerName,
-      type: 'conversation', // ✅ Conversation-thread order
-      ratePerMinute,
-      status: 'active',      // Conversation threads stay active across sessions
-      requestCreatedAt: new Date(),
-      isActive: true,
-      sessionHistory: [],
-      totalUsedDurationSeconds: 0,
-      totalBilledMinutes: 0,
-      totalAmount: 0,
-      totalSessions: 0,
-      totalChatSessions: 0,
-      totalCallSessions: 0,
-      messageCount: 0,
-      reviewSubmitted: false,
-      isDeleted: false,
-      // Payment summary for the whole thread (no per-session hold)
-      payment: {
-        status: 'none',
-        heldAmount: 0,
-        chargedAmount: 0,
-        refundedAmount: 0
+  // ✅ Use findOneAndUpdate with upsert (atomic operation)
+  const order = await this.orderModel.findOneAndUpdate(
+    { conversationThreadId, isDeleted: false },
+    {
+      $setOnInsert: {
+        orderId: this.generateOrderId(),
+        conversationThreadId,
+        userId: this.toObjectId(userId),
+        astrologerId: this.toObjectId(astrologerId),
+        astrologerName,
+        type: 'conversation',
+        ratePerMinute,
+        status: 'active',
+        requestCreatedAt: new Date(),
+        isActive: true,
+        sessionHistory: [],
+        totalUsedDurationSeconds: 0,
+        totalBilledMinutes: 0,
+        totalAmount: 0,
+        totalSessions: 0,
+        totalChatSessions: 0,
+        totalCallSessions: 0,
+        messageCount: 0,
+        reviewSubmitted: false,
+        payment: {
+          status: 'none',
+          heldAmount: 0,
+          chargedAmount: 0,
+          refundedAmount: 0
+        }
       }
-    });
+    },
+    { 
+      upsert: true, // Create if not exists
+      new: true,    // Return the document
+      runValidators: true
+    }
+  );
 
-    await order.save();
-    this.logger.log(`Created new conversation thread: ${orderId} | Thread ID: ${conversationThreadId}`);
+  this.logger.log(`Conversation thread: ${order.orderId} (new: ${order.isNew})`);
+  return order;
+}
 
-    return order;
-  }
 
   // ===== GENERATE CONVERSATION THREAD ID =====
   private generateConversationThreadId(userId: string, astrologerId: string): string {
@@ -737,47 +730,124 @@ export class OrdersService {
         totalBilled: order.totalBilledMinutes,
         totalSpent: order.totalAmount,
         lastSessionEnd: order.lastSessionEndTime,
-        rating: order.rating,
-        review: order.review
+        review: order.reviewGiven
       }
     };
   }
 
-  // ===== ADD REVIEW =====
-  async addReview(
-    orderId: string,
-    userId: string,
-    rating: number,
-    review?: string
-  ): Promise<any> {
-    const order = await this.orderModel.findOne({
-      orderId,
-      userId: this.toObjectId(userId),
-      isDeleted: false
-    });
-
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    if (order.reviewSubmitted) {
-      throw new BadRequestException('Review already submitted');
-    }
-
-    order.rating = rating;
-    order.review = review || '';
-    order.reviewSubmitted = true;
-    order.reviewSubmittedAt = new Date();
-
-    await order.save();
-
-    this.logger.log(`Review added: ${orderId} | Rating: ${rating}`);
-
-    return {
-      success: true,
-      message: 'Review submitted successfully'
-    };
+  /**
+ * Get astrologer's orders
+ */
+async getAstrologerOrders(
+  astrologerId: string,
+  filters: {
+    page: number;
+    limit: number;
+    status?: string;
+    type?: string;
   }
+): Promise<any> {
+  const query: any = {
+    astrologerId: this.toObjectId(astrologerId),
+    isDeleted: false
+  };
+
+  if (filters.status) {
+    query.status = filters.status;
+  }
+
+  if (filters.type) {
+    query.type = filters.type;
+  }
+
+  const skip = (filters.page - 1) * filters.limit;
+
+  const [orders, total] = await Promise.all([
+    this.orderModel
+      .find(query)
+      .populate('userId', 'name profileImage phoneNumber')
+      .select('-isDeleted')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(filters.limit)
+      .lean(),
+    this.orderModel.countDocuments(query)
+  ]);
+
+  return {
+    success: true,
+    data: {
+      orders,
+      pagination: {
+        page: filters.page,
+        limit: filters.limit,
+        total,
+        pages: Math.ceil(total / filters.limit)
+      }
+    }
+  };
+}
+
+/**
+ * Get astrologer order details
+ */
+async getAstrologerOrderDetails(
+  orderId: string,
+  astrologerId: string
+): Promise<any> {
+  const order = await this.orderModel
+    .findOne({
+      orderId,
+      astrologerId: this.toObjectId(astrologerId),
+      isDeleted: false
+    })
+    .populate('userId', 'name profileImage phoneNumber email')
+    .lean();
+
+  if (!order) {
+    throw new NotFoundException('Order not found');
+  }
+
+  return {
+    success: true,
+    data: order
+  };
+}
+
+  // ===== ADD REVIEW =====
+  // ✅ REPLACE with simple tracking:
+async markReviewGiven(
+  orderId: string,
+  userId: string,
+  reviewId: string
+): Promise<any> {
+  const order = await this.orderModel.findOne({
+    orderId,
+    userId: this.toObjectId(userId),
+    isDeleted: false
+  });
+
+  if (!order) {
+    throw new NotFoundException('Order not found');
+  }
+
+  if (order.reviewGiven) {
+    throw new BadRequestException('Review already submitted for this order');
+  }
+
+  order.reviewGiven = true;
+  order.reviewGivenAt = new Date();
+  order.reviewId = this.toObjectId(reviewId);
+
+  await order.save();
+
+  this.logger.log(`Review tracked for order: ${orderId}`);
+
+  return {
+    success: true,
+    message: 'Review recorded successfully'
+  };
+}
 
   // ===== REQUEST REFUND =====
   async requestRefund(

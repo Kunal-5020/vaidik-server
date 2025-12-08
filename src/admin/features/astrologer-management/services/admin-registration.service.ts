@@ -22,6 +22,29 @@ export class AdminRegistrationService {
     private activityLogService: AdminActivityLogService,
   ) {}
 
+   /**
+   * Helper: Detect country from phone number
+   */
+  private detectCountryFromPhone(phoneNumber: string): string {
+    if (!phoneNumber) return 'India'; // Default
+    
+    // Clean string
+    const cleanPhone = phoneNumber.replace(/\D/g, ''); 
+    
+    // Check specific codes
+    if (cleanPhone.startsWith('91')) return 'India';
+    if (cleanPhone.startsWith('1')) return 'USA';
+    if (cleanPhone.startsWith('44')) return 'UK';
+    if (cleanPhone.startsWith('971')) return 'UAE';
+    if (cleanPhone.startsWith('61')) return 'Australia';
+    if (cleanPhone.startsWith('1') && cleanPhone.length > 10) return 'Canada'; // Rudimentary check sharing +1
+
+    // Fallback logic: if it starts with 91 or has +91
+    if (phoneNumber.includes('+91')) return 'India';
+    
+    return 'India'; // Default fallback if unknown
+  }
+
   /**
    * Get all registrations with filters
    */
@@ -303,7 +326,7 @@ export class AdminRegistrationService {
     adminNotes?: string
   ): Promise<void> {
     try {
-
+      const detectedCountry = this.detectCountryFromPhone(registration.phoneNumber);
 
       // Create Astrologer Profile
       const astrologer = new this.astrologerModel({
@@ -315,13 +338,14 @@ export class AdminRegistrationService {
         gender: registration.gender,
         bio: registration.bio || '',
         profilePicture: registration.profilePicture,
-        experienceYears: 0,
+        country: detectedCountry,
+        experienceYears: 1,
         specializations: registration.skills || [],
         languages: registration.languagesKnown || [],
         pricing: {
-          chat: 0,
-          call: 0,
-          videoCall: 0
+          chat: 20,
+          call: 30,
+          videoCall: 40
         },
         profileCompletion: {
           isComplete: false,

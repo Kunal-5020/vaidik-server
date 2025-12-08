@@ -19,7 +19,11 @@ const createWalletService = (overrides: Partial<Record<string, any>> = {}) => {
 
   const razorpayService = {} as any;
 
-  const service = new WalletService(transactionModel, userModel, razorpayService);
+  const walletRefundModel = {} as any;
+
+  const configService = {} as any;
+
+  const service = new WalletService(transactionModel, userModel, razorpayService, walletRefundModel, configService);
   return { service, userModel };
 };
 

@@ -13,6 +13,10 @@ import { OrdersModule } from '../orders/orders.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { AstrologersModule } from '../astrologers/astrologers.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { User, UserSchema } from '../users/schemas/user.schema';
+import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema';
+import { EarningsService } from '../astrologers/services/earnings.service'; 
+import { UploadModule } from '../upload/upload.module';
 
 @Module({
   imports: [
@@ -20,14 +24,17 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: ChatSession.name, schema: ChatSessionSchema },
       { name: ChatMessage.name, schema: ChatMessageSchema },
       { name: Order.name, schema: OrderSchema },
+      { name: User.name, schema: UserSchema },
+      { name: Astrologer.name, schema: AstrologerSchema },
     ]),
     OrdersModule,
     PaymentsModule,
     AstrologersModule,
     NotificationsModule,
+    UploadModule
   ],
   controllers: [ChatController],
-  providers: [ChatGateway, ChatSessionService, ChatMessageService],
+  providers: [ChatGateway, ChatSessionService, ChatMessageService, EarningsService],
   exports: [ChatSessionService, ChatMessageService],
 })
 export class ChatModule {}

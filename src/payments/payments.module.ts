@@ -1,5 +1,5 @@
 // payments.module.ts
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
 import { WalletController } from './controllers/wallet.controller';
@@ -29,7 +29,7 @@ import { GiftService } from './services/gift.service';
       { name: StreamSession.name, schema: StreamSessionSchema },
     ]),
     UsersModule,
-    AstrologersModule,
+    forwardRef(() => AstrologersModule),
   ],
   controllers: [
     WalletController,

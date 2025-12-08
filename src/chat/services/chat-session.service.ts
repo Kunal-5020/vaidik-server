@@ -8,6 +8,10 @@ import { OrdersService } from '../../orders/services/orders.service';
 import { OrderPaymentService } from '../../orders/services/order-payment.service';
 import { WalletService } from '../../payments/services/wallet.service';
 import { NotificationService } from '../../notifications/services/notification.service';
+import { User, UserDocument } from '../../users/schemas/user.schema';
+import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
+import { EarningsService } from '../../astrologers/services/earnings.service';
+import { PenaltyService } from '../../astrologers/services/penalty.service';
 
 @Injectable()
 export class ChatSessionService {
@@ -17,10 +21,14 @@ export class ChatSessionService {
 
   constructor(
     @InjectModel(ChatSession.name) private sessionModel: Model<ChatSessionDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
     private ordersService: OrdersService,
     private orderPaymentService: OrderPaymentService,
     private walletService: WalletService,
     private notificationService: NotificationService,
+    private earningsService: EarningsService,
+    private penaltyService: PenaltyService,
   ) {}
 
   private generateSessionId(): string {
@@ -239,6 +247,23 @@ this.notificationService.sendNotification({
     session.endTime = new Date();
     await session.save();
 
+    // ✅ NEW: Apply penalty for rejection
+    try {
+      await this.penaltyService.applyPenalty({
+        astrologerId,
+        type: 'missed_appointment',
+        amount: 50, // ₹50 penalty for rejecting chat
+        reason: 'Chat request rejected',
+        description: 'Rejected chat request from user',
+        orderId: session.orderId,
+        userId: session.userId.toString(),
+        appliedBy: 'system',
+      });
+      this.logger.log(`✅ Penalty applied: ₹50 to astrologer ${astrologerId} for rejecting chat`);
+    } catch (error: any) {
+      this.logger.error(`❌ Failed to apply penalty: ${error.message}`);
+    }
+
     // Update order (no wallet logic here)
     await this.ordersService.cancelOrder(
       session.orderId,
@@ -328,141 +353,223 @@ this.notificationService.sendNotification({
     };
   }
 
-  // ===== END SESSION =====
-  async endSession(
-    sessionId: string,
-    endedBy: string,
-    reason: string
-  ): Promise<any> {
-    const session = await this.sessionModel.findOne({ sessionId });
-    if (!session) {
-      throw new NotFoundException('Session not found');
-    }
+  /**
+ * Get astrologer's chat sessions
+ */
+async getAstrologerChatSessions(
+  astrologerId: string,
+  filters: {
+    page: number;
+    limit: number;
+    status?: string;
+  }
+): Promise<any> {
+  const query: any = {
+    astrologerId: this.toObjectId(astrologerId)
+  };
 
-    // Clear timeout
-    if (this.sessionTimers.has(sessionId)) {
-      clearTimeout(this.sessionTimers.get(sessionId)!);
-      this.sessionTimers.delete(sessionId);
-    }
+  if (filters.status) {
+    query.status = filters.status;
+  }
 
-    this.clearUserJoinTimeout(sessionId);
+  const skip = (filters.page - 1) * filters.limit;
 
-    let actualDurationSeconds = 0;
+  const [sessions, total] = await Promise.all([
+    this.sessionModel
+      .find(query)
+      .populate('userId', 'name profileImage phoneNumber')
+      .select('sessionId userId ratePerMinute status duration billedMinutes totalAmount startTime endTime createdAt messageCount')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(filters.limit)
+      .lean(),
+    this.sessionModel.countDocuments(query)
+  ]);
 
-    // ✅ ONLY calculate duration if session was actually ACTIVE
-    if (session.status === 'active' && session.startTime) {
-      const endTime = new Date();
-      actualDurationSeconds = Math.floor(
-        (endTime.getTime() - session.startTime.getTime()) / 1000
-      );
-
-      if (reason === 'timeout' && actualDurationSeconds > session.maxDurationSeconds) {
-        actualDurationSeconds = session.maxDurationSeconds;
-      }
-
-      session.duration = actualDurationSeconds;
-      session.billedMinutes = Math.ceil(actualDurationSeconds / 60);
-      session.totalAmount = session.billedMinutes * session.ratePerMinute;
-      session.platformCommission = (session.totalAmount * 20) / 100;
-      session.astrologerEarning = session.totalAmount - session.platformCommission;
-
-      this.logger.log(
-        `Chat billing prepared: ${sessionId} | Actual: ${actualDurationSeconds}s | Billed: ${session.billedMinutes}m | Amount: ₹${session.totalAmount}`
-      );
-    } else {
-      // ✅ Session ended before becoming active (e.g., rejected, timeout, cancelled)
-      this.logger.warn(`Session ${sessionId} ended without being active (status: ${session.status})`);
-    }
-
-    // ===== WALLET DEDUCTION (only if session had actual duration) =====
-    if (actualDurationSeconds > 0 && session.totalAmount > 0) {
-      try {
-        const description = `Chat with astrologer ${session.astrologerId.toString()} (session ${sessionId})`;
-        await this.walletService.deductFromWallet(
-          session.userId.toString(),
-          session.totalAmount,
-          session.orderId,
-          description,
-        );
-        this.logger.log(
-          `💰 Wallet charged for chat: User=${session.userId} | Order=${session.orderId} | Amount=₹${session.totalAmount}`,
-        );
-      } catch (error: any) {
-        this.logger.error(
-          `❌ Wallet deduction failed for chat session ${sessionId}: ${error.message}`,
-        );
-        session.isPaid = false;
-      }
-    }
-
-    session.status = 'ended';
-    session.endTime = new Date();
-    session.endedBy = endedBy;
-    session.endReason = reason;
-    session.timerStatus = 'ended';
-
-    const now = new Date();
-    session.postSessionWindowEndsAt = new Date(now.getTime() + 20 * 1000);
-
-    await session.save();
-
-    // ✅ ONLY complete order if session was active, otherwise cancel
-    if (actualDurationSeconds > 0) {
-      await this.ordersService.completeSession(session.orderId, {
-        sessionId,
-        sessionType: 'chat',
-        actualDurationSeconds,
-        billedMinutes: session.billedMinutes,
-        chargedAmount: session.totalAmount,
-        recordingUrl: undefined
-      });
-
-      // 🆕 Optional: notify user about summary
-      try {
-  this.notificationService.sendNotification({
-    recipientId: session.userId.toString(),
-    recipientModel: 'User',
-    type: 'session_ended',
-    title: 'Chat session ended',
-    message: `Your chat session ended. Duration: ${session.billedMinutes} min, Charged: ₹${session.totalAmount}.`,
+  return {
+    success: true,
     data: {
-      type: 'session_ended',
-      mode: 'chat',
-      step: 'session_ended',
-      sessionId: session.sessionId,
-      orderId: session.orderId,
-      billedMinutes: session.billedMinutes,
-      amount: session.totalAmount,
-    },
-    priority: 'medium',
-  }).catch(err => this.logger.error(`Chat end notification error: ${err.message}`));
-} catch (err: any) {
-  this.logger.error(`Chat end notification error: ${err.message}`);
-}
-    } else {
-      this.logger.log(`Session ${sessionId} never started, cancelling order`);
-      await this.ordersService.cancelOrder(
-        session.orderId,
-        session.userId.toString(),
-        reason,
-        'system'
-      );
+      sessions,
+      pagination: {
+        page: filters.page,
+        limit: filters.limit,
+        total,
+        pages: Math.ceil(total / filters.limit)
+      }
     }
+  };
+}
 
-    this.logger.log(`Chat session ended: ${sessionId} | Duration: ${actualDurationSeconds}s`);
+/**
+ * Get astrologer chat session details
+ */
+async getAstrologerChatSessionDetails(
+  sessionId: string,
+  astrologerId: string
+): Promise<any> {
+  const session = await this.sessionModel
+    .findOne({
+      sessionId,
+      astrologerId: this.toObjectId(astrologerId)
+    })
+    .populate('userId', 'name profileImage phoneNumber email')
+    .lean();
 
+  if (!session) {
+    throw new NotFoundException('Chat session not found');
+  }
+
+  return {
+    success: true,
+    data: {
+      session,
+    }
+  };
+}
+
+  // ===== END SESSION =====
+  /**
+ * END SESSION
+ */
+async endSession(sessionId: string, endedBy: string, reason: string): Promise<any> {
+  const session = await this.sessionModel.findOne({ sessionId });
+
+  if (!session) {
+    throw new NotFoundException('Session not found');
+  }
+
+  if (session.status === 'ended') {
+    this.logger.warn(`⚠️ Session ${sessionId} already ended, returning existing data`);
     return {
       success: true,
-      message: 'Chat session ended',
+      message: 'Session already ended',
       data: {
         sessionId,
-        actualDuration: actualDurationSeconds,
-        billedMinutes: session.billedMinutes,
-        chargeAmount: session.totalAmount,
-        status: 'ended'
-      }
+        actualDuration: session.duration || 0,
+        billedMinutes: session.billedMinutes || 0,
+        chargeAmount: session.totalAmount || 0,
+        status: 'ended',
+      },
     };
   }
+
+  // Clear timeout
+  if (this.sessionTimers.has(sessionId)) {
+    clearTimeout(this.sessionTimers.get(sessionId)!);
+    this.sessionTimers.delete(sessionId);
+  }
+
+  this.clearUserJoinTimeout(sessionId);
+
+  let actualDurationSeconds = 0;
+
+  if (session.status === 'active' && session.startTime) {
+    const endTime = new Date();
+    actualDurationSeconds = Math.floor((endTime.getTime() - session.startTime.getTime()) / 1000);
+
+    // Cap to max duration if timeout
+    if (reason === 'timeout' && actualDurationSeconds > session.maxDurationSeconds) {
+      actualDurationSeconds = session.maxDurationSeconds;
+    }
+
+    session.duration = actualDurationSeconds;
+    session.billedMinutes = Math.ceil(actualDurationSeconds / 60);
+    session.totalAmount = session.billedMinutes * session.ratePerMinute;
+    session.platformCommission = (session.totalAmount * 40) / 100;
+    session.astrologerEarning = session.totalAmount - session.platformCommission;
+  }
+
+  // ✅ WALLET DEDUCTION (User) & ASTROLOGER CREDIT
+  if (actualDurationSeconds > 0 && session.totalAmount > 0) {
+    try {
+      // GET USER AND ASTROLOGER DETAILS
+      const [user, astrologer] = await Promise.all([
+        this.userModel.findById(session.userId).select('name').lean(),
+        this.astrologerModel.findById(session.astrologerId).select('name').lean(),
+      ]);
+
+      // ✅ USE UNIFIED PAYMENT METHOD
+      const paymentResult = await this.walletService.processSessionPayment({
+        userId: session.userId.toString(),
+        astrologerId: session.astrologerId.toString(),
+        amount: session.totalAmount,
+        orderId: session.orderId,
+        sessionId: session.sessionId,
+        sessionType: 'chat',
+        userName: user?.name || 'User',
+        astrologerName: astrologer?.name || 'Astrologer',
+        durationMinutes: session.billedMinutes,
+      });
+
+      if (!paymentResult.success) {
+        throw new Error(paymentResult.message || 'Payment failed');
+      }
+
+      this.logger.log(`✅ User wallet charged: User(${session.userId}) | Amount: ₹${session.totalAmount}`);
+      this.logger.log(`✅ Astrologer credited: ${session.astrologerId} | Amount: ₹${session.astrologerEarning}`);
+
+      // ✅ UPDATE ASTROLOGER EARNINGS (using EarningsService)
+      await this.earningsService.updateEarnings(
+        session.astrologerId.toString(),
+        session.totalAmount,
+        'chat',
+      );
+
+      session.isPaid = true;
+    } catch (error: any) {
+      this.logger.error(`❌ Payment processing failed for chat session ${sessionId}: ${error.message}`);
+      session.isPaid = false;
+    }
+  }
+
+  session.status = 'ended';
+  session.endTime = new Date();
+  session.endedBy = endedBy;
+  session.endReason = reason;
+  session.timerStatus = 'ended';
+
+  const now = new Date();
+  session.postSessionWindowEndsAt = new Date(now.getTime() + 20 * 1000);
+
+  await session.save();
+
+  // ONLY complete order if session was active, otherwise cancel
+  if (actualDurationSeconds > 0) {
+    await this.ordersService.completeSession(session.orderId, {
+      sessionId: sessionId,
+      sessionType: 'chat',
+      actualDurationSeconds: actualDurationSeconds,
+      billedMinutes: session.billedMinutes,
+      chargedAmount: session.totalAmount,
+      recordingUrl: undefined,
+      recordingS3Key: undefined,
+      recordingDuration: undefined,
+    });
+  } else {
+    this.logger.log(`Session ${sessionId} never started, cancelling order`);
+    await this.ordersService.cancelOrder(
+      session.orderId,
+      session.userId.toString(),
+      reason,
+      'system',
+    );
+  }
+
+  this.logger.log(`Chat session ended: ${sessionId} | Duration: ${actualDurationSeconds}s`);
+
+  // ✅ CRITICAL FIX: ADD RETURN STATEMENT
+  return {
+    success: true,
+    message: 'Chat session ended',
+    data: {
+      sessionId,
+      actualDuration: actualDurationSeconds,
+      billedMinutes: session.billedMinutes,
+      chargeAmount: session.totalAmount,
+      status: 'ended',
+    },
+  };
+}
 
   // ===== REQUEST TIMEOUT (3 mins) =====
   private setRequestTimeout(sessionId: string, orderId: string, userId: string) {
@@ -477,6 +584,23 @@ this.notificationService.sendNotification({
         session.endReason = 'astrologer_no_response';
         session.endTime = new Date();
         await session.save();
+
+        // ✅ NEW: Apply penalty for no response
+        try {
+          await this.penaltyService.applyPenalty({
+            astrologerId: session.astrologerId.toString(),
+            type: 'late_response',
+            amount: 100, // ₹100 penalty for not responding
+            reason: 'No response to chat request',
+            description: 'Did not respond to chat request within 3 minutes',
+            orderId: session.orderId,
+            userId: session.userId.toString(),
+            appliedBy: 'system',
+          });
+          this.logger.log(`✅ Penalty applied: ₹100 to astrologer for no response`);
+        } catch (error: any) {
+          this.logger.error(`❌ Failed to apply penalty: ${error.message}`);
+        }
 
         // Update order (this will send a timeout notification with "no charge" wording)
         await this.ordersService.handleOrderTimeout(orderId);

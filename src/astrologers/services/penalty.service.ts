@@ -2,18 +2,17 @@
 
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose'; // ✅ Import Types
+import { Model, Types } from 'mongoose';
 import { Astrologer, AstrologerDocument } from '../schemas/astrologer.schema';
 
 @Injectable()
 export class PenaltyService {
   constructor(
-    @InjectModel(Astrologer.name)
-    private astrologerModel: Model<AstrologerDocument>,
+    @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
   ) {}
 
   /**
-   * Apply penalty to astrologer
+   * ✅ FIXED: Apply penalty to astrologer
    */
   async applyPenalty(data: {
     astrologerId: string;
@@ -23,7 +22,7 @@ export class PenaltyService {
     description?: string;
     orderId?: string;
     userId?: string;
-    appliedBy: string;
+    appliedBy: string; // Can be 'system' or ObjectId string
   }): Promise<any> {
     const astrologer = await this.astrologerModel.findById(data.astrologerId);
 
@@ -33,6 +32,18 @@ export class PenaltyService {
 
     const penaltyId = `PEN_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
 
+    // ✅ FIXED: Handle 'system' appliedBy
+    let appliedByObjectId: Types.ObjectId | undefined;
+    
+    if (data.appliedBy !== 'system') {
+      try {
+        appliedByObjectId = new Types.ObjectId(data.appliedBy);
+      } catch (error) {
+        // If conversion fails, leave it undefined
+        appliedByObjectId = undefined;
+      }
+    }
+
     const penalty = {
       penaltyId,
       type: data.type,
@@ -40,18 +51,18 @@ export class PenaltyService {
       reason: data.reason,
       description: data.description,
       orderId: data.orderId,
-      userId: data.userId ? new Types.ObjectId(data.userId) : undefined, // ✅ Convert to ObjectId
+      userId: data.userId ? new Types.ObjectId(data.userId) : undefined,
       status: 'applied' as const,
-      appliedBy: new Types.ObjectId(data.appliedBy), // ✅ Convert to ObjectId
+      appliedBy: appliedByObjectId, // ✅ Can be undefined for system
       appliedAt: new Date(),
       createdAt: new Date(),
     };
 
-    astrologer.penalties.push(penalty as any); // ✅ Type assertion
+    astrologer.penalties.push(penalty as any);
 
     // Update total penalties
     const totalPenalties = astrologer.penalties
-      .filter(p => p.status === 'applied')
+      .filter((p) => p.status === 'applied')
       .reduce((sum, p) => sum + p.amount, 0);
 
     astrologer.earnings.totalPenalties = totalPenalties;
@@ -63,12 +74,12 @@ export class PenaltyService {
 
     astrologer.earnings.withdrawableAmount = Math.max(
       0,
-      netEarnings - totalPenalties - totalWithdrawn - pendingWithdrawal
+      netEarnings - totalPenalties - totalWithdrawn - pendingWithdrawal,
     );
 
     await astrologer.save();
 
-    console.log(`⚠️ [Penalty] Applied ₹${data.amount} penalty to ${astrologer.name}`);
+    console.log(`✅ Penalty Applied: ₹${data.amount} penalty to ${astrologer.name}`);
 
     return {
       success: true,
@@ -92,20 +103,20 @@ export class PenaltyService {
       throw new NotFoundException('Astrologer not found');
     }
 
-    const penalty = astrologer.penalties.find(p => p.penaltyId === penaltyId);
+    const penalty = astrologer.penalties.find((p) => p.penaltyId === penaltyId);
 
     if (!penalty) {
       throw new NotFoundException('Penalty not found');
     }
 
     penalty.status = 'waived';
-    penalty.waivedBy = new Types.ObjectId(waivedBy) as any; // ✅ Convert to ObjectId
+    penalty.waivedBy = new Types.ObjectId(waivedBy) as any;
     penalty.waivedAt = new Date();
     penalty.waiverReason = waiverReason;
 
     // Recalculate total penalties
     const totalPenalties = astrologer.penalties
-      .filter(p => p.status === 'applied')
+      .filter((p) => p.status === 'applied')
       .reduce((sum, p) => sum + p.amount, 0);
 
     astrologer.earnings.totalPenalties = totalPenalties;
@@ -117,7 +128,7 @@ export class PenaltyService {
 
     astrologer.earnings.withdrawableAmount = Math.max(
       0,
-      netEarnings - totalPenalties - totalWithdrawn - pendingWithdrawal
+      netEarnings - totalPenalties - totalWithdrawn - pendingWithdrawal,
     );
 
     await astrologer.save();
@@ -131,10 +142,7 @@ export class PenaltyService {
   /**
    * Get astrologer penalties
    */
-  async getPenalties(
-    astrologerId: string,
-    status?: string,
-  ): Promise<any> {
+  async getPenalties(astrologerId: string, status?: string): Promise<any> {
     const astrologer = await this.astrologerModel
       .findById(astrologerId)
       .select('penalties')
@@ -147,14 +155,14 @@ export class PenaltyService {
     let penalties = astrologer.penalties || [];
 
     if (status) {
-      penalties = penalties.filter(p => p.status === status);
+      penalties = penalties.filter((p) => p.status === status);
     }
 
     return {
       success: true,
       data: {
-        penalties: penalties.sort((a, b) => 
-          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        penalties: penalties.sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
         ),
         total: penalties.length,
       },

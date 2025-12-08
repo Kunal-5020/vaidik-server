@@ -8,7 +8,7 @@ export type ReviewDocument = Review & Document;
 @Schema({ timestamps: true, collection: 'reviews' })
 export class Review {
   @Prop({ required: true, unique: true, index: true })
-  reviewId: string; // "REV_timestamp_random"
+  reviewId: string;
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'User', index: true })
   userId: Types.ObjectId;
@@ -17,7 +17,7 @@ export class Review {
   astrologerId: Types.ObjectId;
 
   @Prop({ required: true, index: true })
-  orderId: string; // Reference to order
+  orderId: string;
 
   @Prop({ required: true, min: 1, max: 5 })
   rating: number;
@@ -55,7 +55,17 @@ export class Review {
   serviceType: string;
 
   @Prop()
-  sessionDuration?: number; // in seconds
+  sessionDuration?: number;
+
+  @Prop({ default: false })
+  isTestData: boolean;
+
+  // ✅ Test user data fields
+  @Prop()
+  testUserName?: string;
+
+  @Prop()
+  testUserImage?: string;
 
   @Prop({ default: false, index: true })
   isDeleted: boolean;
@@ -72,9 +82,9 @@ export class Review {
 
 export const ReviewSchema = SchemaFactory.createForClass(Review);
 
-// ✅ Compound Indexes
+// Compound Indexes
 ReviewSchema.index({ astrologerId: 1, moderationStatus: 1, createdAt: -1 });
 ReviewSchema.index({ userId: 1, astrologerId: 1 });
-ReviewSchema.index({ orderId: 1 }, { unique: true }); // One review per order
+ReviewSchema.index({ orderId: 1 }, { unique: true });
 ReviewSchema.index({ moderationStatus: 1, createdAt: -1 });
 ReviewSchema.index({ rating: 1, moderationStatus: 1 });

@@ -1,9 +1,8 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { PaymentsModule } from '../payments/payments.module';
 
 // Controllers
 import { StreamController } from './controllers/stream.controller';
@@ -27,10 +26,13 @@ import { Admin, AdminSchema } from '../admin/core/schemas/admin.schema';
 import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema'; // ✅ ADD THIS
 import { User, UserSchema } from '../users/schemas/user.schema';
 
+import { PaymentsModule } from '../payments/payments.module';
+import { UsersModule } from '../users/users.module';
+import { AstrologersModule } from '../astrologers/astrologers.module';
+
 @Module({
   imports: [
     ConfigModule,
-    PaymentsModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'your-secret-key',
       signOptions: { expiresIn: '7d' },
@@ -44,6 +46,9 @@ import { User, UserSchema } from '../users/schemas/user.schema';
       { name: Astrologer.name, schema: AstrologerSchema }, // ✅ ADD THIS
       { name: User.name, schema: UserSchema },
     ]),
+    forwardRef(() => PaymentsModule), // Provides WalletService
+    forwardRef(() => UsersModule), // Provides User model
+    forwardRef(() => AstrologersModule),
   ],
   controllers: [
     StreamController,

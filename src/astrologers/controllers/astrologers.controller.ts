@@ -1,6 +1,10 @@
+// src/astrologers/controllers/astrologers.controller.ts
+
 import {
   Controller,
   Get,
+  Post,
+  Body,
   Param,
   Query,
   ValidationPipe,
@@ -12,15 +16,19 @@ import {
   Req,
 } from '@nestjs/common';
 import { AstrologersService } from '../services/astrologers.service';
+import { RatingReviewService } from '../services/rating-review.service';
 import { SearchAstrologersDto } from '../dto/search-astrologers.dto';
+import { AddReviewDto } from '../dto/add-review.dto';
 import { UserBlockingService } from '../../users/services/user-blocking.service';
 import { OptionalJwtAuthGuard } from '../../auth/guards/optional-jwt-auth.guard';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 
 @Controller('astrologers')
 @UseInterceptors(ClassSerializerInterceptor)
 export class AstrologersController {
   constructor(
     private readonly astrologersService: AstrologersService,
+    private readonly ratingReviewService: RatingReviewService,
     private readonly userBlockingService: UserBlockingService,
   ) {}
 
@@ -29,7 +37,7 @@ export class AstrologersController {
    * GET /astrologers/search
    */
   @Get('search')
-  @UseGuards(OptionalJwtAuthGuard) // ✅ Use existing JWT strategy
+  @UseGuards(OptionalJwtAuthGuard)
   async searchAstrologers(
     @Query(new ValidationPipe({ 
       transform: true, 
@@ -40,9 +48,7 @@ export class AstrologersController {
     searchDto: SearchAstrologersDto,
     @Req() req: any
   ) {
-    // ✅ Get userId from validated user object (set by JWT strategy)
     const userId = req.user?.userId || req.user?.id;
-    
     return this.astrologersService.searchAstrologers(searchDto, userId);
   }
 
@@ -190,13 +196,81 @@ export class AstrologersController {
   }
 
   /**
-   * Get single astrologer details
+   * ✅ NEW: Add Review for Astrologer
+   * POST /astrologers/:astrologerId/reviews
+   */
+  @Post(':astrologerId/reviews')
+  @UseGuards(JwtAuthGuard)
+  async addReview(
+    @Param('astrologerId') astrologerId: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) 
+    reviewDto: AddReviewDto,
+    @Req() req: any
+  ) {
+    const userId = req.user?.userId || req.user?.id;
+    
+    if (!userId) {
+      throw new HttpException('Authentication required', HttpStatus.UNAUTHORIZED);
+    }
+
+    return this.ratingReviewService.addReview({
+      userId,
+      astrologerId,
+      orderId: reviewDto.orderId,
+      rating: reviewDto.rating,
+      reviewText: reviewDto.reviewText,
+      serviceType: reviewDto.serviceType,
+    });
+  }
+
+  /**
+   * ✅ NEW: Get Reviews for Astrologer
+   * GET /astrologers/:astrologerId/reviews
+   */
+  @Get(':astrologerId/reviews')
+  @UseGuards(OptionalJwtAuthGuard)
+  async getAstrologerReviews(
+    @Param('astrologerId') astrologerId: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    const parsedPage = page ? Number(page) : 1;
+    const parsedLimit = limit ? Number(limit) : 10;
+    
+    if (isNaN(parsedPage) || parsedPage < 1) {
+      throw new HttpException('Page must be at least 1', HttpStatus.BAD_REQUEST);
+    }
+    
+    if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
+      throw new HttpException('Limit must be between 1 and 50', HttpStatus.BAD_REQUEST);
+    }
+
+    return this.ratingReviewService.getAstrologerReviews(
+      astrologerId, 
+      parsedPage, 
+      parsedLimit
+    );
+  }
+
+  /**
+   * ✅ NEW: Get Review Stats for Astrologer
+   * GET /astrologers/:astrologerId/reviews/stats
+   */
+  @Get(':astrologerId/reviews/stats')
+  async getReviewStats(@Param('astrologerId') astrologerId: string) {
+    return this.ratingReviewService.getReviewStats(astrologerId);
+  }
+
+  /**
+   * ✅ MODIFIED: Get single astrologer details WITH REVIEWS
    * GET /astrologers/:astrologerId
    */
   @Get(':astrologerId')
   @UseGuards(OptionalJwtAuthGuard)
   async getAstrologerDetails(
     @Param('astrologerId') astrologerId: string,
+    @Query('includeReviews') includeReviews?: string,
+    @Query('reviewLimit') reviewLimit?: number,
     @Req() req?: any
   ) {
     if (!astrologerId || astrologerId.trim() === '') {
@@ -205,7 +279,7 @@ export class AstrologersController {
     
     const userId = req.user?.userId || req.user?.id;
     
-    // ✅ Check if user has blocked this astrologer
+    // Check if user has blocked this astrologer
     if (userId) {
       const isBlocked = await this.userBlockingService.isAstrologerBlocked(
         userId as any,
@@ -221,6 +295,28 @@ export class AstrologersController {
     
     if (!astrologer) {
       throw new HttpException('Astrologer not found', HttpStatus.NOT_FOUND);
+    }
+    
+    // ✅ Include reviews if requested (default: true)
+    const shouldIncludeReviews = includeReviews !== 'false';
+    const parsedReviewLimit = reviewLimit ? Number(reviewLimit) : 5;
+    
+    if (shouldIncludeReviews) {
+      // ✅ Seed test reviews if none exist (for testing)
+      await this.ratingReviewService.seedTestReviewsIfEmpty(astrologerId);
+      
+      // Get reviews
+      const reviewsData = await this.ratingReviewService.getAstrologerReviews(
+        astrologerId, 
+        1, 
+        parsedReviewLimit
+      );
+      
+      return {
+        ...astrologer,
+        reviews: reviewsData.reviews,
+        reviewsPagination: reviewsData.pagination,
+      };
     }
     
     return astrologer;

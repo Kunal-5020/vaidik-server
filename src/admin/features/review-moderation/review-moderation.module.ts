@@ -3,9 +3,11 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { AdminReviewsController } from './controllers/admin-reviews.controller';
 import { AdminReviewModerationService } from './services/admin-reviews.service';
 import { Order, OrderSchema } from '../../../orders/schemas/orders.schema';
+import { Review, ReviewSchema } from '../../../reviews/schemas/review.schema';
 import { Astrologer, AstrologerSchema } from '../../../astrologers/schemas/astrologer.schema';
 import { User, UserSchema } from '../../../users/schemas/user.schema';
 import { RatingReviewService } from '../../../astrologers/services/rating-review.service';
+import { AstrologersModule } from '../../../astrologers/astrologers.module';
 
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -27,7 +29,9 @@ import { Admin, AdminSchema } from '../../core/schemas/admin.schema';
       { name: Astrologer.name, schema: AstrologerSchema },
       { name: User.name, schema: UserSchema },
       { name: Admin.name, schema: AdminSchema },
+      { name: Review.name, schema: ReviewSchema },
     ]),
+    AstrologersModule,
   ],
   controllers: [AdminReviewsController],
   providers: [AdminReviewModerationService, RatingReviewService],

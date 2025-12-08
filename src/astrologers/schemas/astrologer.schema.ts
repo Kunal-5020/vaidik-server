@@ -168,7 +168,7 @@ ratings: {
     type: {
       totalEarned: { type: Number, default: 0 },           // Total revenue generated
       platformCommission: { type: Number, default: 0 },     // Platform's cut (₹)
-      platformCommissionRate: { type: Number, default: 30 }, // Commission rate (%)
+      platformCommissionRate: { type: Number, default: 40 }, // Commission rate (%)
       netEarnings: { type: Number, default: 0 },           // totalEarned - platformCommission
       totalPenalties: { type: Number, default: 0 },        // ✅ Total penalties/fines
       withdrawableAmount: { type: Number, default: 0 },    // Available to withdraw
@@ -179,7 +179,7 @@ ratings: {
     default: () => ({
       totalEarned: 0,
       platformCommission: 0,
-      platformCommissionRate: 30,
+      platformCommissionRate: 40,
       netEarnings: 0,
       totalPenalties: 0,
       withdrawableAmount: 0,
@@ -199,6 +199,9 @@ ratings: {
     pendingWithdrawal: number;
     lastUpdated: Date;
   };
+
+  @Prop({ required: false, default: 'India' })
+  country: string; 
 
   // ✅ NEW: Penalties/Fines tracking
   @Prop({

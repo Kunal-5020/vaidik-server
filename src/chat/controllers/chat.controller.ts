@@ -22,6 +22,9 @@ import { ChatMessageService } from '../services/chat-message.service';
 import { EndChatDto, InitiateChatDto } from '../dto';
 import { AstrologerAcceptChatDto, AstrologerRejectChatDto } from '../dto';
 import { OrdersService } from '../../orders/services/orders.service';
+import { UploadService } from '../../upload/services/upload.service';
+import { UseInterceptors, UploadedFile } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 interface AuthenticatedRequest extends Request {
   user: { _id: string };
@@ -33,7 +36,8 @@ export class ChatController {
   constructor(
     private chatSessionService: ChatSessionService,
     private chatMessageService: ChatMessageService,
-    private ordersService: OrdersService
+    private ordersService: OrdersService,
+    private uploadService: UploadService,
   ) {}
 
   @Get('history')
@@ -135,6 +139,76 @@ async continueChat(
     previousSessionId: body.previousSessionId,
     ratePerMinute: body.ratePerMinute,
   });
+}
+
+@Post('upload/media')
+@UseInterceptors(FileInterceptor('file'))
+async uploadChatMedia(
+  @UploadedFile() file: Express.Multer.File,
+  @Body('type') type: 'image' | 'video' | 'audio',
+  @Req() req: AuthenticatedRequest
+) {
+  if (!file) {
+    throw new BadRequestException('No file uploaded');
+  }
+
+  let result;
+  
+  if (type === 'image') {
+    result = await this.uploadService.uploadImage(file);
+  } else if (type === 'video') {
+    result = await this.uploadService.uploadVideo(file);
+  } else if (type === 'audio') {
+    result = await this.uploadService.uploadAudio(file);
+  } else {
+    throw new BadRequestException('Invalid media type. Use: image, video, or audio');
+  }
+
+  return {
+    success: true,
+    message: 'Media uploaded successfully',
+    data: {
+      url: result.url,
+      s3Key: result.key,
+      filename: result.filename,
+      size: result.size,
+      mimeType: result.mimeType,
+      type
+    }
+  };
+}
+
+/**
+ * Get astrologer's chat sessions
+ * GET /chat/astrologer/sessions
+ */
+@Get('astrologer/sessions')
+async getAstrologerChatSessions(
+  @Req() req: AuthenticatedRequest,
+  @Query('page') page: string = '1',
+  @Query('limit') limit: string = '20',
+  @Query('status') status?: string
+) {
+  return this.chatSessionService.getAstrologerChatSessions(
+    req.user._id,
+    {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      status
+    }
+  );
+}
+
+/**
+ * Get astrologer chat session details
+ * GET /chat/astrologer/sessions/:sessionId
+ */
+@Get('astrologer/sessions/:sessionId')
+async getAstrologerChatSessionDetails(
+  @Param('sessionId') sessionId: string,
+  @Req() req: AuthenticatedRequest
+) {
+  return this.chatSessionService.getAstrologerChatSessionDetails(sessionId, req.user._id);
 }
 
 // ===== GET ALL CONVERSATION MESSAGES (across all sessions) =====

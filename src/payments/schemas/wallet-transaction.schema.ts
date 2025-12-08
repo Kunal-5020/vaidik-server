@@ -1,33 +1,89 @@
+// src/payments/schemas/wallet-transaction.schema.ts
+
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
 export type WalletTransactionDocument = WalletTransaction & Document;
 
-@Schema({ timestamps: true, collection: 'wallet_transactions' })
+@Schema({ timestamps: true })
 export class WalletTransaction {
-  @Prop({ required: true, unique: true }) // ✅ Add unique here
+  @Prop({ required: true, unique: true })
   transactionId: string;
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'User' }) // ❌ REMOVED index: true
+  @Prop({ type: Types.ObjectId, refPath: 'userModel', required: true })
   userId: Types.ObjectId;
+
+  @Prop({ enum: ['User', 'Astrologer'], default: 'User' })
+  userModel: string;
+
+  @Prop({
+    enum: [
+      'recharge',
+      'deduction',
+      'charge',
+      'refund',
+      'bonus',
+      'reward',
+      'earning',
+      'withdrawal',
+      'hold',
+      'giftcard',
+      'gift',
+      'session_payment', // ✅ NEW: For unified transactions
+    ],
+    required: true,
+  })
+  type: string;
 
   @Prop({ required: true })
   amount: number;
 
-  @Prop({ required: true })
-  balanceBefore: number;
+  @Prop()
+  cashAmount?: number;
 
-  @Prop({ required: true })
-  balanceAfter: number;
+  @Prop()
+  bonusAmount?: number;
 
-  @Prop({ required: true, maxlength: 500 })
-  description: string;
+  @Prop()
+  isBonus?: boolean;
 
-  @Prop({ type: Object, default: {} })
-  metadata?: Record<string, any>;
+  // ✅ FIXED: Make optional
+  @Prop()
+  balanceBefore?: number;
+
+  // ✅ FIXED: Make optional
+  @Prop()
+  balanceAfter?: number;
+
+  @Prop()
+  description?: string;
 
   @Prop()
   orderId?: string;
+
+  // ✅ NEW: For tracking session payments
+  @Prop()
+  sessionId?: string;
+
+  @Prop()
+  sessionType?: string; // 'audio_call', 'video_call', 'chat'
+
+  // ✅ NEW: Related user/astrologer
+  @Prop({ type: Types.ObjectId, ref: 'User' })
+  relatedUserId?: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'Astrologer' })
+  relatedAstrologerId?: Types.ObjectId;
+
+  // ✅ NEW: Commission breakdown
+  @Prop()
+  grossAmount?: number; // Total charged to user
+
+  @Prop()
+  platformCommission?: number; // Platform's cut (40%)
+
+  @Prop()
+  netAmount?: number; // Astrologer's earning (60%)
 
   @Prop()
   paymentGateway?: string;
@@ -35,34 +91,11 @@ export class WalletTransaction {
   @Prop()
   paymentId?: string;
 
-  @Prop()
-  promotionId?: string;
-
-  @Prop({ default: 0 })
-  bonusAmount?: number;
-
-  @Prop({ 
-    required: true,
-    enum: ['pending', 'completed', 'failed', 'cancelled'],
-    default: 'pending',
-    // ❌ REMOVED index: true (covered by compound index below)
-  })
+  @Prop({ enum: ['pending', 'completed', 'failed', 'cancelled'], default: 'pending' })
   status: string;
 
-  @Prop()
-  failureReason?: string;
-
-  @Prop({ enum: ['recharge', 'deduction', 'refund', 'hold', 'charge', 'bonus', 'reward'] })
-  type: string;
-
-  @Prop()
-  holdReleaseableAt?: Date;
-
-  @Prop()
-  releasedAt?: Date;
-
-  @Prop()
-  convertedAt?: Date;
+  @Prop({ type: Object })
+  metadata?: Record<string, any>;
 
   @Prop()
   linkedTransactionId?: string;
@@ -70,19 +103,33 @@ export class WalletTransaction {
   @Prop()
   linkedHoldTransactionId?: string;
 
+  @Prop()
+  holdReleaseableAt?: Date;
+
+  @Prop()
+  convertedAt?: Date;
+
+  @Prop()
+  releasedAt?: Date;
+
+  @Prop()
+  giftCardCode?: string;
+
   @Prop({ default: Date.now })
   createdAt: Date;
+
+  @Prop({ default: Date.now })
+  updatedAt: Date;
 }
 
 export const WalletTransactionSchema = SchemaFactory.createForClass(WalletTransaction);
 
-// ===== INDEXES =====
-// ❌ REMOVED: WalletTransactionSchema.index({ transactionId: 1 }, { unique: true });
-// (Already covered by @Prop unique: true above)
-
-WalletTransactionSchema.index({ userId: 1, createdAt: -1 });
-WalletTransactionSchema.index({ userId: 1, type: 1 });
-WalletTransactionSchema.index({ userId: 1, status: 1 });
-WalletTransactionSchema.index({ paymentId: 1 }, { sparse: true });
-WalletTransactionSchema.index({ orderId: 1 }, { sparse: true });
+// Indexes
+WalletTransactionSchema.index({ transactionId: 1 });
+WalletTransactionSchema.index({ userId: 1, userModel: 1 });
+WalletTransactionSchema.index({ type: 1, status: 1 });
+WalletTransactionSchema.index({ orderId: 1 });
+WalletTransactionSchema.index({ sessionId: 1 }); // ✅ NEW
+WalletTransactionSchema.index({ relatedUserId: 1 }); // ✅ NEW
+WalletTransactionSchema.index({ relatedAstrologerId: 1 }); // ✅ NEW
 WalletTransactionSchema.index({ createdAt: -1 });
