@@ -39,9 +39,7 @@ export class StreamAnalyticsService {
         totalViews: stream.totalViews,
         peakViewers: stream.peakViewers,
         averageViewers: Math.floor(stream.totalWatchTime / stream.duration) || 0,
-        totalLikes: stream.totalLikes,
         totalComments: stream.totalComments,
-        totalGifts: stream.totalGifts,
         totalRevenue: stream.totalRevenue,
         averageWatchTime: averageWatchTime[0]?.avgWatchTime || 0,
         topViewers

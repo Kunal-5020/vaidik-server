@@ -108,5 +108,15 @@ export class AdminStreamController {
 async getViewerToken(@Param('streamId') streamId: string) {
   return this.streamAgoraService.generateViewerTokenByStreamId(streamId); // ✅ USE NEW METHOD
 }
+
+@Post(':streamId/recording/start')
+  async startRecording(@Param('streamId') streamId: string) {
+    return this.streamSessionService.startRecording(streamId);
+  }
+
+  @Post(':streamId/recording/stop')
+  async stopRecording(@Param('streamId') streamId: string) {
+    return this.streamSessionService.stopRecording(streamId);
+  }
   
 }

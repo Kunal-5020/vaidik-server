@@ -17,29 +17,13 @@ export class StreamSession {
   @Prop({ maxlength: 1000 })
   description?: string;
 
-  @Prop()
-  thumbnailUrl?: string;
-
   @Prop({ 
     required: true,
-    enum: ['scheduled', 'live', 'ended', 'cancelled'],
-    default: 'scheduled',
+    enum: ['live', 'ended', 'cancelled'], // Removed 'scheduled' as per new flow
+    default: 'live',
     index: true
   })
   status: string;
-
-  @Prop({ 
-    required: true,
-    enum: ['free', 'paid'],
-    default: 'free'
-  })
-  streamType: string;
-
-  @Prop({ default: 0 })
-  entryFee: number;
-
-  @Prop()
-  scheduledAt?: Date;
 
   @Prop()
   startedAt?: Date;
@@ -54,7 +38,7 @@ export class StreamSession {
   @Prop()
   agoraChannelName?: string;
 
-   @Prop({ required: true }) // ✅ Make sure this field exists
+  @Prop({ required: true })
   hostAgoraUid: number;
 
   @Prop()
@@ -73,7 +57,7 @@ export class StreamSession {
   })
   currentState: string;
 
-  // ✅ NEW: Call Settings
+  // ✅ Call Settings (Configured at Go-Live)
   @Prop({
     type: {
       isCallEnabled: { type: Boolean, default: true },
@@ -81,16 +65,8 @@ export class StreamSession {
       videoCallPrice: { type: Number, default: 0 },
       allowPublicCalls: { type: Boolean, default: true },
       allowPrivateCalls: { type: Boolean, default: true },
-      maxCallDuration: { type: Number, default: 600 }, // 10 minutes
-    },
-    default: () => ({
-      isCallEnabled: true,
-      voiceCallPrice: 0,
-      videoCallPrice: 0,
-      allowPublicCalls: true,
-      allowPrivateCalls: true,
-      maxCallDuration: 600,
-    })
+      maxCallDuration: { type: Number, default: 600 }, // 10 minutes default
+    }
   })
   callSettings: {
     isCallEnabled: boolean;
@@ -101,7 +77,7 @@ export class StreamSession {
     maxCallDuration: number;
   };
 
-  // ✅ NEW: Current Call
+  // ✅ Current Call
   @Prop({
     type: {
       isOnCall: { type: Boolean, default: false },
@@ -111,6 +87,7 @@ export class StreamSession {
       callMode: { type: String, enum: ['public', 'private'] },
       startedAt: Date,
       callerAgoraUid: Number,
+      hostAgoraUid: Number,
       isCameraOn: Boolean,
     }
   })
@@ -122,10 +99,11 @@ export class StreamSession {
     callMode: 'public' | 'private';
     startedAt: Date;
     callerAgoraUid: number;
+    hostAgoraUid: number;
     isCameraOn: boolean;
   };
 
-  // ✅ NEW: Call Waitlist
+  // ✅ Call Waitlist
   @Prop({
     type: [{
       userId: { type: Types.ObjectId, ref: 'User', required: true },
@@ -161,17 +139,11 @@ export class StreamSession {
   totalViews: number;
 
   @Prop({ default: 0 })
-  totalWatchTime: number;
-
-  @Prop({ default: 0 })
-  totalLikes: number;
-
-  @Prop({ default: 0 })
   totalComments: number;
 
   @Prop({ default: 0 })
-  totalGifts: number;
-
+  totalWatchTime: number; // ✅ Added back
+  
   @Prop({ default: 0 })
   totalRevenue: number;
 
@@ -185,14 +157,8 @@ export class StreamSession {
   @Prop({ default: true })
   allowComments: boolean;
 
-  @Prop({ default: true })
-  allowGifts: boolean;
-
-  @Prop({ default: false })
-  isPrivate: boolean;
-
-  // Recording
- @Prop({ type: Boolean, default: false })
+  // ✅ Agora Cloud Recording
+  @Prop({ type: Boolean, default: false })
   isRecording: boolean;
 
   @Prop({ type: String })
@@ -202,10 +168,10 @@ export class StreamSession {
   recordingSid?: string;
 
   @Prop({ type: String })
-  recordingUrl?: string;
+  recordingUid?: string;
 
   @Prop({ type: [String] })
-  recordingFiles?: string[];
+  recordingFiles?: string[]; // M3U8/MP4 URLs
 
   @Prop({ default: Date.now })
   createdAt: Date;
@@ -213,8 +179,5 @@ export class StreamSession {
 
 export const StreamSessionSchema = SchemaFactory.createForClass(StreamSession);
 
-// Indexes
-// Unique index for streamId is created via @Prop({ unique: true })
 StreamSessionSchema.index({ hostId: 1, createdAt: -1 });
-StreamSessionSchema.index({ status: 1, viewerCount: -1 });
-StreamSessionSchema.index({ 'currentCall.isOnCall': 1 });
+StreamSessionSchema.index({ status: 1 });

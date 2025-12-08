@@ -375,7 +375,7 @@ async handleCallAccepted(
       console.log('====================================');
 
       // ✅ Send to SPECIFIC caller with credentials
-      this.server.to(callerSocketId).emit('call_started', callCredentials);
+      this.server.to(callerSocketId).emit('call_accepted', callCredentials);
       
       console.log('✅ Call credentials sent to caller');
     } else {

@@ -36,8 +36,8 @@ export class CallTransaction {
   totalCharge: number;
 
   @Prop({ 
-    enum: ['completed', 'cancelled', 'failed'],
-    default: 'completed'
+    enum: ['ongoing', 'completed', 'cancelled', 'failed'],
+    default: 'ongoing'
   })
   status: string;
 
@@ -50,5 +50,3 @@ export const CallTransactionSchema = SchemaFactory.createForClass(CallTransactio
 // Indexes
 CallTransactionSchema.index({ streamId: 1, userId: 1 });
 CallTransactionSchema.index({ astrologerId: 1, createdAt: -1 });
-CallTransactionSchema.index({ userId: 1, createdAt: -1 });
-CallTransactionSchema.index({ status: 1 });

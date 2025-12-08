@@ -129,29 +129,6 @@ export class StreamController {
     return this.streamSessionService.cancelCallRequest(streamId, req.user._id);
   }
 
-  /**
-   * Update call mode (public/private) during call
-   */
-  @Post(':streamId/call/mode')
-  @UseGuards(JwtAuthGuard)
-  async updateCallMode(
-    @Param('streamId') streamId: string,
-    @Body() body: { mode: 'public' | 'private' }
-  ) {
-    return this.streamSessionService.updateCallMode(streamId, body.mode);
-  }
-
-  /**
-   * Toggle user camera during call
-   */
-  @Post(':streamId/call/toggle-camera')
-  @UseGuards(JwtAuthGuard)
-  async toggleUserCamera(
-    @Param('streamId') streamId: string,
-    @Body() body: { enabled: boolean }
-  ) {
-    return this.streamSessionService.toggleUserCamera(streamId, body.enabled);
-  }
 
 
 /**
