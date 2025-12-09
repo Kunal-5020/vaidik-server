@@ -74,6 +74,7 @@ export class Notification {
       'session_ending',
       'session_ending_soon',
       'session_ended',
+      'session_timeout',
 
       // ✅ Payouts (ADD THESE)
       'payout_requested',      // When astrologer requests payout

@@ -84,7 +84,7 @@ export class User {
   })
   pincode?: string;
 
-  @Prop({ required: false, default: 'default' })
+  @Prop({ required: false, default: 'https://cdn-icons-png.flaticon.com/512/2641/2641333.png' })
   profileImage: string;
 
   @Prop({ required: false, default: false })

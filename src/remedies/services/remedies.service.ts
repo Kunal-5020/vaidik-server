@@ -309,9 +309,14 @@ export class RemediesService {
       )
       .lean();
 
-    if (!remedy) {
-      throw new NotFoundException('Remedy not found');
-    }
+     // ❌ Do NOT throw 404
+  if (!remedy) {
+    return {
+      success: false,
+      message: 'Remedy not found',
+      data: null,
+    };
+  }
 
     return {
       success: true,
@@ -602,9 +607,9 @@ async getSuggestedRemedies(
 
   const query = {
     userId: userObjectId,
-    remedySource: 'shopify_product', // Only Shopify products
-    isPurchased: false, // Not purchased yet
-    status: { $in: ['suggested', 'accepted'] }, // Only suggested/accepted
+    remedySource: 'shopify_product',
+    isPurchased: false,
+    status: { $in: ['suggested', 'accepted'] },
     isDeleted: false,
   };
 
@@ -624,6 +629,10 @@ async getSuggestedRemedies(
 
   return {
     success: true,
+    message:
+      remedies.length === 0
+        ? 'No remedies found'
+        : 'Suggested remedies fetched successfully',
     data: {
       remedies,
       pagination: {
@@ -637,6 +646,7 @@ async getSuggestedRemedies(
     },
   };
 }
+
 
 /**
  * Get purchased remedies (Tab 2: Purchased)

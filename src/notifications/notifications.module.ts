@@ -14,6 +14,7 @@ import { NotificationDeliveryService } from './services/notification-delivery.se
 
 // Gateways
 import { MobileNotificationGateway } from './gateways/mobile-notification.gateway';
+import { WebNotificationGateway } from './gateways/web-notification.gateway';
 
 // Schemas
 import { Notification, NotificationSchema } from './schemas/notification.schema';
@@ -43,6 +44,7 @@ import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.
     FcmService,
     NotificationDeliveryService,
     MobileNotificationGateway,
+    WebNotificationGateway,
   ],
   exports: [
     NotificationService,
