@@ -95,48 +95,82 @@ export class StreamSessionService {
     };
   }
 
-  async endStream(streamId: string, hostId: string): Promise<any> {
-    const stream = await this.streamModel.findOne({ streamId, hostId });
-    if (!stream) throw new NotFoundException('Stream not found');
-    
-    if (stream.status === 'ended') return { success: true, message: 'Already ended' };
+  async endStream(streamId: string, hostId?: string): Promise<any> {
+  this.logger.log(`🔄 endStream called`, { streamId, hostId });
 
-    if (stream.currentCall?.isOnCall) {
-      await this.endCurrentCall(streamId, hostId);
-    }
+  // 1) Try with hostId filter if provided
+  let stream = await this.streamModel.findOne(
+    hostId ? { streamId, hostId } : { streamId }
+  );
 
-    if (stream.isRecording && stream.recordingResourceId && stream.recordingSid) {
-      try {
-        await this.streamAgoraService.stopRecording(
-          stream.recordingResourceId,
-          stream.recordingSid,
-          stream.agoraChannelName!,
-          stream.recordingUid!
-        );
-      } catch (e) {
-        this.logger.error('Failed to stop recording on stream end', e);
-      }
-    }
+  // 2) If not found and hostId was used, fall back to only streamId
+  if (!stream && hostId) {
+    this.logger.warn(
+      `endStream: stream not found with { streamId, hostId }, retrying with { streamId } only`,
+      { streamId, hostId }
+    );
 
-    stream.status = 'ended';
-    stream.endedAt = new Date();
-    stream.currentState = 'idle';
-    stream.callWaitlist = [];
-    
-    if (stream.startedAt) {
-      stream.duration = Math.floor((stream.endedAt.getTime() - stream.startedAt.getTime()) / 1000);
-    }
-
-    await stream.save();
-
-    await this.astrologerModel.findByIdAndUpdate(hostId, {
-      'availability.isAvailable': true,
-      'availability.isLive': false,
-      'availability.liveStreamId': null
-    });
-
-    return { success: true, message: 'Stream Ended', data: { duration: stream.duration } };
+    stream = await this.streamModel.findOne({ streamId });
   }
+
+  // 3) Still not found → real error
+  if (!stream) {
+    this.logger.error(`endStream: Stream not found`, { streamId, hostId });
+    throw new NotFoundException('Stream not found');
+  }
+
+  if (stream.status === 'ended') {
+    this.logger.log(`endStream: Stream already ended`, { streamId });
+    return { success: true, message: 'Already ended' };
+  }
+
+  // End active call if any
+  if (stream.currentCall?.isOnCall) {
+    await this.endCurrentCall(streamId, stream.hostId.toString());
+  }
+
+  // Stop recording if active
+  if (stream.isRecording && stream.recordingResourceId && stream.recordingSid) {
+    try {
+      await this.streamAgoraService.stopRecording(
+        stream.recordingResourceId,
+        stream.recordingSid,
+        stream.agoraChannelName!,
+        stream.recordingUid!
+      );
+    } catch (e) {
+      this.logger.error('Failed to stop recording on stream end', e);
+    }
+  }
+
+  stream.status = 'ended';
+  stream.endedAt = new Date();
+  stream.currentState = 'idle';
+  stream.callWaitlist = [];
+
+  if (stream.startedAt) {
+    stream.duration = Math.floor(
+      (stream.endedAt.getTime() - stream.startedAt.getTime()) / 1000
+    );
+  }
+
+  await stream.save();
+
+  await this.astrologerModel.findByIdAndUpdate(stream.hostId, {
+    'availability.isAvailable': true,
+    'availability.isLive': false,
+    'availability.liveStreamId': null,
+    'availability.lastActive': new Date(),
+  });
+
+  this.logger.log(`✅ Stream ended`, { streamId, duration: stream.duration });
+
+  return {
+    success: true,
+    message: 'Stream Ended',
+    data: { duration: stream.duration },
+  };
+}
 
   async getStreamsByHost(hostId: string, filters: any) {
     const page = filters.page || 1;
@@ -506,29 +540,313 @@ export class StreamSessionService {
     return { data: [] };
   }
 
-  async getLiveStreams(page: number, limit: number) {
-    const streams = await this.streamModel.find({ status: 'live' })
-      .populate('hostId', 'name profilePicture')
-      .skip((page-1)*limit).limit(limit).lean();
-    return { success: true, data: streams };
+ async getLiveStreams(page: number, limit: number) {
+  console.log('🔄 Fetching live streams - page:', page, 'limit:', limit);
+  
+  try {
+    const skip = (page - 1) * limit;
+    
+    const [streams, total] = await Promise.all([
+      this.streamModel
+        .find({ status: 'live' })
+        .populate('hostId', 'name email profilePicture phoneNumber')
+        .sort({ viewerCount: -1 }) // Most viewers first
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.streamModel.countDocuments({ status: 'live' })
+    ]);
+
+    console.log(`✅ Found ${streams.length} live streams, total: ${total}`);
+
+    return {
+      success: true,
+      data: streams,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('❌ getLiveStreams error:', error);
+    throw error;
   }
+}
+
+/**
+ * Get stream calls with pagination
+ */
+async getStreamCalls(streamId: string, page: number = 1, limit: number = 50) {
+  const skip = (page - 1) * limit;
+  
+  const [calls, total] = await Promise.all([
+    this.callTransactionModel
+      .find({ streamId })
+      .populate('userId', 'name email profilePicture')
+      .sort({ startedAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    this.callTransactionModel.countDocuments({ streamId })
+  ]);
+
+  return {
+    success: true,
+    data: {
+      calls: calls.map(c => ({
+        id: c._id,
+        userId: c.userId?._id || c.userId,
+        userName: c.userId,
+        callType: c.callType,
+        callMode: c.callMode,
+        startedAt: c.startedAt,
+        endedAt: c.endedAt,
+        duration: c.duration,
+        totalCharge: c.totalCharge,
+        status: c.status
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    }
+  };
+}
+
+/**
+ * Get active viewers
+ */
+async getStreamViewers(streamId: string) {
+  const viewers = await this.viewerModel
+    .find({ streamId, isActive: true })
+    .populate('userId', 'name email profilePicture')
+    .sort({ joinedAt: -1 })
+    .lean();
+
+  return {
+    success: true,
+    data: viewers.map(v => ({
+      id: v._id,
+      userId: v.userId?._id || v.userId,
+      joinedAt: v.joinedAt,
+      watchTime: v.watchTime,
+      isActive: v.isActive
+    }))
+  };
+}
 
   // Admin
-  async getAllStreamsAdmin(filters: any) {
-    return this.streamModel.find(filters).populate('hostId').lean();
+async getAllStreamsAdmin(filters: {
+  status?: string;
+  search?: string;
+  page: number;
+  limit: number;
+}) {
+  console.log('🔄 Admin fetching streams with filters:', filters);
+  
+  const { status, search, page, limit } = filters;
+  const skip = (page - 1) * limit;
+  
+  // Build query
+  const query: any = {};
+  
+  if (status && status !== 'all') {
+    query.status = status;
   }
   
-  async getStreamDetailsAdmin(streamId: string) {
-    const stream = await this.streamModel.findOne({ streamId }).populate('hostId').lean();
-    const calls = await this.callTransactionModel.find({ streamId });
-    return { success: true, data: { stream, calls } };
+  if (search) {
+    query.$or = [
+      { title: { $regex: search, $options: 'i' } },
+      { streamId: { $regex: search, $options: 'i' } }
+    ];
   }
 
-  async forceEndStreamAdmin(streamId: string, reason: string) {
-    const stream = await this.streamModel.findOne({ streamId });
-    if (stream) await this.endStream(streamId, stream.hostId.toString());
-    return { success: true, message: 'Force ended' };
+  try {
+    // Get streams with host details
+    const [streams, total] = await Promise.all([
+      this.streamModel
+        .find(query)
+        .populate('hostId', 'name email profilePicture phoneNumber')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.streamModel.countDocuments(query)
+    ]);
+
+    console.log(`✅ Found ${streams.length} streams, total: ${total}`);
+
+    return {
+      success: true,
+      data: streams,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('❌ getAllStreamsAdmin error:', error);
+    throw error;
   }
+}
+  
+async getStreamDetailsAdmin(streamId: string) {
+  console.log('🔄 Admin fetching details for stream:', streamId);
+  
+  try {
+    const stream = await this.streamModel
+      .findOne({ streamId })
+      .populate('hostId', 'name email profilePicture phoneNumber')
+      .lean();
+
+    if (!stream) {
+      throw new NotFoundException(`Stream ${streamId} not found`);
+    }
+
+    // Get active viewers with user details
+    const viewers = await this.viewerModel
+      .find({ streamId, isActive: true })
+      .populate('userId', 'name email profilePicture')
+      .sort({ joinedAt: -1 })
+      .lean();
+
+    // Get call history (last 50)
+    const calls = await this.callTransactionModel
+      .find({ streamId })
+      .populate('userId', 'name email profilePicture')
+      .sort({ startedAt: -1 })
+      .limit(50)
+      .lean();
+
+    // Get waitlist
+    const waitlist = await this.getCallWaitlist(streamId);
+
+    const result = {
+      success: true,
+      data: {
+        stream: {
+          ...stream,
+          hostId: stream.hostId?._id || stream.hostId,
+        },
+        viewers: viewers.map(v => ({
+          id: v._id,
+          userId: v.userId?._id || v.userId,
+          joinedAt: v.joinedAt,
+          watchTime: v.watchTime,
+          isActive: v.isActive
+        })),
+        calls: calls.map(c => ({
+          id: c._id,
+          userId: c.userId?._id || c.userId,
+          callType: c.callType,
+          callMode: c.callMode,
+          startedAt: c.startedAt,
+          endedAt: c.endedAt,
+          duration: c.duration,
+          totalCharge: c.totalCharge,
+          status: c.status
+        })),
+        callWaitlist: waitlist.data
+      }
+    };
+
+    console.log('✅ Stream details fetched:', {
+      streamId,
+      viewers: result.data.viewers.length,
+      calls: result.data.calls.length,
+    });
+
+    return result;
+  } catch (error) {
+    console.error('❌ getStreamDetailsAdmin error:', error);
+    throw error;
+  }
+}
+
+/**
+ * Admin: Force end stream with validation and notifications
+ */
+async forceEndStreamAdmin(streamId: string, reason: string): Promise<any> {
+  console.log('====================================');
+  console.log('🔴 ADMIN FORCE END STREAM REQUEST');
+  console.log('Stream ID:', streamId);
+  console.log('Reason:', reason);
+  console.log('====================================');
+
+  // ✅ Find stream and validate
+  const stream = await this.streamModel.findOne({ streamId });
+  
+  if (!stream) {
+    console.error('❌ Stream not found:', streamId);
+    throw new NotFoundException(`Stream ${streamId} not found`);
+  }
+
+  if (stream.status === 'ended') {
+    console.warn('⚠️ Stream already ended:', streamId);
+    return { 
+      success: true, 
+      message: 'Stream already ended',
+      alreadyEnded: true 
+    };
+  }
+
+  console.log('📊 Stream found:', {
+    title: stream.title,
+    status: stream.status,
+    hostId: stream.hostId,
+    viewerCount: stream.viewerCount,
+    hasActiveCall: !!stream.currentCall?.isOnCall
+  });
+
+  // ✅ Notify all viewers via Socket.IO
+  if (this.streamGateway?.server) {
+    console.log('📡 Notifying viewers via socket...');
+    
+    this.streamGateway.server.to(streamId).emit('stream_force_ended', {
+      reason,
+      adminAction: true,
+      adminUserId: 'admin', // Get from request context if available
+      timestamp: new Date().toISOString(),
+      streamTitle: stream.title
+    });
+
+    console.log('✅ Notification sent to room:', streamId);
+  } else {
+    console.warn('⚠️ Socket.IO not available, viewers will not be notified');
+  }
+
+  // ✅ End any active call first
+  if (stream.currentCall?.isOnCall) {
+    console.log('📞 Ending active call...');
+    await this.endCurrentCall(streamId, stream.hostId.toString());
+    console.log('✅ Call ended');
+  }
+
+  // ✅ End the stream
+  console.log('🔄 Ending stream...');
+  const result = await this.endStream(streamId, stream.hostId.toString());
+  
+  console.log('✅ Stream force-ended successfully');
+  console.log('====================================');
+
+  return {
+    success: true,
+    message: 'Stream force-ended successfully',
+    data: {
+      ...result.data,
+      reason,
+      adminAction: true,
+      viewerCountAtEnd: stream.viewerCount
+    }
+  };
+}
+
 
   // Admin Recording
   async startRecording(streamId: string) {

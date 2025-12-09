@@ -263,7 +263,76 @@ async handleJoinStream(
     return { success: true };
   }
 
-  
+  // ==================== USER CONTROL EVENTS (NEW) ====================
+
+  /**
+   * ✅ NEW: Handle User Cancelling Call Request
+   * Syncs with Host UI to remove request immediately
+   */
+@SubscribeMessage('cancel_call_request')
+  async handleCancelCallRequest( // 1. Add async
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { streamId: string; userId: string }
+  ) {
+    console.log(`❌ [User Control] Cancel Request: ${data.userId} for stream ${data.streamId}`);
+    
+    const hostUserId = this.streamHosts.get(data.streamId);
+    if (hostUserId) {
+      const hostSocketId = this.userSockets.get(hostUserId);
+      if (hostSocketId) {
+        // 2. Add await here to ensure DB is updated
+        await this.streamSessionService.cancelCallRequest(data.streamId, data.userId);
+        
+        // Notify Host specifically to remove from waitlist UI
+        this.server.to(hostSocketId).emit('call_request_cancelled', {
+          userId: data.userId,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+    
+    return { success: true };
+  }
+
+  /**
+   * ✅ NEW: Handle User Ending Call
+   * Syncs with Host to end call and Viewers to revert layout
+   */
+  @SubscribeMessage('user_end_call')
+  async handleUserEndCall(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { streamId: string; userId: string }
+  ) {
+    console.log(`📞 [User Control] User Ended Call: ${data.userId} on stream ${data.streamId}`);
+
+    // 1. Notify Host immediately
+    const hostUserId = this.streamHosts.get(data.streamId);
+    if (hostUserId) {
+      const hostSocketId = this.userSockets.get(hostUserId);
+      if (hostSocketId) {
+        this.server.to(hostSocketId).emit('user_ended_call', {
+          userId: data.userId,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      // Ensure backend session is closed
+      try {
+        await this.streamSessionService.endUserCall(data.streamId, data.userId);
+      } catch (e) {
+        console.error('Error ending call session on DB', e);
+      }
+    }
+
+    // 2. Notify all viewers that call is over (to revert split screen)
+    this.server.to(data.streamId).emit('call_ended', {
+      duration: 0, 
+      charge: 0,
+      timestamp: new Date().toISOString()
+    });
+
+    return { success: true };
+  }
 
   // ==================== CALL EVENTS ====================
 
@@ -599,6 +668,5 @@ handleStreamHeartbeat(
 
   return { success: true };
 }
-
 
 }

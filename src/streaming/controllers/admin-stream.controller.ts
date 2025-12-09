@@ -10,6 +10,7 @@ import {
   UseGuards,
   ParseIntPipe,
   DefaultValuePipe,
+  NotFoundException,
 } from '@nestjs/common';
 import { AdminAuthGuard } from '../../admin/core/guards/admin-auth.guard';
 import { StreamSessionService } from '../services/stream-session.service';
@@ -57,13 +58,6 @@ export class AdminStreamController {
     return this.streamSessionService.getLiveStreams(page, limit);
   }
 
-  /**
-   * Get stream details
-   */
-  @Get(':streamId')
-  async getStreamDetails(@Param('streamId') streamId: string) {
-    return this.streamSessionService.getStreamDetailsAdmin(streamId);
-  }
 
   /**
    * Force end stream
@@ -109,6 +103,21 @@ async getViewerToken(@Param('streamId') streamId: string) {
   return this.streamAgoraService.generateViewerTokenByStreamId(streamId); // ✅ USE NEW METHOD
 }
 
+
+  /**
+   * ✅ NEW: Force end active call
+   * Ends the current call on the stream without stopping the stream itself
+   */
+  @Post(':streamId/call/force-end')
+  async forceEndCall(@Param('streamId') streamId: string) {
+    // Fetch stream to get the hostId required by the service
+    const stream = await this.streamSessionService.getStreamById(streamId);
+    if (!stream) throw new NotFoundException('Stream not found');
+    
+    // Use the existing service method. The second param is technically 'hostId' or 'userId' 
+    // for billing/logic, using hostId ensures the host side logic triggers correctly.
+    return this.streamSessionService.endCurrentCall(streamId, stream.hostId.toString());
+  }
 @Post(':streamId/recording/start')
   async startRecording(@Param('streamId') streamId: string) {
     return this.streamSessionService.startRecording(streamId);
@@ -119,4 +128,11 @@ async getViewerToken(@Param('streamId') streamId: string) {
     return this.streamSessionService.stopRecording(streamId);
   }
   
+  /**
+   * Get stream details
+   */
+  @Get(':streamId')
+  async getStreamDetails(@Param('streamId') streamId: string) {
+    return this.streamSessionService.getStreamDetailsAdmin(streamId);
+  }
 }
