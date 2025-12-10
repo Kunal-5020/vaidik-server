@@ -236,27 +236,39 @@ async getConversationSummary(
 ) {
   const order = await this.ordersService.getOrderDetails(orderId, req.user._id);
   
-  return {
-    success: true,
-    data: {
-      orderId: order.data.orderId,
-      conversationThreadId: order.data.conversationThreadId,
-      astrologer: {
-        id: order.data.astrologerId,
-        name: order.data.astrologerName
-      },
-      totalSessions: order.data.totalSessions,
-      totalChatSessions: order.data.totalChatSessions,
-      totalCallSessions: order.data.totalCallSessions,
-      totalSpent: order.data.totalAmount,
-      totalDuration: order.data.totalUsedDurationSeconds,
-      sessionHistory: order.data.sessionHistory,
-      lastInteractionAt: order.data.lastInteractionAt,
-      messageCount: order.data.messageCount,
-      createdAt: order.data.createdAt
-    }
-  };
-}
+  const astrologerData = order.data.astrologerId; 
+
+    return {
+      success: true,
+      data: {
+        orderId: order.data.orderId,
+        conversationThreadId: order.data.conversationThreadId,
+        // ✅ Return the full populated object directly or map cleanly
+        astrologer: {
+          _id: astrologerData._id,
+          name: astrologerData.name,
+          profilePicture: astrologerData.profilePicture,
+          experienceYears: astrologerData.experienceYears,
+          specializations: astrologerData.specializations,
+          rating: astrologerData.ratings?.average || 0
+        },
+        // Also pass rate from order if needed for display
+        ratePerMinute: order.data.ratePerMinute,
+        
+        currentSessionId: order.data.currentSessionId,
+        currentSessionType: order.data.currentSessionType,
+        totalSessions: order.data.totalSessions,
+        totalChatSessions: order.data.totalChatSessions,
+        totalCallSessions: order.data.totalCallSessions,
+        totalSpent: order.data.totalAmount,
+        totalDuration: order.data.totalUsedDurationSeconds,
+        sessionHistory: order.data.sessionHistory,
+        lastInteractionAt: order.data.lastInteractionAt,
+        messageCount: order.data.messageCount,
+        createdAt: order.data.createdAt
+      }
+    };
+  }
 
 
   @Post('sessions/end')

@@ -1,3 +1,5 @@
+// streaming/services/stream-session.service.ts
+
 import { Injectable, NotFoundException, BadRequestException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -34,7 +36,6 @@ export class StreamSessionService {
     const astrologer = await this.astrologerModel.findById(hostId).select('name');
     if (!astrologer) throw new NotFoundException('Astrologer not found');
 
-    // Auto-Title: "Name #1"
     const today = new Date();
     today.setHours(0,0,0,0);
     const count = await this.streamModel.countDocuments({ 
@@ -96,81 +97,67 @@ export class StreamSessionService {
   }
 
   async endStream(streamId: string, hostId?: string): Promise<any> {
-  this.logger.log(`🔄 endStream called`, { streamId, hostId });
+    this.logger.log(`🔄 endStream called`, { streamId, hostId });
 
-  // 1) Try with hostId filter if provided
-  let stream = await this.streamModel.findOne(
-    hostId ? { streamId, hostId } : { streamId }
-  );
-
-  // 2) If not found and hostId was used, fall back to only streamId
-  if (!stream && hostId) {
-    this.logger.warn(
-      `endStream: stream not found with { streamId, hostId }, retrying with { streamId } only`,
-      { streamId, hostId }
+    let stream = await this.streamModel.findOne(
+        hostId ? { streamId, hostId } : { streamId }
     );
 
-    stream = await this.streamModel.findOne({ streamId });
-  }
-
-  // 3) Still not found → real error
-  if (!stream) {
-    this.logger.error(`endStream: Stream not found`, { streamId, hostId });
-    throw new NotFoundException('Stream not found');
-  }
-
-  if (stream.status === 'ended') {
-    this.logger.log(`endStream: Stream already ended`, { streamId });
-    return { success: true, message: 'Already ended' };
-  }
-
-  // End active call if any
-  if (stream.currentCall?.isOnCall) {
-    await this.endCurrentCall(streamId, stream.hostId.toString());
-  }
-
-  // Stop recording if active
-  if (stream.isRecording && stream.recordingResourceId && stream.recordingSid) {
-    try {
-      await this.streamAgoraService.stopRecording(
-        stream.recordingResourceId,
-        stream.recordingSid,
-        stream.agoraChannelName!,
-        stream.recordingUid!
-      );
-    } catch (e) {
-      this.logger.error('Failed to stop recording on stream end', e);
+    if (!stream && hostId) {
+        stream = await this.streamModel.findOne({ streamId });
     }
+
+    if (!stream) {
+        throw new NotFoundException('Stream not found');
+    }
+
+    if (stream.status === 'ended') {
+        return { success: true, message: 'Already ended' };
+    }
+
+    if (stream.currentCall?.isOnCall) {
+        await this.endCurrentCall(streamId, stream.hostId.toString());
+    }
+
+    if (stream.isRecording && stream.recordingResourceId && stream.recordingSid) {
+        try {
+        await this.streamAgoraService.stopRecording(
+            stream.recordingResourceId,
+            stream.recordingSid,
+            stream.agoraChannelName!,
+            stream.recordingUid!
+        );
+        } catch (e) {
+        this.logger.error('Failed to stop recording on stream end', e);
+        }
+    }
+
+    stream.status = 'ended';
+    stream.endedAt = new Date();
+    stream.currentState = 'idle';
+    stream.callWaitlist = [];
+
+    if (stream.startedAt) {
+        stream.duration = Math.floor(
+        (stream.endedAt.getTime() - stream.startedAt.getTime()) / 1000
+        );
+    }
+
+    await stream.save();
+
+    await this.astrologerModel.findByIdAndUpdate(stream.hostId, {
+        'availability.isAvailable': true,
+        'availability.isLive': false,
+        'availability.liveStreamId': null,
+        'availability.lastActive': new Date(),
+    });
+
+    return {
+        success: true,
+        message: 'Stream Ended',
+        data: { duration: stream.duration },
+    };
   }
-
-  stream.status = 'ended';
-  stream.endedAt = new Date();
-  stream.currentState = 'idle';
-  stream.callWaitlist = [];
-
-  if (stream.startedAt) {
-    stream.duration = Math.floor(
-      (stream.endedAt.getTime() - stream.startedAt.getTime()) / 1000
-    );
-  }
-
-  await stream.save();
-
-  await this.astrologerModel.findByIdAndUpdate(stream.hostId, {
-    'availability.isAvailable': true,
-    'availability.isLive': false,
-    'availability.liveStreamId': null,
-    'availability.lastActive': new Date(),
-  });
-
-  this.logger.log(`✅ Stream ended`, { streamId, duration: stream.duration });
-
-  return {
-    success: true,
-    message: 'Stream Ended',
-    data: { duration: stream.duration },
-  };
-}
 
   async getStreamsByHost(hostId: string, filters: any) {
     const page = filters.page || 1;
@@ -191,7 +178,7 @@ export class StreamSessionService {
     if (!stream) throw new NotFoundException('Stream not live');
 
     const price = callType === 'voice' ? stream.callSettings.voiceCallPrice : stream.callSettings.videoCallPrice;
-    const minRequired = price * 5; // 5 Minute Rule
+    const minRequired = price * 5; 
     
     const user = await this.userModel.findById(userId).select('name wallet profilePicture').lean() as any;
     if (!user) throw new NotFoundException('User not found');
@@ -240,7 +227,6 @@ export class StreamSessionService {
     
     let cumulativeWaitTime = 0;
 
-    // Add remaining time of current call
     if (stream.currentCall?.isOnCall && stream.currentCall.startedAt) {
        const elapsed = (Date.now() - new Date(stream.currentCall.startedAt).getTime()) / 1000;
        const remaining = Math.max(0, stream.callSettings.maxCallDuration - elapsed);
@@ -249,7 +235,6 @@ export class StreamSessionService {
 
     const formatted = waitingUsers.map((req) => {
       const waitTime = cumulativeWaitTime;
-      // ✅ FULL TIME: Sum of all max durations
       cumulativeWaitTime += stream.callSettings.maxCallDuration; 
       
       return {
@@ -267,10 +252,7 @@ export class StreamSessionService {
     const stream = await this.streamModel.findOne({ streamId, hostId });
     if (!stream) throw new NotFoundException('Stream not found');
     
-    // ✅ Safety Check: If stream says "on call" but it's been > 1 min and no transaction exists, allow override
-    // For now, strict check:
     if (stream.currentCall?.isOnCall) {
-       // Optional: Add logic here to auto-fix if it's a "zombie" call
        throw new BadRequestException('Already on a call');
     }
 
@@ -279,7 +261,6 @@ export class StreamSessionService {
 
     const request = stream.callWaitlist[reqIndex];
 
-    // ... (Balance Check Code) ...
     const user = await this.userModel.findById(userId).select('wallet').lean() as any;
     const price = request.callType === 'video' ? stream.callSettings.videoCallPrice : stream.callSettings.voiceCallPrice;
     if (user.wallet.balance < price * 5) {
@@ -288,11 +269,9 @@ export class StreamSessionService {
        throw new BadRequestException('User balance insufficient');
     }
 
-    // 1. Generate Token
     const callerUid = this.streamAgoraService.generateUid();
     const callerToken = this.streamAgoraService.generateBroadcasterToken(stream.agoraChannelName!, callerUid);
 
-    // 2. ✅ CREATE TRANSACTION FIRST (Critical Fix)
     const transaction = await this.callTransactionModel.create({
       streamId,
       astrologerId: hostId,
@@ -304,7 +283,6 @@ export class StreamSessionService {
       status: 'ongoing'
     });
 
-    // 3. ✅ UPDATE STREAM STATE AFTER TRANSACTION SUCCESS
     stream.currentCall = {
       isOnCall: true,
       callerId: request.userId,
@@ -319,7 +297,7 @@ export class StreamSessionService {
     stream.currentState = 'on_call';
     stream.callWaitlist[reqIndex].status = 'accepted';
 
-    await stream.save(); // <--- Save happens last
+    await stream.save();
 
     return {
       success: true,
@@ -333,7 +311,6 @@ export class StreamSessionService {
       }
     };
   }
-
 
   async rejectCallRequest(streamId: string, userId: string) {
     const stream = await this.streamModel.findOne({ streamId });
@@ -355,7 +332,6 @@ export class StreamSessionService {
     const index = stream.callWaitlist.findIndex(r => r.userId.toString() === userId && r.status === 'waiting');
     if (index !== -1) {
       stream.callWaitlist.splice(index, 1);
-      // Reorder
       stream.callWaitlist.filter(r => r.status === 'waiting').forEach((r, i) => r.position = i + 1);
       await stream.save();
       return { success: true, message: 'Request cancelled' };
@@ -363,47 +339,80 @@ export class StreamSessionService {
     return { success: false, message: 'Request not found' };
   }
 
-  async endCurrentCall(streamId: string, hostId: string): Promise<any> {
+async endCurrentCall(streamId: string, hostId: string): Promise<any> {
     const stream = await this.streamModel.findOne({ streamId });
     if (!stream || !stream.currentCall?.isOnCall) return { success: true, message: 'No active call' };
 
-    const transaction = await this.callTransactionModel.findOne({
-      streamId, userId: stream.currentCall.callerId, status: 'ongoing'
+    // ✅ FIX: Improved transaction lookup with fallback
+    // 1. Try strict match
+    let transaction = await this.callTransactionModel.findOne({
+      streamId,
+      userId: stream.currentCall.callerId, 
+      status: 'ongoing'
     });
+
+    // 2. Fallback: If strict match fails (e.g., ObjectId vs String mismatch), find ANY ongoing transaction for this stream
+    if (!transaction) {
+       this.logger.warn(`Strict transaction lookup failed for stream ${streamId}. Trying fallback...`);
+       transaction = await this.callTransactionModel.findOne({
+         streamId,
+         status: 'ongoing'
+       }).sort({ createdAt: -1 });
+    }
 
     if (transaction) {
       const endTime = new Date();
       const durationSec = Math.floor((endTime.getTime() - transaction.startedAt.getTime()) / 1000);
-      const billedMin = Math.ceil(durationSec / 60); 
+      
+      // ✅ Force minimum 1 minute
+      let billedMin = Math.ceil(durationSec / 60);
+      if (billedMin < 1) billedMin = 1; 
+
       const cost = billedMin * transaction.pricePerMinute;
 
+      const astrologer = await this.astrologerModel.findById(transaction.astrologerId).select('name');
+      const astrologerName = astrologer?.name || 'Astrologer';
+
       if (transaction.startedAt) {
-        await this.walletService.deductFromUser(
-          transaction.userId.toString(),
-          cost,
-          'stream_call',
-          `Call with Astrologer (${billedMin} mins)`
-        );
+        try {
+          this.logger.log(`💰 Processing Payment: ₹${cost} for ${billedMin} mins`);
 
-        await this.walletService.creditToAstrologer(
-          transaction.astrologerId.toString(),
-          cost, 
-          'stream_call',
-          `Call earning from User (${billedMin} mins)`
-        );
+          // Atomic Payment Processing
+          await this.walletService.processSessionPayment({
+            userId: transaction.userId.toString(),
+            astrologerId: transaction.astrologerId.toString(),
+            amount: cost,
+            orderId: transaction._id.toString(),
+            sessionId: streamId,
+            sessionType: 'stream_call',
+            userName: stream.currentCall.callerName,
+            astrologerName: astrologerName,
+            durationMinutes: billedMin
+          });
 
-        await this.earningsService.updateEarnings(transaction.astrologerId.toString(), cost, 'call');
+          await this.earningsService.updateEarnings(transaction.astrologerId.toString(), cost, 'call');
+
+          transaction.totalCharge = cost;
+          transaction.status = 'completed';
+          
+          stream.totalCallRevenue += cost;
+          stream.totalRevenue += cost;
+          stream.totalCalls += 1;
+          
+          this.logger.log(`✅ Payment Success: Transaction ID ${transaction._id}`);
+
+        } catch (error: any) {
+          this.logger.error(`❌ Payment Failed: ${error.message}`);
+          transaction.status = 'payment_failed'; 
+          transaction.totalCharge = 0;
+        }
 
         transaction.endedAt = endTime;
         transaction.duration = durationSec;
-        transaction.totalCharge = cost;
-        transaction.status = 'completed';
         await transaction.save();
-
-        stream.totalCallRevenue += cost;
-        stream.totalRevenue += cost;
-        stream.totalCalls += 1;
       }
+    } else {
+        this.logger.error(`❌ No ongoing transaction found for stream ${streamId} during endCurrentCall`);
     }
 
     stream.currentCall = undefined as any;
@@ -413,11 +422,26 @@ export class StreamSessionService {
     return { success: true, message: 'Call ended' };
   }
   
+  // ✅ NEW: Handle Caller Disconnection
+  async handleUserDisconnect(userId: string) {
+    // Find if this user is currently on a call in ANY active stream
+    const activeStream = await this.streamModel.findOne({
+        'currentCall.isOnCall': true,
+        'currentCall.callerId': new Types.ObjectId(userId),
+        status: 'live'
+    });
+
+    if (activeStream) {
+        this.logger.log(`🔌 User ${userId} disconnected while on call in stream ${activeStream.streamId}. Ending call...`);
+        await this.endCurrentCall(activeStream.streamId, activeStream.hostId.toString());
+    }
+  }
+
   async endUserCall(streamId: string, userId: string) {
      return this.endCurrentCall(streamId, userId);
   }
 
-  // ==================== VIEWER ====================
+  // ==================== VIEWER (STRICT COUNT FIX) ====================
 
   async joinStream(streamId: string, userId: string) {
     // 1. Get Stream
@@ -434,33 +458,41 @@ export class StreamSessionService {
     const uid = this.streamAgoraService.generateUid();
     const token = this.streamAgoraService.generateViewerToken(stream.agoraChannelName, uid);
 
-    // 3. Update/Create Viewer Record
-    await this.viewerModel.updateOne(
+    // 3. Update/Create Viewer Record (Atomic Check)
+    // ✅ FIX: Use { new: false } to check PREVIOUS state to prevent duplicate counts
+    const oldViewerState = await this.viewerModel.findOneAndUpdate(
       { streamId, userId },
-      { $set: { isActive: true, joinedAt: new Date(), agoraUid: uid } },
-      { upsert: true }
+      { 
+        $set: { 
+          isActive: true, 
+          joinedAt: new Date(), 
+          agoraUid: uid 
+        } 
+      },
+      { upsert: true, new: false } // Returns the document BEFORE update
     );
 
-    // ✅ FIXED: Use findOneAndUpdate with { streamId } query
-    // DO NOT use findByIdAndUpdate here because streamId is a string, not ObjectId
-    await this.streamModel.findOneAndUpdate(
-      { streamId: streamId }, 
-      { $inc: { totalViews: 1, viewerCount: 1 } }
-    );
+    // Check if user was ALREADY active
+    const wasAlreadyActive = oldViewerState && oldViewerState.isActive;
 
-    // Update Stream
-    const updatedStream = await this.streamModel.findOneAndUpdate(
-      { streamId }, 
-      { $inc: { totalViews: 1, viewerCount: 1 } },
-      { new: true } // Return updated doc
-    );
+    // ✅ Only increment if they were NOT active before
+    if (!wasAlreadyActive) {
+      const updatedStream = await this.streamModel.findOneAndUpdate(
+        { streamId: streamId }, 
+        { $inc: { totalViews: 1, viewerCount: 1 } }, // Increment both
+        { new: true } 
+      );
 
-    // ✅ FIX: Emit event to EVERYONE in the room (including Host)
-    if (this.streamGateway && this.streamGateway.server && updatedStream) {
-      this.streamGateway.server.to(streamId).emit('viewer_count_updated', {
-        count: updatedStream.viewerCount,
-        timestamp: new Date()
-      });
+      // Emit event
+      if (this.streamGateway && this.streamGateway.server && updatedStream) {
+        this.streamGateway.server.to(streamId).emit('viewer_count_updated', {
+          count: updatedStream.viewerCount,
+          timestamp: new Date()
+        });
+      }
+
+      // Sync local stream object for return
+      if (updatedStream) stream.viewerCount = updatedStream.viewerCount;
     }
 
     return {
@@ -478,14 +510,16 @@ export class StreamSessionService {
           currentState: stream.currentState,
           callSettings: stream.callSettings,
           currentCall: stream.currentCall,
-          viewerCount: (stream.viewerCount || 0) + 1
+          viewerCount: stream.viewerCount || 0
         }
       }
     };
   }
 
   async leaveStream(streamId: string, userId: string) {
+    // ✅ Safe: only finds if isActive is true
     const viewer = await this.viewerModel.findOne({ streamId, userId, isActive: true });
+    
     if (viewer) {
       viewer.isActive = false;
       const leftAt = new Date();
@@ -493,13 +527,13 @@ export class StreamSessionService {
       viewer.watchTime += watchTime;
       await viewer.save();
 
+      // ✅ Decrement safely
       const updatedStream = await this.streamModel.findOneAndUpdate(
         { streamId }, 
         { $inc: { viewerCount: -1, totalWatchTime: watchTime } },
         { new: true }
       );
 
-      // ✅ FIX: Emit event to EVERYONE
       if (this.streamGateway && this.streamGateway.server && updatedStream) {
         this.streamGateway.server.to(streamId).emit('viewer_count_updated', {
           count: updatedStream.viewerCount,
@@ -541,23 +575,18 @@ export class StreamSessionService {
   }
 
  async getLiveStreams(page: number, limit: number) {
-  console.log('🔄 Fetching live streams - page:', page, 'limit:', limit);
-  
-  try {
-    const skip = (page - 1) * limit;
+  const skip = (page - 1) * limit;
     
-    const [streams, total] = await Promise.all([
+  const [streams, total] = await Promise.all([
       this.streamModel
         .find({ status: 'live' })
         .populate('hostId', 'name email profilePicture phoneNumber')
-        .sort({ viewerCount: -1 }) // Most viewers first
+        .sort({ viewerCount: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
       this.streamModel.countDocuments({ status: 'live' })
     ]);
-
-    console.log(`✅ Found ${streams.length} live streams, total: ${total}`);
 
     return {
       success: true,
@@ -569,15 +598,8 @@ export class StreamSessionService {
         pages: Math.ceil(total / limit)
       }
     };
-  } catch (error) {
-    console.error('❌ getLiveStreams error:', error);
-    throw error;
   }
-}
 
-/**
- * Get stream calls with pagination
- */
 async getStreamCalls(streamId: string, page: number = 1, limit: number = 50) {
   const skip = (page - 1) * limit;
   
@@ -617,9 +639,6 @@ async getStreamCalls(streamId: string, page: number = 1, limit: number = 50) {
   };
 }
 
-/**
- * Get active viewers
- */
 async getStreamViewers(streamId: string) {
   const viewers = await this.viewerModel
     .find({ streamId, isActive: true })
@@ -639,19 +658,15 @@ async getStreamViewers(streamId: string) {
   };
 }
 
-  // Admin
 async getAllStreamsAdmin(filters: {
   status?: string;
   search?: string;
   page: number;
   limit: number;
 }) {
-  console.log('🔄 Admin fetching streams with filters:', filters);
-  
   const { status, search, page, limit } = filters;
   const skip = (page - 1) * limit;
   
-  // Build query
   const query: any = {};
   
   if (status && status !== 'all') {
@@ -665,9 +680,7 @@ async getAllStreamsAdmin(filters: {
     ];
   }
 
-  try {
-    // Get streams with host details
-    const [streams, total] = await Promise.all([
+  const [streams, total] = await Promise.all([
       this.streamModel
         .find(query)
         .populate('hostId', 'name email profilePicture phoneNumber')
@@ -677,8 +690,6 @@ async getAllStreamsAdmin(filters: {
         .lean(),
       this.streamModel.countDocuments(query)
     ]);
-
-    console.log(`✅ Found ${streams.length} streams, total: ${total}`);
 
     return {
       success: true,
@@ -690,17 +701,10 @@ async getAllStreamsAdmin(filters: {
         pages: Math.ceil(total / limit)
       }
     };
-  } catch (error) {
-    console.error('❌ getAllStreamsAdmin error:', error);
-    throw error;
   }
-}
   
 async getStreamDetailsAdmin(streamId: string) {
-  console.log('🔄 Admin fetching details for stream:', streamId);
-  
-  try {
-    const stream = await this.streamModel
+  const stream = await this.streamModel
       .findOne({ streamId })
       .populate('hostId', 'name email profilePicture phoneNumber')
       .lean();
@@ -709,14 +713,12 @@ async getStreamDetailsAdmin(streamId: string) {
       throw new NotFoundException(`Stream ${streamId} not found`);
     }
 
-    // Get active viewers with user details
     const viewers = await this.viewerModel
       .find({ streamId, isActive: true })
       .populate('userId', 'name email profilePicture')
       .sort({ joinedAt: -1 })
       .lean();
 
-    // Get call history (last 50)
     const calls = await this.callTransactionModel
       .find({ streamId })
       .populate('userId', 'name email profilePicture')
@@ -724,10 +726,9 @@ async getStreamDetailsAdmin(streamId: string) {
       .limit(50)
       .lean();
 
-    // Get waitlist
     const waitlist = await this.getCallWaitlist(streamId);
 
-    const result = {
+    return {
       success: true,
       data: {
         stream: {
@@ -755,40 +756,16 @@ async getStreamDetailsAdmin(streamId: string) {
         callWaitlist: waitlist.data
       }
     };
-
-    console.log('✅ Stream details fetched:', {
-      streamId,
-      viewers: result.data.viewers.length,
-      calls: result.data.calls.length,
-    });
-
-    return result;
-  } catch (error) {
-    console.error('❌ getStreamDetailsAdmin error:', error);
-    throw error;
   }
-}
 
-/**
- * Admin: Force end stream with validation and notifications
- */
 async forceEndStreamAdmin(streamId: string, reason: string): Promise<any> {
-  console.log('====================================');
-  console.log('🔴 ADMIN FORCE END STREAM REQUEST');
-  console.log('Stream ID:', streamId);
-  console.log('Reason:', reason);
-  console.log('====================================');
-
-  // ✅ Find stream and validate
   const stream = await this.streamModel.findOne({ streamId });
   
   if (!stream) {
-    console.error('❌ Stream not found:', streamId);
     throw new NotFoundException(`Stream ${streamId} not found`);
   }
 
   if (stream.status === 'ended') {
-    console.warn('⚠️ Stream already ended:', streamId);
     return { 
       success: true, 
       message: 'Stream already ended',
@@ -796,45 +773,22 @@ async forceEndStreamAdmin(streamId: string, reason: string): Promise<any> {
     };
   }
 
-  console.log('📊 Stream found:', {
-    title: stream.title,
-    status: stream.status,
-    hostId: stream.hostId,
-    viewerCount: stream.viewerCount,
-    hasActiveCall: !!stream.currentCall?.isOnCall
-  });
-
-  // ✅ Notify all viewers via Socket.IO
   if (this.streamGateway?.server) {
-    console.log('📡 Notifying viewers via socket...');
-    
     this.streamGateway.server.to(streamId).emit('stream_force_ended', {
       reason,
       adminAction: true,
-      adminUserId: 'admin', // Get from request context if available
+      adminUserId: 'admin',
       timestamp: new Date().toISOString(),
       streamTitle: stream.title
     });
-
-    console.log('✅ Notification sent to room:', streamId);
-  } else {
-    console.warn('⚠️ Socket.IO not available, viewers will not be notified');
   }
 
-  // ✅ End any active call first
   if (stream.currentCall?.isOnCall) {
-    console.log('📞 Ending active call...');
     await this.endCurrentCall(streamId, stream.hostId.toString());
-    console.log('✅ Call ended');
   }
 
-  // ✅ End the stream
-  console.log('🔄 Ending stream...');
   const result = await this.endStream(streamId, stream.hostId.toString());
   
-  console.log('✅ Stream force-ended successfully');
-  console.log('====================================');
-
   return {
     success: true,
     message: 'Stream force-ended successfully',
@@ -847,8 +801,6 @@ async forceEndStreamAdmin(streamId: string, reason: string): Promise<any> {
   };
 }
 
-
-  // Admin Recording
   async startRecording(streamId: string) {
      const stream = await this.streamModel.findOne({ streamId });
      if (!stream || stream.status !== 'live') throw new BadRequestException('Stream not live');

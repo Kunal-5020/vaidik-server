@@ -93,6 +93,24 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.socketToStream.delete(client.id);
   }
 
+  let disconnectedUserId: string | null = null;
+    for (const [userId, socketId] of this.userSockets.entries()) {
+      if (socketId === client.id) {
+        disconnectedUserId = userId;
+        this.userSockets.delete(userId);
+        break;
+      }
+    }
+
+    if (disconnectedUserId) {
+       // Call the service to check if this user was on a call
+       try {
+           await this.streamSessionService.handleUserDisconnect(disconnectedUserId);
+       } catch (err) {
+           console.error('❌ Error handling user disconnect:', err);
+       }
+    }
+
   // Remove from user sockets map
   for (const [userId, socketId] of this.userSockets.entries()) {
     if (socketId === client.id) {
@@ -533,6 +551,8 @@ handleCallEnded(
   console.log('Stream ID:', data.streamId);
   console.log('Duration:', data.duration);
   console.log('====================================');
+
+
   
   // ✅ Emit BOTH events for compatibility
   this.server.to(data.streamId).emit('call_ended', {

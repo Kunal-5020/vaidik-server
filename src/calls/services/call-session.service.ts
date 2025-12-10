@@ -440,102 +440,98 @@ this.notificationService
   }
 
   // ===== END CALL SESSION =====
-/**
- * END CALL SESSION
- */
+
 async endSession(
-  sessionId: string,
-  endedBy: string,
-  reason: string,
-  recordingUrl?: string,
-  recordingS3Key?: string,
-  recordingDuration?: number,
-): Promise<any> {
-  const session = await this.sessionModel.findOne({ sessionId });
+    sessionId: string,
+    endedBy: string,
+    reason: string,
+    recordingUrl?: string,
+    recordingS3Key?: string,
+    recordingDuration?: number,
+  ): Promise<any> {
+    const session = await this.sessionModel.findOne({ sessionId });
 
-  if (!session) {
-    throw new NotFoundException('Session not found');
-  }
-
-  // Clear timeout
-  if (this.sessionTimers.has(sessionId)) {
-    clearTimeout(this.sessionTimers.get(sessionId)!);
-    this.sessionTimers.delete(sessionId);
-  }
-
-  this.clearUserJoinTimeout(sessionId);
-
-  let actualDurationSeconds = 0;
-
-  // Calculate actual duration only if session was ACTIVE
-  if (session.status === 'active' && session.startTime) {
-    const endTime = new Date();
-    actualDurationSeconds = Math.floor((endTime.getTime() - session.startTime.getTime()) / 1000);
-
-    // Cap to max duration if timeout
-    if (reason === 'timeout' && actualDurationSeconds > session.maxDurationSeconds) {
-      actualDurationSeconds = session.maxDurationSeconds;
+    if (!session) {
+      throw new NotFoundException('Session not found');
     }
 
-    session.duration = actualDurationSeconds;
-    session.billedMinutes = Math.ceil(actualDurationSeconds / 60);
-    session.totalAmount = session.billedMinutes * session.ratePerMinute;
-    session.platformCommission = (session.totalAmount * 40) / 100;
-    session.astrologerEarning = session.totalAmount - session.platformCommission;
+    // Clear timers
+    if (this.sessionTimers.has(sessionId)) {
+      clearTimeout(this.sessionTimers.get(sessionId)!);
+      this.sessionTimers.delete(sessionId);
+    }
+    // this.clearUserJoinTimeout(sessionId); // Assuming this method exists in class
 
-    this.logger.log(
-      `💰 Call billing prepared: ${sessionId} | Actual: ${actualDurationSeconds}s | Billed: ${session.billedMinutes}m | Amount: ₹${session.totalAmount}`,
-    );
-  }
+    let actualDurationSeconds = 0;
 
-  // ✅ WALLET DEDUCTION & CREDIT (only if call had actual duration)
-  if (actualDurationSeconds > 0 && session.totalAmount > 0) {
-    try {
-      // GET USER AND ASTROLOGER DETAILS
-      const [user, astrologer] = await Promise.all([
-        this.userModel.findById(session.userId).select('name').lean(),
-        this.astrologerModel.findById(session.astrologerId).select('name').lean(),
-      ]);
+    // Calculate duration
+    if (session.status === 'active' && session.startTime) {
+      const endTime = new Date();
+      actualDurationSeconds = Math.floor((endTime.getTime() - session.startTime.getTime()) / 1000);
 
-      // ✅ USE UNIFIED PAYMENT METHOD
-      const paymentResult = await this.walletService.processSessionPayment({
-        userId: session.userId.toString(),
-        astrologerId: session.astrologerId.toString(),
-        amount: session.totalAmount,
-        orderId: session.orderId,
-        sessionId: session.sessionId,
-        sessionType: session.callType === 'audio' ? 'audio_call' : 'video_call',
-        userName: user?.name || 'User',
-        astrologerName: astrologer?.name || 'Astrologer',
-        durationMinutes: session.billedMinutes,
-      });
-
-      if (!paymentResult.success) {
-        throw new Error(paymentResult.message || 'Payment failed');
+      if (reason === 'timeout' && actualDurationSeconds > session.maxDurationSeconds) {
+        actualDurationSeconds = session.maxDurationSeconds;
       }
 
-      this.logger.log(`✅ User wallet charged: User(${session.userId}) | Amount: ₹${session.totalAmount}`);
-      this.logger.log(`✅ Astrologer credited: ${session.astrologerId} | Amount: ₹${session.astrologerEarning}`);
+      session.duration = actualDurationSeconds;
+      
+      // ✅ STRICT WHOLE MINUTE CHARGE
+      // Even if actualDurationSeconds is 0 (instant drop after connect), we charge 1 min
+      session.billedMinutes = Math.max(1, Math.ceil(actualDurationSeconds / 60));
+      
+      session.totalAmount = session.billedMinutes * session.ratePerMinute;
+      session.platformCommission = (session.totalAmount * 40) / 100;
+      session.astrologerEarning = session.totalAmount - session.platformCommission;
 
-      // ✅ UPDATE ASTROLOGER EARNINGS
-      await this.earningsService.updateEarnings(
-        session.astrologerId.toString(),
-        session.totalAmount,
-        'call',
+      this.logger.log(
+        `💰 Call Billing: ${sessionId} | Duration: ${actualDurationSeconds}s | Billed: ${session.billedMinutes}m | Amount: ₹${session.totalAmount}`
       );
-
-      session.isPaid = true;
-    } catch (error: any) {
-      this.logger.error(`❌ Payment processing failed for call session ${sessionId}: ${error.message}`);
-      session.isPaid = false;
     }
-  }
 
-  session.status = 'ended';
-  session.endTime = new Date();
-  session.endedBy = endedBy;
-  session.endReason = reason;
-  session.timerStatus = 'ended';
+    // ✅ WALLET DEDUCTION (Enforced for all active calls)
+    if (session.status === 'active' && session.totalAmount > 0) {
+      try {
+        const [user, astrologer] = await Promise.all([
+          this.userModel.findById(session.userId).select('name').lean(),
+          this.astrologerModel.findById(session.astrologerId).select('name').lean(),
+        ]);
+
+        // Unified Payment
+        const paymentResult = await this.walletService.processSessionPayment({
+          userId: session.userId.toString(),
+          astrologerId: session.astrologerId.toString(),
+          amount: session.totalAmount,
+          orderId: session.orderId,
+          sessionId: session.sessionId,
+          sessionType: session.callType === 'audio' ? 'audio_call' : 'video_call',
+          userName: user?.name || 'User',
+          astrologerName: astrologer?.name || 'Astrologer',
+          durationMinutes: session.billedMinutes,
+        });
+
+        if (!paymentResult.success) {
+          throw new Error(paymentResult.message || 'Payment failed');
+        }
+
+        await this.earningsService.updateEarnings(
+          session.astrologerId.toString(),
+          session.totalAmount,
+          'call',
+        );
+
+        session.isPaid = true;
+        this.logger.log(`✅ Payment success for session ${sessionId}`);
+      } catch (error: any) {
+        this.logger.error(`❌ Payment failed for session ${sessionId}: ${error.message}`);
+        session.isPaid = false;
+      }
+    }
+
+    session.status = 'ended';
+    session.endTime = new Date();
+    session.endedBy = endedBy;
+    session.endReason = reason;
+    session.timerStatus = 'ended';
 
   // Add recording if available
   if (recordingUrl && actualDurationSeconds > 0) {

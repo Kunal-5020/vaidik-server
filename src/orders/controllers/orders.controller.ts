@@ -13,7 +13,6 @@ import {
   ParseIntPipe,
   DefaultValuePipe,
   ValidationPipe,
-  BadRequestException
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { OrdersService } from '../services/orders.service';
@@ -35,15 +34,79 @@ export class OrdersController {
     private orderPaymentService: OrderPaymentService
   ) {}
 
-  // ===== STATISTICS =====
+  // ==================================================================
+  // 1. SPECIFIC ROUTES (MUST BE DEFINED BEFORE :orderId)
+  // ==================================================================
 
+  // ===== STATISTICS (User) =====
   @Get('stats/summary')
   async getOrderStats(@Req() req: AuthenticatedRequest) {
     return this.ordersService.getUserOrderStats(req.user._id);
   }
 
-  // ===== GET ORDERS =====
+  // ===== ASTROLOGER ROUTES (Specific) =====
+  // moved UP to prevent collision with :orderId
+  
+  /**
+   * Get astrologer's orders
+   * GET /orders/astrologer/my-orders
+   */
+  @Get('astrologer/my-orders')
+  async getAstrologerOrders(
+    @Req() req: AuthenticatedRequest,
+    @Query('page') page: string = '1',
+    @Query('limit') limit: string = '20',
+    @Query('status') status?: string,
+    @Query('type') type?: 'chat' | 'call' | 'conversation'
+  ) {
+    return this.ordersService.getAstrologerOrders(
+      req.user._id,
+      {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        status,
+        type
+      }
+    );
+  }
 
+  /**
+   * Get astrologer order details
+   * GET /orders/astrologer/:orderId
+   * Note: This is specific enough ('astrologer/' prefix) but still safer up here.
+   */
+  @Get('astrologer/:orderId')
+  async getAstrologerOrderDetails(
+    @Param('orderId') orderId: string,
+    @Req() req: AuthenticatedRequest
+  ) {
+    return this.ordersService.getAstrologerOrderDetails(orderId, req.user._id);
+  }
+
+  // ===== CONVERSATION ROUTES (Specific) =====
+
+  @Get('conversations')
+  async getUserConversations(
+    @Req() req: AuthenticatedRequest,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number
+  ) {
+    return this.ordersService.getUserConversations(req.user._id, page, limit);
+  }
+
+  @Get('conversations/:orderId/stats')
+  async getConversationStats(
+    @Param('orderId') orderId: string,
+    @Req() req: AuthenticatedRequest
+  ) {
+    return this.ordersService.getConversationStats(orderId, req.user._id);
+  }
+
+  // ==================================================================
+  // 2. GENERIC ROUTES
+  // ==================================================================
+
+  // ===== GET USER ORDERS (Search) =====
   @Get()
   async getOrders(
     @Req() req: AuthenticatedRequest,
@@ -62,27 +125,12 @@ export class OrdersController {
     );
   }
 
-    // ===== GET ALL USER CONVERSATIONS =====
-@Get('conversations')
-async getUserConversations(
-  @Req() req: AuthenticatedRequest,
-  @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-  @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number
-) {
-  return this.ordersService.getUserConversations(req.user._id, page, limit);
-}
-
-// ===== GET CONVERSATION STATISTICS =====
-@Get('conversations/:orderId/stats')
-async getConversationStats(
-  @Param('orderId') orderId: string,
-  @Req() req: AuthenticatedRequest
-) {
-  return this.ordersService.getConversationStats(orderId, req.user._id);
-}
+  // ==================================================================
+  // 3. PARAMETERIZED ROUTES (:orderId)
+  // (Must be LAST to avoid intercepting specific paths)
+  // ==================================================================
 
   // ===== GET SINGLE ORDER =====
-
   @Get(':orderId')
   async getOrderDetails(
     @Param('orderId') orderId: string,
@@ -91,8 +139,7 @@ async getConversationStats(
     return this.ordersService.getOrderDetails(orderId, req.user._id);
   }
 
-  // ===== GET CONSULTATION SPACE (All sessions in order) =====
-
+  // ===== GET CONSULTATION SPACE =====
   @Get(':orderId/consultation-space')
   async getConsultationSpace(
     @Param('orderId') orderId: string,
@@ -102,7 +149,6 @@ async getConversationStats(
   }
 
   // ===== GET RECORDING =====
-
   @Get(':orderId/recording')
   async getOrderRecording(
     @Param('orderId') orderId: string,
@@ -111,63 +157,26 @@ async getConversationStats(
     return this.ordersService.getOrderRecording(orderId, req.user._id);
   }
 
-  // ===== ADD REVIEW =====
-
- @Get(':orderId/review-status')
-async getReviewStatus(
-  @Param('orderId') orderId: string,
-  @Req() req: AuthenticatedRequest
-) {
-  const order = await this.ordersService.getOrderDetails(orderId, req.user._id);
-  
-  return {
-    success: true,
-    data: {
-      orderId,
-      reviewGiven: order.data.reviewGiven,
-      reviewGivenAt: order.data.reviewGivenAt,
-      canReview: order.data.status === 'completed' && !order.data.reviewGiven
-    }
-  };
-}
-
-/**
- * Get astrologer's orders
- * GET /orders/astrologer/my-orders
- */
-@Get('astrologer/my-orders')
-async getAstrologerOrders(
-  @Req() req: AuthenticatedRequest,
-  @Query('page') page: string = '1',
-  @Query('limit') limit: string = '20',
-  @Query('status') status?: string,
-  @Query('type') type?: 'chat' | 'call' | 'conversation'
-) {
-  return this.ordersService.getAstrologerOrders(
-    req.user._id,
-    {
-      page: parseInt(page),
-      limit: parseInt(limit),
-      status,
-      type
-    }
-  );
-}
-
-/**
- * Get astrologer order details
- * GET /orders/astrologer/:orderId
- */
-@Get('astrologer/:orderId')
-async getAstrologerOrderDetails(
-  @Param('orderId') orderId: string,
-  @Req() req: AuthenticatedRequest
-) {
-  return this.ordersService.getAstrologerOrderDetails(orderId, req.user._id);
-}
+  // ===== REVIEW STATUS =====
+  @Get(':orderId/review-status')
+  async getReviewStatus(
+    @Param('orderId') orderId: string,
+    @Req() req: AuthenticatedRequest
+  ) {
+    const order = await this.ordersService.getOrderDetails(orderId, req.user._id);
+    
+    return {
+      success: true,
+      data: {
+        orderId,
+        reviewGiven: order.data.reviewGiven,
+        reviewGivenAt: order.data.reviewGivenAt,
+        canReview: order.data.status === 'completed' && !order.data.reviewGiven
+      }
+    };
+  }
 
   // ===== CANCEL ORDER =====
-
   @Patch(':orderId/cancel')
   async cancelOrder(
     @Param('orderId') orderId: string,
@@ -183,7 +192,6 @@ async getAstrologerOrderDetails(
   }
 
   // ===== REQUEST REFUND =====
-
   @Post(':orderId/refund/request')
   async requestRefund(
     @Param('orderId') orderId: string,
@@ -198,7 +206,6 @@ async getAstrologerOrderDetails(
   }
 
   // ===== GET REFUND STATUS =====
-
   @Get(':orderId/refund/status')
   async getRefundStatus(
     @Param('orderId') orderId: string,
@@ -207,8 +214,7 @@ async getAstrologerOrderDetails(
     return this.ordersService.getRefundStatus(orderId, req.user._id);
   }
 
-  // ===== EXTEND SESSION (Continue consultation) =====
-
+  // ===== EXTEND SESSION =====
   @Post(':orderId/extend')
   async extendSession(
     @Param('orderId') orderId: string,
@@ -218,8 +224,7 @@ async getAstrologerOrderDetails(
     return this.ordersService.continueConsultation(orderId, req.user._id);
   }
 
-  // ===== CALCULATE MAX DURATION (For frontend) =====
-
+  // ===== CALCULATE MAX DURATION =====
   @Get(':orderId/max-duration')
   async getMaxDuration(
     @Param('orderId') orderId: string,

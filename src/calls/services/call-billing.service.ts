@@ -19,15 +19,22 @@ export class CallBillingService {
 
   /**
    * ✅ Calculate billing for a call
+   * Enforces minimum 1 minute charge logic
    */
   calculateBilling(
     durationSeconds: number,
     ratePerMinute: number,
     commissionRate: number = 20
   ): any {
-    // Round up to nearest minute for billing
-    const billedMinutes = Math.ceil(durationSeconds / 60);
-    const billedDuration = billedMinutes * 60; // Convert back to seconds
+    // ✅ Logic: 
+    // 0-60s -> 1 min
+    // 61-120s -> 2 mins
+    // If duration is 0 but call started, usually we typically charge 1 min if connected
+    
+    let billedMinutes = Math.ceil(durationSeconds / 60);
+    if (billedMinutes < 1) billedMinutes = 1; // Enforce minimum 1 min
+
+    const billedDuration = billedMinutes * 60; 
     const totalAmount = billedMinutes * ratePerMinute;
     const platformCommission = (totalAmount * commissionRate) / 100;
     const astrologerEarning = totalAmount - platformCommission;
@@ -42,7 +49,7 @@ export class CallBillingService {
   }
 
   /**
-   * ✅ Process call billing after call ends (charge from hold)
+   * ✅ Process call billing after call ends
    */
   async processCallBilling(sessionId: string): Promise<any> {
     const session = await this.sessionModel.findOne({ sessionId });
@@ -58,10 +65,10 @@ export class CallBillingService {
     const billing = this.calculateBilling(
       session.duration,
       session.ratePerMinute,
-      20 // 20% platform commission
+      20
     );
 
-    // Update session with billing details
+    // Update session
     session.billedDuration = billing.billedDuration;
     session.billedMinutes = billing.billedMinutes;
     session.totalAmount = billing.totalAmount;
@@ -70,70 +77,37 @@ export class CallBillingService {
     session.isPaid = true;
     session.paidAt = new Date();
 
-    // Do NOT charge from hold here; that is handled by OrdersService.completeSession.
-// This service only computes and persists billing analytics.
-await session.save();
+    await session.save();
 
-this.logger.log(
-  `Billing computed: ${sessionId} | Billed: ${billing.billedMinutes}m | Amount: ₹${billing.totalAmount}`
-);
-
-return {
-  success: true,
-  message: 'Billing computed successfully',
-  billing: {
-    actualDuration: session.duration,
-    billedMinutes: billing.billedMinutes,
-    totalAmount: billing.totalAmount,
-    platformCommission: billing.platformCommission,
-    astrologerEarning: billing.astrologerEarning
-  }
-};
-
-  }
-
-  /**
-   * ✅ Get billing summary for a call session
-   */
-  async getBillingSummary(sessionId: string): Promise<any> {
-    const session = await this.sessionModel
-      .findOne({ sessionId })
-      .select(
-        'duration billedDuration billedMinutes totalAmount platformCommission astrologerEarning isPaid paidAt'
-      )
-      .lean();
-
-    if (!session) {
-      throw new NotFoundException('Session not found');
-    }
+    this.logger.log(
+      `Billing computed: ${sessionId} | Duration: ${session.duration}s | Billed: ${billing.billedMinutes}m | Amount: ₹${billing.totalAmount}`
+    );
 
     return {
       success: true,
-      data: {
+      message: 'Billing computed successfully',
+      billing: {
         actualDuration: session.duration,
-        billedDuration: session.billedDuration,
-        billedMinutes: session.billedMinutes,
-        totalAmount: session.totalAmount,
-        platformCommission: session.platformCommission,
-        astrologerEarning: session.astrologerEarning,
-        isPaid: session.isPaid,
-        paidAt: session.paidAt
+        billedMinutes: billing.billedMinutes,
+        totalAmount: billing.totalAmount,
+        platformCommission: billing.platformCommission,
+        astrologerEarning: billing.astrologerEarning
       }
     };
   }
 
-  /**
-   * ✅ Real-time billing calculation (for showing to user during call)
-   */
+  async getBillingSummary(sessionId: string): Promise<any> {
+    const session = await this.sessionModel.findOne({ sessionId }).lean();
+    if (!session) throw new NotFoundException('Session not found');
+    return { success: true, data: session };
+  }
+
   async calculateRealTimeBilling(sessionId: string): Promise<any> {
     const session = await this.sessionModel.findOne({ sessionId });
-    if (!session || !session.startTime) {
-      throw new NotFoundException('Session not active');
-    }
+    if (!session || !session.startTime) throw new NotFoundException('Session not active');
 
     const now = new Date();
     const durationSeconds = Math.floor((now.getTime() - session.startTime.getTime()) / 1000);
-
     const billing = this.calculateBilling(durationSeconds, session.ratePerMinute, 20);
 
     return {
