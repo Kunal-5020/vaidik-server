@@ -74,22 +74,37 @@ export class ChatMessageService {
     });
 
     await message.save();
-    await this.updateConversationStats(data.orderId);
+    await this.updateConversationStats(
+      data.orderId, 
+      {
+        content: data.content,
+        type: data.type,
+        sentBy: data.senderId,
+        sentAt: new Date(),
+        isRead: false
+      }
+    );
 
     this.logger.log(`Message created: ${messageId} | Type: ${data.type} | Thread: ${data.orderId}`);
 
     return message;
   }
 
-  private async updateConversationStats(orderId: string): Promise<void> {
+  private async updateConversationStats(
+    orderId: string, 
+    lastMessage?: { content: string; type: string; sentBy: string; sentAt: Date; isRead: boolean }
+  ): Promise<void> {
     try {
-      await this.orderModel.findOneAndUpdate(
-        { orderId },
-        {
-          $inc: { messageCount: 1 },
-          $set: { lastInteractionAt: new Date() }
-        }
-      );
+      const updateData: any = {
+        $inc: { messageCount: 1 },
+        $set: { lastInteractionAt: new Date() }
+      };
+
+      if (lastMessage) {
+        updateData.$set.lastMessage = lastMessage;
+      }
+
+      await this.orderModel.findOneAndUpdate({ orderId }, updateData);
     } catch (error: any) {
       this.logger.error(`Failed to update conversation stats: ${error.message}`);
     }
@@ -99,13 +114,20 @@ export class ChatMessageService {
     orderId: string,
     page: number = 1,
     limit: number = 50,
-    userId?: string
+    userId?: string,
+    role?: 'User' | 'Astrologer'
   ): Promise<any> {
     const skip = (page - 1) * limit;
 
     let visibilityFilter: any = { isDeleted: false, deleteStatus: 'visible' };
 
-    if (userId) {
+    // Apply strict visibility based on role
+    if (role === 'User') {
+      visibilityFilter.isVisibleToUser = true;
+    } else if (role === 'Astrologer') {
+      visibilityFilter.isVisibleToAstrologer = true;
+    } else if (userId) {
+      // Fallback: If no role specified but user exists, show if visible to EITHER
       visibilityFilter.$or = [
         { isVisibleToUser: true },
         { isVisibleToAstrologer: true }

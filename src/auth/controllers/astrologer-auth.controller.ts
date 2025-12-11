@@ -106,6 +106,7 @@ export class AstrologerAuthController {
   @HttpCode(HttpStatus.OK)
   async logout(@Request() req, @Body() body?: { deviceId?: string }) {
     try {
+      console.log('🚪 Logging out astrologer', { user: req.user, body });
       const userId = req.user.userId;
       const astrologerId = req.user.astrologerId;
       const deviceId = body?.deviceId;
@@ -122,26 +123,29 @@ export class AstrologerAuthController {
   }
 
   /**
-   * Get current astrologer profile (check if logged in)
-   */
-  @Post('me')
-  @UseGuards(JwtAuthGuard)
-  @HttpCode(HttpStatus.OK)
-  async getCurrentAstrologer(@Request() req) {
-    try {
-      return {
-        success: true,
-        data: {
-          userId: req.user.userId,
-          astrologerId: req.user.astrologerId,
-          phoneNumber: req.user.phoneNumber,
-          role: req.user.role
-        }
-      };
-    } catch (error) {
-      throw error;
-    }
+ * ✅ FIXED: Get current astrologer profile with FULL DATA
+ */
+@Post('me')
+@UseGuards(JwtAuthGuard)
+@HttpCode(HttpStatus.OK)
+async getCurrentAstrologer(@Request() req) {
+  try {
+    const astrologerId = req.user._id.toString();
+    
+    this.logger.log('👤 Fetching full profile', { astrologerId });
+    
+    // ✅ Fetch COMPLETE profile data from service
+    const profile = await this.astrologerAuthService.getCurrentAstrologerProfile(astrologerId);
+    
+    return {
+      success: true,
+      data: profile  // Returns { user, astrologer } with full data
+    };
+  } catch (error) {
+    this.logger.error('❌ Failed to fetch profile', { error: error.message });
+    throw error;
   }
+}
 
   /**
    * Verify Truecaller OAuth for astrologer login/registration

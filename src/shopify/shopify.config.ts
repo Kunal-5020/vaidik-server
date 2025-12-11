@@ -10,7 +10,19 @@ export class ShopifyConfig {
     if (!shopName) {
       throw new Error('SHOPIFY_SHOP_NAME environment variable is not set');
     }
-    return shopName;
+    return shopName; // e.g. "vaidik-talk"
+  }
+
+  getShopDomain(): string {
+    // ✅ use SHOPIFY_STORE_DOMAIN from your .env
+    const domain =
+      this.configService.get<string>('SHOPIFY_STORE_DOMAIN') ||
+      `${this.getShopName()}.myshopify.com`;
+
+    if (!domain) {
+      throw new Error('SHOPIFY_STORE_DOMAIN environment variable is not set');
+    }
+    return domain; // e.g. "vaidik-talk.myshopify.com"
   }
 
   getAccessToken(): string {
@@ -26,7 +38,7 @@ export class ShopifyConfig {
   }
 
   getBaseUrl(): string {
-    return `https://${this.getShopName()}/admin/api/${this.getApiVersion()}`;
+    return `https://${this.getShopDomain()}/admin/api/${this.getApiVersion()}`;
   }
 
   getHeaders(): Record<string, string> {

@@ -17,6 +17,7 @@ async function bootstrap() {
       'https://vaidik-admin.netlify.app',
       'http://localhost:3001',
       'http://localhost:3000',
+      'http://localhost:5000'
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],

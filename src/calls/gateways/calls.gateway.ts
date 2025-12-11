@@ -189,6 +189,96 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  // ------------------------------------------------------------------
+  // ✅ PUBLIC METHOD: Reject Call (Astrologer -> User)
+  // ------------------------------------------------------------------
+  public async rejectCall(sessionId: string, astrologerId: string, reason: string) {
+    this.logger.log(`📱 REST request to reject call: ${sessionId}`);
+
+    // 1. Perform DB Update
+    const result = await this.callSessionService.rejectCall(
+      sessionId,
+      astrologerId,
+      reason
+    );
+
+    // 2. Notify User (Stop Waiting Screen)
+    const userData = Array.from(this.activeUsers.values()).find(
+      (u) => u.sessionId === sessionId && u.role === 'user'
+    );
+
+    if (userData) {
+      this.server.to(userData.socketId).emit('call_rejected', {
+        sessionId: sessionId,
+        reason: reason || 'Call rejected by astrologer',
+        timestamp: new Date(),
+      });
+      this.logger.log(`📤 Emitted 'call_rejected' to user ${userData.userId}`);
+    } else {
+      // Fallback emit to room
+      this.server.to(sessionId).emit('call_rejected', {
+        sessionId: sessionId,
+        reason: reason || 'Call rejected by astrologer',
+        timestamp: new Date(),
+      });
+    }
+
+    return result;
+  }
+
+  // ------------------------------------------------------------------
+  // ✅ PUBLIC METHOD: Cancel Call (User -> Astrologer)
+  // ------------------------------------------------------------------
+  public async cancelCallRequest(sessionId: string, userId: string, reason: string) {
+    this.logger.log(`📱 REST request to cancel call: ${sessionId}`);
+
+    // 1. Perform DB Update
+    const result = await this.callSessionService.cancelCall(
+      sessionId,
+      userId,
+      reason,
+      'user'
+    );
+
+    // 2. Notify Astrologer (Stop Ringing)
+    // We need to find the astrologer for this session
+    // Since we might not have the astrologerId passed in, we rely on the astrologerSockets map or room
+    
+    // Attempt to find session details to get astrologerId if needed, 
+    // or simply emit to the session room if the astrologer joined it (unlikely during ringing).
+    // Better strategy: Use the specific Astrologer Socket map if we have it, or broadcast to room.
+    
+    // Often during ringing, the astrologer hasn't "joined" the room yet, but they are registered in 'astrologerSockets'
+    // We can emit to the specific astrologer if we know their ID, or broadcast to the room.
+    
+    // For safety, let's emit to the 'sessionId' room. 
+    // *Constraint:* The astrologer app must be listening to this event. 
+    // If the astrologer hasn't joined the room yet (common for incoming calls), 
+    // we should use the 'astrologerSockets' map if available.
+    
+    const session = await this.callSessionService.getSession(sessionId);
+    if (session && session.astrologerId) {
+        const astroSocketId = this.astrologerSockets.get(session.astrologerId.toString());
+        if (astroSocketId) {
+            this.server.to(astroSocketId).emit('call_cancelled', {
+                sessionId: sessionId,
+                reason: reason,
+                timestamp: new Date()
+            });
+             this.logger.log(`📤 Emitted 'call_cancelled' to astrologer ${session.astrologerId}`);
+        }
+    }
+
+    // Also emit to the room in case they joined
+    this.server.to(sessionId).emit('call_cancelled', {
+        sessionId: sessionId,
+        reason: reason,
+        timestamp: new Date()
+    });
+
+    return result;
+  }
+
   // ===== REJECT CALL =====
   @SubscribeMessage('reject_call')
   async handleRejectCall(
@@ -396,7 +486,13 @@ if (astroSocket) {
     }
   }
 
-
+private stopSessionTimer(sessionId: string) {
+    if (this.sessionTimers.has(sessionId)) {
+      clearInterval(this.sessionTimers.get(sessionId)!);
+      this.sessionTimers.delete(sessionId);
+      this.logger.log(`🛑 Timer STOPPED immediately for ${sessionId}`);
+    }
+  }
 
   // ===== START CALL =====
   @SubscribeMessage('start_call')
@@ -427,49 +523,43 @@ if (astroSocket) {
 
   // ===== REAL-TIME TIMER TICKER =====
 private startTimerTicker(sessionId: string, maxDurationSeconds: number) {
-  let secondsElapsed = 0;
-  const ticker = setInterval(() => {
-    secondsElapsed++;
-    const remainingSeconds = Math.max(0, maxDurationSeconds - secondsElapsed + 1);
+    let secondsElapsed = 0;
 
-    if (secondsElapsed >= maxDurationSeconds) {
-      clearInterval(ticker);
-      this.sessionTimers.delete(sessionId);
-      this.endCallInternal(sessionId, 'system', 'timeout').catch(console.error);
-      return;
-    }
+    // Clear existing timer if any
+    this.stopSessionTimer(sessionId);
 
-    // ✅ SAFE EMIT: Multiple fallbacks
-    const payload = {
-      sessionId,
-      elapsedSeconds: secondsElapsed - 1,
-      remainingSeconds,
-      maxDuration: maxDurationSeconds,
-    };
+    const ticker = setInterval(async () => {
+      secondsElapsed++;
+      // ✅ Calculation Fix: Ensure we don't go negative or start late
+      const remainingSeconds = Math.max(0, maxDurationSeconds - secondsElapsed);
 
-    try {
-      // 1. Room emit (if exists)
-      this.server.to(sessionId).emit('timer_tick', payload);
-      
-      // 2. Individual active users
-      const clients = Array.from(this.activeUsers.values())
-        .filter(u => u.sessionId === sessionId);
-      
-      clients.forEach(({ socketId }) => {
-        this.server.to(socketId).emit('timer_tick', payload);
+      if (secondsElapsed >= maxDurationSeconds) {
+        this.stopSessionTimer(sessionId); // Stop locally first
+        try {
+          await this.endCallInternal(sessionId, 'system', 'timeout');
+        } catch (error) {
+          this.logger.error(`Auto-end call error: ${error}`);
+        }
+        return;
+      }
+
+      this.server.to(sessionId).emit('timer_tick', {
+        elapsedSeconds: secondsElapsed,
+        remainingSeconds: remainingSeconds,
+        maxDuration: maxDurationSeconds,
       });
-      
-      this.logger.debug(`⏱️ Tick ${secondsElapsed}s → ${clients.length} clients`);
-      
-    } catch (e) {
-      this.logger.warn(`Timer emit failed ${sessionId}:`, e.message);
-    }
-  }, 1000);
 
-  this.sessionTimers.set(sessionId, ticker);
-}
+      if (remainingSeconds === 60) {
+        this.server.to(sessionId).emit('timer_warning', {
+          message: '1 minute remaining',
+          remainingSeconds: 60,
+          timestamp: new Date()
+        });
+      }
+    }, 1000);
 
-
+    this.sessionTimers.set(sessionId, ticker);
+  }
 
 
   private formatTime(seconds: number): string {
@@ -621,6 +711,45 @@ async handleConnectionQuality(
   }
 }
 
+// ------------------------------------------------------------------
+  // ✅ NEW PUBLIC METHOD: Call this from CallController
+  // ------------------------------------------------------------------
+  public async notifyUserOfAcceptance(sessionId: string, astrologerId: string) {
+    // 1. Find the User's socket ID using the sessionId
+    const userData = Array.from(this.activeUsers.values()).find(
+      (u) => u.sessionId === sessionId && u.role === 'user'
+    );
+
+    if (userData) {
+      // 2. Emit the event explicitly to the user
+      this.server.to(userData.socketId).emit('call_accepted', {
+        sessionId: sessionId,
+        astrologerId: astrologerId,
+        message: 'Astrologer accepted your call',
+        timestamp: new Date(),
+      });
+      this.logger.log(`📤 Emitted 'call_accepted' to user ${userData.userId} for session ${sessionId}`);
+    } else {
+      // Fallback: Emit to the room just in case
+      this.server.to(sessionId).emit('call_accepted', {
+        sessionId: sessionId,
+        astrologerId: astrologerId,
+        message: 'Astrologer accepted your call',
+        timestamp: new Date(),
+      });
+      this.logger.warn(`⚠️ User socket not found in active map for session ${sessionId}, emitted to room.`);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // ✅ NEW PUBLIC METHOD: Call this from CallController to End Call
+  // ------------------------------------------------------------------
+  public async terminateCall(sessionId: string, endedBy: string, reason: string) {
+    this.logger.log(`📱 REST request to end call: ${sessionId} by ${endedBy}`);
+    // Reuse the existing internal logic that handles timers, recordings, and socket events
+    return this.endCallInternal(sessionId, endedBy, reason);
+  }
+
   // ===== END CALL =====
   @SubscribeMessage('end_call')
   async handleEndCall(
@@ -628,6 +757,7 @@ async handleConnectionQuality(
     @MessageBody() data: { sessionId: string; endedBy: string; reason: string }
   ) {
     try {
+      this.stopSessionTimer(data.sessionId);
       // ✅ STOP RECORDING
       let recordingUrl, recordingS3Key, recordingDuration;
       
@@ -706,6 +836,7 @@ private async endCallInternal(
 ): Promise<any> {
   // ✅ STOP RECORDING
   let recordingUrl, recordingS3Key, recordingDuration;
+  this.stopSessionTimer(sessionId);
   
   // ✅ STOP RECORDING
 if (this.activeRecordings.has(sessionId)) {
@@ -735,7 +866,7 @@ if (this.activeRecordings.has(sessionId)) {
     this.sessionTimers.delete(sessionId);
     this.logger.log(`🛑 Timer STOPPED for ${sessionId}`);
   }
- 
+
   // ✅ PROCESS BILLING
   try {
     const billingResult = await this.callBillingService.processCallBilling(sessionId);

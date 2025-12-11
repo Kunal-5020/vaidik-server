@@ -84,7 +84,8 @@ async verifyOTP(verifyOtpDto: VerifyOtpDto): Promise<any> {
         success: true,
         message: 'OTP verified successfully',
         data: {
-          isValid: true, // ✅ CHANGED: was 'verified'
+          isValid: true,
+          isNewUser: false, // ✅ CHANGED: was 'verified'
           existingRegistration: {
             ticketNumber: existingRegistration.ticketNumber,
             name: existingRegistration.name,
@@ -114,6 +115,7 @@ async verifyOTP(verifyOtpDto: VerifyOtpDto): Promise<any> {
       message: 'OTP verified successfully. Please complete your registration.',
       data: {
         isValid: true, // ✅ CHANGED: was 'verified'
+        isNewUser: true,
         existingRegistration: null // ✅ ADDED: frontend expects this field
       }
     };

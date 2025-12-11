@@ -1,5 +1,5 @@
 // src/auth/services/astrologer-auth.service.ts (COMPLETELY REWRITTEN)
-import { Injectable, BadRequestException, UnauthorizedException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, UnauthorizedException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
@@ -119,6 +119,32 @@ export class AstrologerAuthService {
       });
     }
   }
+
+  /**
+ * ✅ NEW: Get complete astrologer profile
+ */
+async getCurrentAstrologerProfile(astrologerId: string) {
+  try {
+    // ✅ await + lean to get plain object
+    const astrologer = await this.astrologerModel
+      .findById(astrologerId)
+      .lean()
+      .exec();
+
+    if (!astrologer) {
+      throw new NotFoundException('Astrologer profile not found');
+    }
+
+    // Optionally strip internal fields
+    const { __v, ...safeAstrologer } = astrologer as any;
+
+    return { astrologer: safeAstrologer };
+  } catch (error) {
+    this.logger.error('Failed to fetch profile', { error: (error as any).message });
+    throw error;
+  }
+}
+
 
   /**
    * ✅ FIXED: Check if phone number has approved astrologer account

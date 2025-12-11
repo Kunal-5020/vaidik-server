@@ -14,7 +14,8 @@ import {
   ValidationPipe,
   NotFoundException,
   BadRequestException,
-  Delete
+  Delete,
+  ForbiddenException
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { ChatSessionService } from '../services/chat-session.service';
@@ -211,22 +212,125 @@ async getAstrologerChatSessionDetails(
   return this.chatSessionService.getAstrologerChatSessionDetails(sessionId, req.user._id);
 }
 
+@Get('astrologer/conversations/:orderId/messages')
+  async getAstrologerConversationMessages(
+    @Param('orderId') orderId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Req() req: AuthenticatedRequest
+  ) {
+    // 1. Validate Order Ownership for Astrologer
+    // We call a specific service method (defined below) or you can use your generic findOne
+    const orderDetails = await this.ordersService.getAstrologerOrderDetails(
+      orderId, 
+      req.user._id
+    );
+
+    const order = orderDetails.data;
+
+    // Double check (Safety)
+    if (order.astrologerId?._id?.toString() !== req.user._id.toString()) {
+      throw new ForbiddenException('You are not the authorized astrologer for this conversation');
+    }
+
+    // 2. Fetch Messages with Strict 'Astrologer' Role
+    // This ensures they see what is 'isVisibleToAstrologer'
+    const messagesResult = await this.chatMessageService.getConversationMessages(
+      orderId,
+      page,
+      limit,
+      req.user._id,
+      'Astrologer' // <--- HARDCODED ROLE
+    );
+
+    // 3. Extract Meta Data
+    const astrologer: any = order.astrologerId;
+    const user: any = order.userId;
+
+    return { 
+      success: true, 
+      data: {
+        ...messagesResult,
+        meta: {
+          role: 'Astrologer',
+          isRestricted: !order.userPrivacy?.allowChatHistory, // Example: Check privacy flag if needed
+          astrologer: {
+            _id: astrologer?._id,
+            name: astrologer?.name,
+            profilePicture: astrologer?.profilePicture,
+            currentRate: astrologer?.pricing?.chat,
+          },
+          user: {
+            _id: user?._id,
+            name: user?.name,
+            profilePicture: user?.profilePicture,
+            // Include privacy settings so frontend can block media downloads etc.
+            privacy: user?.privacy || {} 
+          }
+        }
+      } 
+    };
+  }
+
+
 // ===== GET ALL CONVERSATION MESSAGES (across all sessions) =====
 @Get('conversations/:orderId/messages')
-async getConversationMessages(
-  @Param('orderId') orderId: string,
-  @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-  @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
-  @Req() req: AuthenticatedRequest
-) {
-  const result = await this.chatMessageService.getConversationMessages(
-    orderId,
-    page,
-    limit,
-    req.user._id
-  );
-  return { success: true, data: result };
-}
+  async getConversationMessages(
+    @Param('orderId') orderId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Req() req: AuthenticatedRequest
+  ) {
+    // 1. Fetch Order Details FIRST to determine the role of the requester
+    // We assume getOrderDetails checks if req.user._id is a participant (User OR Astrologer)
+    const orderDetails = await this.ordersService.getOrderDetails(orderId, req.user._id);
+    const order = orderDetails.data;
+    
+    // 2. Determine the Role (User or Astrologer)
+    // We compare strings to ensure ObjectId matching works
+    const isAstrologer = order.astrologerId?._id?.toString() === req.user._id.toString();
+    const isUser = order.userId?._id?.toString() === req.user._id.toString();
+
+    // Determine role for visibility filtering
+    let role: 'User' | 'Astrologer' = 'User'; // Default
+    if (isAstrologer) role = 'Astrologer';
+    else if (isUser) role = 'User';
+
+    // 3. Fetch Messages with the specific Role
+    const messagesResult = await this.chatMessageService.getConversationMessages(
+      orderId,
+      page,
+      limit,
+      req.user._id,
+      role // <--- Pass the determined role here
+    );
+
+    // 4. Extract Populated Fields for Meta Response
+    const astrologer: any = order.astrologerId;
+    const user: any = order.userId; 
+
+    return { 
+      success: true, 
+      data: {
+        ...messagesResult, // Spread pagination & messages
+        meta: {
+          role: role, // Optional: Return the detected role for frontend reference
+          astrologer: {
+            _id: astrologer?._id,
+            name: astrologer?.name,
+            profilePicture: astrologer?.profilePicture,
+            currentRate: astrologer?.pricing?.chat,
+          },
+          user: {
+            _id: user?._id,
+            name: user?.name,
+            profilePicture: user?.profilePicture,
+            privacy: user?.privacy || {} 
+          }
+        }
+      } 
+    };
+  }
 
 // ===== GET CONVERSATION SUMMARY =====
 @Get('conversations/:orderId/summary')
@@ -250,7 +354,10 @@ async getConversationSummary(
           profilePicture: astrologerData.profilePicture,
           experienceYears: astrologerData.experienceYears,
           specializations: astrologerData.specializations,
-          rating: astrologerData.ratings?.average || 0
+          rating: astrologerData.ratings?.average || 0,
+          chatRate: astrologerData.pricing?.chat || 0,
+          callRate: astrologerData.pricing?.call || 0,
+          videoCallRate: astrologerData.pricing?.videoCall || 0
         },
         // Also pass rate from order if needed for display
         ratePerMinute: order.data.ratePerMinute,
@@ -342,42 +449,19 @@ async getStarredMessages(
 }
 
 @Get('sessions/:sessionId/search')
-async searchMessages(
-  @Param('sessionId') sessionId: string,
-  @Query('q') query: string,
-  @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-  @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number
-) {
-  if (!query || query.trim().length === 0) {
-    throw new BadRequestException('Search query is required');
+  async searchMessages(
+    @Param('sessionId') sessionId: string,
+    @Query('q') query: string,
+    @Query('page') page: number
+  ) {
+    // Works via HTTP, returns filtered list
+    return this.chatMessageService.searchMessages(sessionId, query, page);
   }
-
-  const result = await this.chatMessageService.searchMessages(sessionId, query, page, limit);
-  return { success: true, data: result };
-}
 
 @Post('messages/:messageId/star')
-async starMessage(
-  @Param('messageId') messageId: string,
-  @Body('sessionId') sessionId: string,
-  @Req() req: AuthenticatedRequest
-) {
-  const message = await this.chatMessageService.starMessage(messageId, req.user._id);
-  
-  if (!message) {
-    throw new BadRequestException('Failed to star message');
+  async starMessage(@Param('messageId') messageId: string, @Req() req) {
+    return this.chatMessageService.starMessage(messageId, req.user._id);
   }
-
-  return { 
-    success: true, 
-    message: 'Message starred',
-    data: {
-      messageId,
-      isStarred: true,
-      starredBy: message.starredBy,
-    }
-  };
-}
 
 @Delete('messages/:messageId/star')
 async unstarMessage(
@@ -403,40 +487,17 @@ async unstarMessage(
 }
 
 @Post('messages/:messageId/delete')
-async deleteMessage(
-  @Param('messageId') messageId: string,
-  @Body('deleteFor') deleteFor: 'sender' | 'everyone',
-  @Req() req: AuthenticatedRequest
-) {
-  await this.chatMessageService.deleteMessage(
-    messageId,
-    req.user._id,
-    deleteFor
-  );
-
-  return { 
-    success: true, 
-    message: 'Message deleted',
-    data: { messageId, deleteFor }
-  };
-}
+  async deleteMessage(
+    @Param('messageId') messageId: string,
+    @Body('deleteFor') deleteFor: 'sender' | 'everyone',
+    @Req() req
+  ) {
+    return this.chatMessageService.deleteMessage(messageId, req.user._id, deleteFor);
+  }
 
 @Get('conversations/:orderId/starred')
-async getConversationStarredMessages(
-  @Param('orderId') orderId: string,
-  @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-  @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit: number,
-  @Req() req: AuthenticatedRequest
-) {
-  // Get all starred messages across all sessions in conversation
-  const result = await this.chatMessageService.getConversationStarredMessages(
-    orderId,
-    req.user._id,
-    page,
-    limit
-  );
-  
-  return { success: true, data: result };
+  async getConversationStarredMessages(@Param('orderId') orderId: string, @Req() req) {
+    return this.chatMessageService.getConversationStarredMessages(orderId, req.user._id);
+  }
 }
 
-}

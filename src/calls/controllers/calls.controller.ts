@@ -19,6 +19,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { CallSessionService } from '../services/call-session.service';
 import { EndCallDto, InitiateCallDto } from '../dto';
 import { CallBillingService } from '../services/call-billing.service';
+import { CallGateway } from '../gateways/calls.gateway';
 
 interface AuthenticatedRequest extends Request {
   user: { _id: string };
@@ -29,7 +30,8 @@ interface AuthenticatedRequest extends Request {
 export class CallController {
   constructor(
     private callSessionService: CallSessionService,
-    private callBillingService: CallBillingService 
+    private callBillingService: CallBillingService,
+    private callGateway: CallGateway
   ) {}
 
   // ===== GET STATISTICS =====
@@ -87,7 +89,7 @@ export class CallController {
     @Req() req: AuthenticatedRequest,
     @Body(ValidationPipe) endDto: EndCallDto
   ) {
-    const result = await this.callSessionService.endSession(
+    const result = await this.callGateway.terminateCall(
       endDto.sessionId,
       req.user._id,
       endDto.reason || 'user_ended'
@@ -112,6 +114,7 @@ async acceptCallAsAstrologer(
 
   const astrologerId = req.user._id;
   const result = await this.callSessionService.acceptCall(sessionId, astrologerId);
+  await this.callGateway.notifyUserOfAcceptance(sessionId, astrologerId);
 
   return {
     success: true,
@@ -134,11 +137,11 @@ async rejectCallAsAstrologer(
   const astrologerId = req.user._id;
   const rejectReason = reason || 'astrologer_rejected';
 
-  const result = await this.callSessionService.rejectCall(
-    sessionId,
-    astrologerId,
-    rejectReason,
-  );
+  const result = await this.callGateway.rejectCall(
+      sessionId,
+      astrologerId,
+      rejectReason
+    );
 
   return {
     success: true,
@@ -201,12 +204,16 @@ async getAstrologerCallSessionDetails(
       throw new BadRequestException('Cancellation reason must be at least 5 characters');
     }
 
-    return this.callSessionService.cancelCall(
+   const result = await this.callGateway.cancelCallRequest(
       sessionId,
       req.user._id,
-      reason,
-      'user'
+      reason || 'user_cancelled'
     );
+    return {
+      success: true,
+      message: 'Call cancelled successfully',
+      data: result // Note: cancelCallRequest returns { success: true, message: ... } usually
+    };
   }
 
   // ===== GET CALL SESSION DETAILS =====

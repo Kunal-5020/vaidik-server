@@ -29,6 +29,23 @@ export class Order {
   })
   type: string;
 
+  @Prop({
+    type: {
+      content: String,
+      type: String, // text, image, audio, etc.
+      sentBy: String,
+      sentAt: Date,
+      isRead: Boolean
+    }
+  })
+  lastMessage?: {
+    content: string;
+    type: string;
+    sentBy: string;
+    sentAt: Date;
+    isRead: boolean;
+  };
+
   @Prop({ enum: ['audio', 'video'] })
   callType?: string;
 

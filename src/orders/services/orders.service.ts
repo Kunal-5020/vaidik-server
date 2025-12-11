@@ -361,11 +361,11 @@ export class OrdersService {
       this.orderModel
         .find({
           userId: this.toObjectId(userId),
-          type: 'conversation',
+          type: 'conversation', // Ensures we get threads, not individual session records
           isDeleted: false
         })
-        .populate('astrologerId', 'name profilePicture isOnline experienceYears ratings')
-        .sort({ lastInteractionAt: -1 })
+        .populate('astrologerId', 'name profilePicture isOnline specializations') // Fetch specific fields
+        .sort({ lastInteractionAt: -1 }) // Most recent first
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -376,19 +376,45 @@ export class OrdersService {
       })
     ]);
 
+    // ✅ MAP Data to required format
+    const formattedConversations = conversations.map(conv => {
+      const astrologer = conv.astrologerId as any; // Cast for TS
+      
+      // Determine Category
+      let category = 'none';
+      if (conv.totalChatSessions > 0 && conv.totalCallSessions > 0) {
+        category = 'both';
+      } else if (conv.totalChatSessions > 0) {
+        category = 'chat';
+      } else if (conv.totalCallSessions > 0) {
+        category = 'call';
+      }
+
+      return {
+        orderId: conv.orderId,
+        conversationThreadId: conv.conversationThreadId,
+        astrologer: {
+          _id: astrologer?._id,
+          name: astrologer?.name || 'Unknown',
+          profilePicture: astrologer?.profilePicture,
+          isOnline: astrologer?.isOnline
+        },
+        lastMessage: conv.lastMessage ? {
+          content: conv.lastMessage.content,
+          type: conv.lastMessage.type,
+          sentAt: conv.lastMessage.sentAt,
+          isRead: conv.lastMessage.isRead
+        } : null,
+        category, // 'chat', 'call', 'both', or 'none'
+        unreadCount: 0, // You can fetch real unread count from ChatMessageService if needed
+        updatedAt: conv.lastInteractionAt || conv.createdAt
+      };
+    });
+
     return {
       success: true,
       data: {
-        conversations: conversations.map(conv => ({
-          orderId: conv.orderId,
-          conversationThreadId: conv.conversationThreadId,
-          astrologer: conv.astrologerId,
-          totalSessions: conv.totalSessions,
-          totalMessages: conv.messageCount,
-          totalSpent: conv.totalAmount,
-          lastInteractionAt: conv.lastInteractionAt,
-          createdAt: conv.createdAt
-        })),
+        conversations: formattedConversations,
         pagination: {
           page,
           limit,
@@ -747,9 +773,14 @@ async getAstrologerOrders(
     type?: string;
   }
 ): Promise<any> {
+
+  let astrologerObjectId: Types.ObjectId;
+  
+    astrologerObjectId = this.toObjectId(astrologerId);
+
   const query: any = {
-    astrologerId: this.toObjectId(astrologerId),
-    isDeleted: false
+    astrologerId: astrologerObjectId,
+    isDeleted: false,
   };
 
   if (filters.status) {
@@ -762,31 +793,108 @@ async getAstrologerOrders(
 
   const skip = (filters.page - 1) * filters.limit;
 
-  const [orders, total] = await Promise.all([
-    this.orderModel
-      .find(query)
-      .populate('userId', 'name profileImage phoneNumber')
-      .select('-isDeleted')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(filters.limit)
-      .lean(),
-    this.orderModel.countDocuments(query)
-  ]);
+  try {
+    const [orders, total] = await Promise.all([
+      this.orderModel
+        .find(query)
+        .populate('userId', 'name profileImage phoneNumber')
+        .select('-isDeleted')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(filters.limit)
+        .lean(),
+      this.orderModel.countDocuments(query),
+    ]);
 
-  return {
-    success: true,
-    data: {
-      orders,
+    // ✅ Log 7: Sample order data (first order only, for inspection)
+    if (orders.length > 0) {
+      this.logger.log('📝 [getAstrologerOrders] Sample order (first)', {
+        orderId: orders[0].orderId,
+        type: orders[0].type,
+        status: orders[0].status,
+        userId: orders[0].userId,
+        astrologerId: orders[0].astrologerId?.toString(),
+        createdAt: orders[0].createdAt,
+        hasSessionHistory: !!orders[0].sessionHistory,
+        sessionCount: orders[0].sessionHistory?.length || 0,
+      });
+    } else {
+      // ✅ Log 8: Empty result investigation
+      this.logger.warn('⚠️  [getAstrologerOrders] No orders found - Running diagnostics...');
+      
+      // Check if astrologer has ANY orders (ignoring filters)
+      const anyOrders = await this.orderModel.countDocuments({
+        astrologerId: astrologerObjectId,
+      });
+      
+      // Check orders with this astrologer regardless of isDeleted
+      const anyOrdersIncludingDeleted = await this.orderModel.countDocuments({
+        astrologerId: astrologerObjectId,
+        isDeleted: false,
+      });
+
+      // Check all conversation-type orders for this astrologer
+      const conversationOrders = await this.orderModel.countDocuments({
+        astrologerId: astrologerObjectId,
+        type: 'conversation',
+        isDeleted: false,
+      });
+
+      this.logger.warn('🔬 [getAstrologerOrders] Diagnostic results', {
+        totalOrdersForAstrologer: anyOrders,
+        nonDeletedOrders: anyOrdersIncludingDeleted,
+        conversationTypeOrders: conversationOrders,
+        appliedFilters: {
+          status: filters.status || 'none',
+          type: filters.type || 'none',
+        },
+        possibleIssues: [
+          anyOrders === 0 ? '❌ No orders exist for this astrologer' : null,
+          anyOrders > 0 && anyOrdersIncludingDeleted === 0 ? '❌ All orders are marked as deleted' : null,
+          anyOrdersIncludingDeleted > 0 && conversationOrders === 0 ? '❌ Orders exist but none are type "conversation"' : null,
+          filters.status && anyOrdersIncludingDeleted > 0 ? `⚠️ Status filter "${filters.status}" might be too restrictive` : null,
+          filters.type && anyOrdersIncludingDeleted > 0 ? `⚠️ Type filter "${filters.type}" might be too restrictive` : null,
+        ].filter(Boolean),
+      });
+    }
+
+    // ✅ Log 9: Return data structure
+    this.logger.log('✅ [getAstrologerOrders] Returning response', {
+      success: true,
+      orderCount: orders.length,
       pagination: {
         page: filters.page,
         limit: filters.limit,
         total,
-        pages: Math.ceil(total / filters.limit)
-      }
-    }
-  };
+        pages: Math.ceil(total / filters.limit),
+      },
+    });
+
+    return {
+      success: true,
+      data: {
+        orders,
+        pagination: {
+          page: filters.page,
+          limit: filters.limit,
+          total,
+          pages: Math.ceil(total / filters.limit),
+        },
+      },
+    };
+  } catch (queryError) {
+    // ✅ Log 10: Query execution error
+    this.logger.error('❌ [getAstrologerOrders] Query execution failed', {
+      error: queryError.message,
+      stack: queryError.stack,
+      query: JSON.stringify(query, (key, value) => 
+        value instanceof Types.ObjectId ? value.toString() : value
+      ),
+    });
+    throw queryError;
+  }
 }
+
 
 /**
  * Get astrologer order details
@@ -801,7 +909,7 @@ async getAstrologerOrderDetails(
       astrologerId: this.toObjectId(astrologerId),
       isDeleted: false
     })
-    .populate('userId', 'name profileImage phoneNumber email')
+    .populate('userId', 'name profileImage profilePicture phoneNumber email privacy')
     .lean();
 
   if (!order) {

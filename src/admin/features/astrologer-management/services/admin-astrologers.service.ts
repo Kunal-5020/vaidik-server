@@ -128,7 +128,6 @@ export class AdminAstrologersService {
     const astrologer = await this.astrologerModel
       .findById(astrologerId)
       .populate('registrationId')
-      .populate('userId', 'name email phoneNumber wallet')
       .lean();
 
     if (!astrologer) {

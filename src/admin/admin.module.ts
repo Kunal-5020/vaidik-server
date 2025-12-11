@@ -22,6 +22,7 @@ import { AnalyticsModule } from './features/analytics/analytics.module';
 import { AdminNotificationsModule } from './features/notifications/notifications.module';
 import { MonitoringModule } from './features/monitoring/monitoring.module';
 import { AdminReportsModule } from './features/reports/admin-reports.module';
+import { ReviewModerationModule } from './features/review-moderation/review-moderation.module';
 
 // Admin Management Controller (for managing admins)
 import { AdminManagementController } from './features/admin-management/controllers/admin-management.controller';
@@ -48,6 +49,7 @@ import { AdminManagementService } from './features/admin-management/services/adm
     AdminNotificationsModule,
     MonitoringModule,
     AdminReportsModule,
+    ReviewModerationModule,
   ],
   controllers: [
     AdminManagementController,
