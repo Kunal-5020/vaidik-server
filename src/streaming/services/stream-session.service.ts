@@ -33,68 +33,88 @@ export class StreamSessionService {
   // ==================== INSTANT GO LIVE ====================
 
   async goLive(hostId: string, settings: CreateStreamDto): Promise<any> {
-    const astrologer = await this.astrologerModel.findById(hostId).select('name');
-    if (!astrologer) throw new NotFoundException('Astrologer not found');
+  const astrologer = await this.astrologerModel.findById(hostId).select('name');
+  if (!astrologer) throw new NotFoundException('Astrologer not found');
 
-    const today = new Date();
-    today.setHours(0,0,0,0);
-    const count = await this.streamModel.countDocuments({ 
-      hostId, 
-      createdAt: { $gte: today } 
-    });
-    
-    const title = count === 0 ? astrologer.name : `${astrologer.name} #${count + 1}`;
+  // 🔐 Ensure single active stream per astrologer
+  const existingLiveStream = await this.streamModel.findOne({
+    hostId,
+    status: 'live',
+  });
 
-    const streamId = `LIVE_${Date.now()}_${Math.random().toString(36).substring(7).toUpperCase()}`;
-    const channelName = this.streamAgoraService.generateChannelName();
-    const hostUid = this.streamAgoraService.generateUid();
-    const token = this.streamAgoraService.generateBroadcasterToken(channelName, hostUid);
+  if (existingLiveStream) {
+    this.logger.warn(
+      `Astrologer ${hostId} already has live stream ${existingLiveStream.streamId}. Force-ending it before starting new one.`,
+    );
 
-    const stream = new this.streamModel({
-      streamId,
-      hostId,
-      title,
-      status: 'live',
-      currentState: 'streaming',
-      startedAt: new Date(),
-      agoraChannelName: channelName,
-      agoraToken: token,
-      hostAgoraUid: hostUid,
-      callSettings: {
-        isCallEnabled: true,
-        voiceCallPrice: settings.voiceCallPrice ?? 50,
-        videoCallPrice: settings.videoCallPrice ?? 100,
-        allowPublicCalls: settings.allowPublicCalls ?? true,
-        allowPrivateCalls: settings.allowPrivateCalls ?? true,
-        maxCallDuration: settings.maxCallDuration ?? 600
-      },
-      callWaitlist: [],
-      createdAt: new Date()
-    });
-
-    await stream.save();
-
-    await this.astrologerModel.findByIdAndUpdate(hostId, {
-      'availability.isOnline': true,
-      'availability.isAvailable': false,
-      'availability.isLive': true,
-      'availability.liveStreamId': streamId,
-      'availability.lastActive': new Date()
-    });
-
-    return {
-      success: true,
-      message: 'You are Live!',
-      data: {
-        streamId,
-        channelName,
-        token,
-        uid: hostUid,
-        appId: this.streamAgoraService.getAppId(),
-        title
-      }
-    };
+    // This will also end any active call, stop recording, and fix availability
+    await this.endStream(existingLiveStream.streamId, hostId);
   }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const count = await this.streamModel.countDocuments({
+    hostId,
+    createdAt: { $gte: today },
+  });
+
+  const title =
+    count === 0 ? astrologer.name : `${astrologer.name} #${count + 1}`;
+
+  const streamId = `LIVE_${Date.now()}_${Math.random()
+    .toString(36)
+    .substring(7)
+    .toUpperCase()}`;
+  const channelName = this.streamAgoraService.generateChannelName();
+  const hostUid = this.streamAgoraService.generateUid();
+  const token =
+    this.streamAgoraService.generateBroadcasterToken(channelName, hostUid);
+
+  const stream = new this.streamModel({
+    streamId,
+    hostId,
+    title,
+    status: 'live',
+    currentState: 'streaming',
+    startedAt: new Date(),
+    agoraChannelName: channelName,
+    agoraToken: token,
+    hostAgoraUid: hostUid,
+    callSettings: {
+      isCallEnabled: true,
+      voiceCallPrice: settings.voiceCallPrice ?? 50,
+      videoCallPrice: settings.videoCallPrice ?? 100,
+      allowPublicCalls: settings.allowPublicCalls ?? true,
+      allowPrivateCalls: settings.allowPrivateCalls ?? true,
+      maxCallDuration: settings.maxCallDuration ?? 600,
+    },
+    callWaitlist: [],
+    createdAt: new Date(),
+  });
+
+  await stream.save();
+
+  await this.astrologerModel.findByIdAndUpdate(hostId, {
+    'availability.isOnline': true,
+    'availability.isAvailable': false,
+    'availability.isLive': true,
+    'availability.liveStreamId': streamId,
+    'availability.lastActive': new Date(),
+  });
+
+  return {
+    success: true,
+    message: 'You are Live!',
+    data: {
+      streamId,
+      channelName,
+      token,
+      uid: hostUid,
+      appId: this.streamAgoraService.getAppId(),
+      title,
+    },
+  };
+}
 
   async endStream(streamId: string, hostId?: string): Promise<any> {
     this.logger.log(`🔄 endStream called`, { streamId, hostId });
@@ -202,7 +222,8 @@ export class StreamSessionService {
 
     await stream.save();
 
-    this.streamGateway.notifyCallRequest(streamId, {
+    this.streamGateway.notifyCallRequest(streamId,
+      stream.hostId.toString(), {
       userId, userName: user.name, userAvatar: user.profilePicture, callType, callMode, position
     });
 
@@ -261,13 +282,24 @@ export class StreamSessionService {
 
     const request = stream.callWaitlist[reqIndex];
 
+    // ✅ CHECK BALANCE & CALCULATE MAX DURATION
     const user = await this.userModel.findById(userId).select('wallet').lean() as any;
     const price = request.callType === 'video' ? stream.callSettings.videoCallPrice : stream.callSettings.voiceCallPrice;
-    if (user.wallet.balance < price * 5) {
+    
+    const minRequired = price * 5; // 5 mins minimum rule
+    if (user.wallet.balance < minRequired) {
        stream.callWaitlist[reqIndex].status = 'expired';
        await stream.save();
        throw new BadRequestException('User balance insufficient');
     }
+
+    // ✅ Calculation Logic
+    const affordableMinutes = Math.floor(user.wallet.balance / price);
+    const affordableSeconds = affordableMinutes * 60;
+    
+    // Take the smaller of: Wallet Limit vs Stream Settings Limit
+    const sessionLimitSeconds = stream.callSettings.maxCallDuration; 
+    const finalMaxDuration = Math.min(affordableSeconds, sessionLimitSeconds);
 
     const callerUid = this.streamAgoraService.generateUid();
     const callerToken = this.streamAgoraService.generateBroadcasterToken(stream.agoraChannelName!, callerUid);
@@ -307,7 +339,7 @@ export class StreamSessionService {
         callerAgoraUid: callerUid,
         hostAgoraUid: stream.hostAgoraUid,
         channelName: stream.agoraChannelName,
-        maxDuration: stream.callSettings.maxCallDuration
+        maxDuration: finalMaxDuration
       }
     };
   }
@@ -325,19 +357,44 @@ export class StreamSessionService {
     throw new BadRequestException('Request not found');
   }
 
-  async cancelCallRequest(streamId: string, userId: string) {
-    const stream = await this.streamModel.findOne({ streamId });
-    if (!stream) throw new NotFoundException('Stream not found');
+// Find the cancelCallRequest method and replace it with this:
 
-    const index = stream.callWaitlist.findIndex(r => r.userId.toString() === userId && r.status === 'waiting');
-    if (index !== -1) {
-      stream.callWaitlist.splice(index, 1);
-      stream.callWaitlist.filter(r => r.status === 'waiting').forEach((r, i) => r.position = i + 1);
+async cancelCallRequest(streamId: string, userId: string) {
+  const stream = await this.streamModel.findOne({ streamId });
+  if (!stream) throw new NotFoundException('Stream not found');
+
+  // ✅ CRITICAL FIX: If the user cancelling is currently the "Active Caller" (Race Condition)
+  // This happens if Host accepted the call, but User cancelled immediately after.
+  if (stream.currentCall?.isOnCall && stream.currentCall.callerId.toString() === userId) {
+      this.logger.warn(`⚠️ User ${userId} cancelled ACTIVE call. Force ending session.`);
+      
+      // Force clean up the call state
+      stream.currentCall = undefined as any;
+      stream.currentState = 'streaming';
+      
+      // Also clean up the waitlist entry
+      stream.callWaitlist = stream.callWaitlist.filter(r => r.userId.toString() !== userId);
+      
       await stream.save();
-      return { success: true, message: 'Request cancelled' };
-    }
-    return { success: false, message: 'Request not found' };
+      
+      // Notify everyone
+      this.streamGateway.server.to(streamId).emit('user_ended_call', { userId });
+      this.streamGateway.server.to(streamId).emit('stream_state_updated', { state: 'streaming' });
+
+      return { success: true, message: 'Active call cancelled' };
   }
+
+  // Standard waitlist removal
+  const index = stream.callWaitlist.findIndex(r => r.userId.toString() === userId && r.status === 'waiting');
+  if (index !== -1) {
+    stream.callWaitlist.splice(index, 1);
+    // Re-calculate positions
+    stream.callWaitlist.filter(r => r.status === 'waiting').forEach((r, i) => r.position = i + 1);
+    await stream.save();
+    return { success: true, message: 'Request cancelled' };
+  }
+  return { success: false, message: 'Request not found' };
+}
 
 async endCurrentCall(streamId: string, hostId: string): Promise<any> {
     const stream = await this.streamModel.findOne({ streamId });
@@ -410,6 +467,8 @@ async endCurrentCall(streamId: string, hostId: string): Promise<any> {
         transaction.endedAt = endTime;
         transaction.duration = durationSec;
         await transaction.save();
+
+        this.streamGateway.notifyCallEnded(streamId, durationSec, cost);
       }
     } else {
         this.logger.error(`❌ No ongoing transaction found for stream ${streamId} during endCurrentCall`);
@@ -421,9 +480,44 @@ async endCurrentCall(streamId: string, hostId: string): Promise<any> {
 
     return { success: true, message: 'Call ended' };
   }
+
+  // ✅ NEW: Follow Logic
+  async toggleFollow(streamId: string, userId: string) {
+    const stream = await this.streamModel.findOne({ streamId });
+    if (!stream) throw new NotFoundException('Stream not found');
+
+    const hostId = stream.hostId;
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+
+    // Check favoriteAstrologers array
+    const favorites = user.favoriteAstrologers || [];
+    const isFollowing = favorites.some(id => id.toString() === hostId.toString());
+
+    if (isFollowing) {
+      await this.userModel.findByIdAndUpdate(userId, { $pull: { favoriteAstrologers: hostId } });
+      return { 
+        success: true, 
+        message: 'Removed from favorites', 
+        data: { isFollowing: false } // ✅ Return in 'data' object
+      };
+    } else {
+      await this.userModel.findByIdAndUpdate(userId, { $addToSet: { favoriteAstrologers: hostId } });
+      return { 
+        success: true, 
+        message: 'Added to favorites', 
+        data: { isFollowing: true } 
+      };
+    }
+  }
   
   // ✅ NEW: Handle Caller Disconnection
   async handleUserDisconnect(userId: string) {
+    // 🛡️ SECURITY FIX: Validate ID before casting to ObjectId
+    if (!userId || userId === 'undefined' || !Types.ObjectId.isValid(userId)) {
+        return; // Ignore invalid IDs to prevent BSON crash
+    }
+
     // Find if this user is currently on a call in ANY active stream
     const activeStream = await this.streamModel.findOne({
         'currentCall.isOnCall': true,

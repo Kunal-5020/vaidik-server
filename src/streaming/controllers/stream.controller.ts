@@ -145,4 +145,9 @@ async endUserCall(
   return this.streamSessionService.endUserCall(streamId, userId);
 }
 
+@Post(':streamId/follow')
+  @UseGuards(JwtAuthGuard)
+  async toggleFollow(@Param('streamId') streamId: string, @Req() req: AuthenticatedRequest) {
+    return this.streamSessionService.toggleFollow(streamId, req.user._id);
+  }
 }

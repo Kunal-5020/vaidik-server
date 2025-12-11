@@ -264,8 +264,6 @@ export class AstrologersService {
   // Add secondary sort to prevent "jumping" items during pagination
   sortCriteria._id = 1; 
 
-  console.log('🔍 MongoDB Query:', JSON.stringify(finalQuery, null, 2));
-  console.log('🔍 Sort Criteria:', sortCriteria);
 
   const skip = (page - 1) * limit;
 
@@ -803,7 +801,6 @@ export class AstrologersService {
 
     await astrologer.save();
 
-    console.log('✅ [AstrologersService] Profile updated successfully');
 
     return {
       success: true,
