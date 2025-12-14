@@ -307,20 +307,7 @@ async getCurrentAstrologerProfile(astrologerId: string) {
       success: true,
       message: 'Login successful',
       data: {
-        user: {
-          id: astrologer._id,
-          phoneNumber: astrologer.phoneNumber,
-          name: astrologer.name,
-          profileImage: astrologer.profilePicture,
-          isProfileComplete: astrologer.profileCompletion.isComplete,
-        },
-        astrologer: {
-          id: astrologer._id,
-          name: astrologer.name,
-          profilePicture: astrologer.profilePicture,
-          accountStatus: astrologer.accountStatus,
-          isProfileComplete: astrologer.profileCompletion.isComplete,
-        },
+        astrologer,
         tokens,
       },
     };
@@ -477,8 +464,6 @@ async getCurrentAstrologerProfile(astrologerId: string) {
         phoneNumber: phoneNumber
       });
 
-      let isNewUser = false;
-
       if (!astrologer) {
         // No astrologer profile — inform frontend to complete registration
         this.logger.log('⚠️ [AstrologerAuth] No astrologer profile found for phone', { phoneNumber });
@@ -505,7 +490,6 @@ async getCurrentAstrologerProfile(astrologerId: string) {
       // Reactivate if needed
       if (astrologer.accountStatus === 'deleted' || astrologer.accountStatus === 'inactive') {
         astrologer.accountStatus = 'active';
-        isNewUser = true; // Treat reactivation as "returning user"
       }
 
       // Register device if provided
@@ -540,22 +524,8 @@ async getCurrentAstrologerProfile(astrologerId: string) {
         success: true,
         message: 'Login successful',
         data: {
-          user: {
-            id: astrologer._id,
-            phoneNumber: astrologer.phoneNumber,
-            name: astrologer.name,
-            profileImage: astrologer.profilePicture,
-            isProfileComplete: astrologer.profileCompletion.isComplete,
-          },
-          astrologer: {
-            id: astrologer._id,
-            name: astrologer.name,
-            profilePicture: astrologer.profilePicture,
-            accountStatus: astrologer.accountStatus,
-            isProfileComplete: astrologer.profileCompletion.isComplete,
-          },
+          astrologer,
           tokens,
-          isNewUser
         }
       };
     } catch (error) {

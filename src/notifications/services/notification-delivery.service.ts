@@ -3,7 +3,7 @@ import { Injectable, Inject, Logger, forwardRef } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { MobileNotificationGateway } from '../gateways/mobile-notification.gateway';
-import { WebNotificationGateway } from '../gateways/web-notification.gateway'; // 🆕 NEW
+import { WebNotificationGateway } from '../gateways/web-notification.gateway';
 import { FcmService } from './fcm.service';
 import { Notification, NotificationDocument } from '../schemas/notification.schema';
 import { User, UserDocument } from '../../users/schemas/user.schema';
@@ -16,12 +16,21 @@ export class NotificationDeliveryService {
   private readonly logger = new Logger(NotificationDeliveryService.name);
 
   constructor(
+    @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
+    
+    // ✅ FIX: Use forwardRef for MobileGateway to prevent circular dependency
+    @Inject(forwardRef(() => MobileNotificationGateway)) 
     private mobileGateway: MobileNotificationGateway,
-    private webGateway: WebNotificationGateway, // 🆕 NEW
+
+    // ✅ FIX: Use forwardRef for WebGateway to prevent circular dependency
+    @Inject(forwardRef(() => WebNotificationGateway)) 
+    private webGateway: WebNotificationGateway,
+
     @Inject(forwardRef(() => AdminNotificationGateway))
     private readonly adminGateway: AdminNotificationGateway | undefined,
+    
     private fcmService: FcmService,
   ) {}
 
@@ -49,6 +58,7 @@ export class NotificationDeliveryService {
       const recipientId = notification.recipientId.toString();
       const typeConfig = getNotificationConfig(notification.type);
 
+      // 1. Fetch Recipient Device Data
       let recipient;
       if (notification.recipientModel === 'User') {
         recipient = await this.userModel.findById(recipientId).select('devices').lean().exec();
@@ -56,14 +66,17 @@ export class NotificationDeliveryService {
         recipient = await this.astrologerModel.findById(recipientId).select('devices').lean().exec();
       }
 
-      if (!recipient?.devices?.length) {
-        this.logger.log(`⏭️ No devices for ${notification.recipientModel} ${recipientId}`);
+      if (!recipient) {
+        this.logger.warn(`⚠️ Recipient not found: ${notification.recipientModel} ${recipientId}`);
+        return;
       }
 
-      // 🆕 1. SEND TO WEB CLIENTS (Browser)
+      // ============================================================
+      // 🌐 CHANNEL 1: WEB SOCKETS
+      // ============================================================
       const userType = notification.recipientModel === 'User' ? 'user' : 'astrologer';
       const isWebConnected = this.webGateway.isUserConnected(recipientId, userType);
-
+      
       if (isWebConnected) {
         this.webGateway.sendToUser(
           recipientId,
@@ -84,57 +97,67 @@ export class NotificationDeliveryService {
         this.logger.log(`🌐 [Web] Sent to ${userType} ${recipientId}`);
       }
 
-      // 🎯 2. SEND TO MOBILE APP (Socket.io for real-time types)
+      // ============================================================
+      // 📱 CHANNEL 2: MOBILE SOCKETS
+      // ============================================================
       const useSocketIo = shouldUseSocketIo(notification.type);
-      let socketSent = false;
+      let isMobileSocketSent = false;
 
       if (useSocketIo && this.mobileGateway.isUserOnline(recipientId)) {
         if (targetDeviceId) {
-          socketSent = this.mobileGateway.sendToUserDevice(recipientId, targetDeviceId, notification);
+          isMobileSocketSent = this.mobileGateway.sendToUserDevice(recipientId, targetDeviceId, notification);
         } else {
-          socketSent = this.mobileGateway.sendToUser(recipientId, notification);
+          isMobileSocketSent = this.mobileGateway.sendToUser(recipientId, notification);
         }
 
-        if (socketSent) {
-          this.logger.log(`⚡ [Mobile Socket] Instant delivery: ${notification.type} to ${recipientId}`);
-          notification.isSocketSent = true;
-          notification.socketSentAt = new Date();
-          await notification.save();
-
-          // For chat/messages, if socket delivery succeeded, we're done
-          if (isWebConnected || socketSent) {
-            return; // Both web and mobile got it via socket, no need for FCM
-          }
+        if (isMobileSocketSent) {
+          this.logger.log(`⚡ [Mobile Socket] Delivered: ${notification.type} to ${recipientId}`);
         }
       }
 
-      // 📤 3. FCM DELIVERY (Fallback for mobile if not online)
-      if (!recipient?.devices?.length) {
-        return; // Already logged above
+      // ✅ RECURSION FIX: Use updateOne instead of save()
+      // If either Web or Mobile Socket worked, we mark as socket sent.
+      if (isWebConnected || isMobileSocketSent) {
+        await this.notificationModel.updateOne(
+          { _id: notification._id },
+          { $set: { isSocketSent: true, socketSentAt: new Date() } }
+        );
+
+        // 🛑 STOP HERE if user is online (don't spam with Push Notification unless critical)
+        // You can remove this return if you ALWAYS want Push Notifications.
+        return; 
+      }
+
+      // ============================================================
+      // 📤 CHANNEL 3: FCM (PUSH NOTIFICATION) - FALLBACK
+      // ============================================================
+      
+      if (!recipient.devices || recipient.devices.length === 0) {
+        return;
       }
 
       let fcmTokens: string[] = [];
 
       if (targetDeviceId) {
+        // Target specific device
         const device = recipient.devices.find((d: any) => d.deviceId === targetDeviceId && d.isActive);
-        if (device?.fcmToken) {
-          fcmTokens.push(device.fcmToken);
-        }
+        if (device?.fcmToken) fcmTokens.push(device.fcmToken);
       } else if (targetFcmToken) {
+        // Target specific token
         fcmTokens = [targetFcmToken];
       } else {
+        // Broadcast to all active devices
         fcmTokens = recipient.devices
-          .filter((d: any) => d.isActive)
-          .map((d: any) => d.fcmToken)
-          .filter(Boolean);
+          .filter((d: any) => d.isActive && d.fcmToken)
+          .map((d: any) => d.fcmToken);
       }
 
       if (fcmTokens.length === 0) {
-        this.logger.log(`⏭️ No FCM tokens available for ${recipientId}`);
+        this.logger.debug(`⏭️ No valid FCM tokens for ${recipientId}, skipping Push.`);
         return;
       }
 
-      // Build FCM data with behavior flags
+      // Prepare FCM Payload
       const fcmData: Record<string, string> = {};
       if (notification.data) {
         for (const [key, value] of Object.entries(notification.data)) {
@@ -143,23 +166,14 @@ export class NotificationDeliveryService {
       }
       fcmData['notificationId'] = notification.notificationId;
       fcmData['type'] = notification.type;
-      fcmData['foregroundBehavior'] = typeConfig.foregroundBehavior;
-      fcmData['backgroundBehavior'] = typeConfig.backgroundBehavior;
-      fcmData['priority'] = typeConfig.priority;
-
-      if (notification.actionUrl) {
-        fcmData['actionUrl'] = notification.actionUrl;
-      }
-
-      const validImageUrl = this.isValidUrl(notification.imageUrl) ? notification.imageUrl : undefined;
-
-      // Send via FCM with type configuration
+      
+      // Send
       const fcmResult = await this.fcmService.sendToMultipleDevices(
         fcmTokens,
         notification.title,
         notification.message,
         fcmData,
-        validImageUrl,
+        this.isValidUrl(notification.imageUrl) ? notification.imageUrl : undefined,
         {
           isFullScreen: typeConfig.isFullScreen,
           priority: typeConfig.priority,
@@ -170,42 +184,33 @@ export class NotificationDeliveryService {
       );
 
       if (fcmResult.successCount > 0) {
-        notification.isPushSent = true;
-        notification.pushSentAt = new Date();
-        await notification.save();
-        this.logger.log(
-          `✅ [FCM] Delivered: ${notification.type} to ${recipientId} | ` +
-            `Success: ${fcmResult.successCount}/${fcmTokens.length} | ` +
-            `Priority: ${typeConfig.priority} | FullScreen: ${typeConfig.isFullScreen}`
+        // ✅ RECURSION FIX: Update directly in DB
+        await this.notificationModel.updateOne(
+          { _id: notification._id },
+          { $set: { isPushSent: true, pushSentAt: new Date() } }
         );
-      } else {
-        this.logger.warn(`❌ [FCM] Failed for all ${fcmTokens.length} tokens`);
+
+        this.logger.log(`✅ [FCM] Sent to ${recipientId} (${fcmResult.successCount} devices)`);
       }
+
     } catch (error) {
-      this.logger.error(`❌ Delivery error: ${(error as any).message}`);
+      this.logger.error(`❌ Delivery Failed: ${error.message}`, error.stack);
     }
   }
 
   async deliverToAdmins(notification: NotificationDocument): Promise<void> {
-    if (!this.adminGateway) {
-      this.logger.debug('AdminNotificationGateway not available, skipping admin delivery');
-      return;
-    }
-
+    if (!this.adminGateway) return;
     try {
-      this.adminGateway.broadcastToAllAdmins('notification', {
-        notificationId: notification.notificationId,
-        type: notification.type,
-        title: notification.title,
-        message: notification.message,
-        data: notification.data,
-        recipientId: notification.recipientId.toString(),
-        recipientModel: notification.recipientModel,
-        timestamp: notification.createdAt,
-      });
-      this.logger.log(`✅ Admin notification sent: ${notification.type}`);
-    } catch (error) {
-      this.logger.error(`❌ Admin delivery error: ${(error as any).message}`);
+        this.adminGateway.broadcastToAllAdmins('notification', {
+            notificationId: notification.notificationId,
+            type: notification.type,
+            title: notification.title,
+            message: notification.message,
+            recipientId: notification.recipientId,
+            timestamp: notification.createdAt
+        });
+    } catch (e) {
+        this.logger.error(`Admin delivery failed: ${e.message}`);
     }
   }
 
@@ -218,7 +223,10 @@ export class NotificationDeliveryService {
     try {
       this.adminGateway.broadcastToAllAdmins(eventType, eventData);
     } catch (error) {
-      this.logger.error(`❌ Realtime event error: ${(error as any).message}`);
+      this.logger.error(
+        `❌ Realtime event error (Type: ${eventType}): ${(error as any).message}`,
+        (error as any).stack
+      );
     }
   }
 
@@ -231,7 +239,10 @@ export class NotificationDeliveryService {
     try {
       this.adminGateway.broadcastToAllAdmins('system_alert', { message, data });
     } catch (error) {
-      this.logger.error(`❌ System alert error: ${(error as any).message}`);
+      this.logger.error(
+        `❌ System alert error (Message: ${message}): ${(error as any).message}`,
+        (error as any).stack
+      );
     }
   }
 
@@ -249,7 +260,6 @@ export class NotificationDeliveryService {
   }
 
   isUserOnline(userId: string): boolean {
-    // Check both mobile and web
     const isMobileOnline = this.mobileGateway.isUserOnline(userId);
     const isWebOnline =
       this.webGateway.isUserConnected(userId, 'user') || this.webGateway.isUserConnected(userId, 'astrologer');
