@@ -605,9 +605,12 @@ async getSuggestedRemedies(
   const skip = (page - 1) * limit;
   const userObjectId = this.toObjectId(userId);
 
+  // 🔍 DEBUG LOGS
+  this.logger.log(`🔍 Checking Suggested Remedies for User ID: ${userId}`);
+  this.logger.log(`   Converted ObjectId: ${userObjectId}`);
+
   const query = {
     userId: userObjectId,
-    remedySource: 'shopify_product',
     isPurchased: false,
     status: { $in: ['suggested', 'accepted'] },
     isDeleted: false,
@@ -616,10 +619,7 @@ async getSuggestedRemedies(
   const [remedies, total] = await Promise.all([
     this.remedyModel
       .find(query)
-      .populate(
-        'astrologerId',
-        'name profilePicture experienceYears specializations',
-      )
+      .populate('astrologerId', 'name profilePicture') // Ensure populate works
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -627,12 +627,11 @@ async getSuggestedRemedies(
     this.remedyModel.countDocuments(query),
   ]);
 
+  // 🔍 DEBUG RESULT
+  this.logger.log(`   Found ${total} remedies matching query.`);
+
   return {
     success: true,
-    message:
-      remedies.length === 0
-        ? 'No remedies found'
-        : 'Suggested remedies fetched successfully',
     data: {
       remedies,
       pagination: {
@@ -662,7 +661,6 @@ async getPurchasedRemedies(
 
   const query = {
     userId: userObjectId,
-    remedySource: 'shopify_product', // Only Shopify products
     isPurchased: true, // Purchased
     isDeleted: false,
   };
@@ -708,7 +706,6 @@ async getOrdersWithRemedies(userId: string): Promise<any> {
     {
       $match: {
         userId: userObjectId,
-        remedySource: 'shopify_product',
         isDeleted: false,
       },
     },

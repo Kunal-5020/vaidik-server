@@ -28,26 +28,70 @@ export class RemediesController {
   constructor(private remediesService: RemediesService) {}
 
   /**
-   * GET /api/v1/remedies
-   * Get all remedies for user (across all orders)
+   * GET /api/v1/remedies/stats/summary
+   * Get remedy statistics
+   * ⚠️ MUST BE BEFORE :remedyId
    */
-  @Get()
-  async getRemedies(
+  @Get('stats/summary')
+  async getRemedyStats(@Req() req: AuthenticatedRequest) {
+    this.logger.log(`Fetching remedy stats for user: ${req.user._id}`);
+    return this.remediesService.getUserRemedyStats(req.user._id);
+  }
+
+  /**
+   * GET /api/v1/remedies/suggested
+   * Tab 1: Get suggested (not purchased) remedies
+   * ⚠️ MUST BE BEFORE :remedyId
+   */
+  @Get('suggested')
+  async getSuggestedRemedies(
     @Req() req: AuthenticatedRequest,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
-    @Query('status') status?: string,
-    @Query('type') type?: string,
   ) {
-    this.logger.log(`Fetching remedies for user: ${req.user._id}`);
+    this.logger.log(`Fetching suggested remedies for user: ${req.user._id}`);
     const safeLimit = Math.min(limit, 100);
 
-    return this.remediesService.getUserRemedies(
+    return this.remediesService.getSuggestedRemedies(
       req.user._id,
       page,
       safeLimit,
-      { status, type },
     );
+  }
+
+  /**
+   * GET /api/v1/remedies/purchased
+   * Tab 2: Get purchased remedies
+   * ⚠️ MUST BE BEFORE :remedyId
+   */
+  @Get('purchased')
+  async getPurchasedRemedies(
+    @Req() req: AuthenticatedRequest,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    this.logger.log(`Fetching purchased remedies for user: ${req.user._id}`);
+    const safeLimit = Math.min(limit, 100);
+
+    return this.remediesService.getPurchasedRemedies(
+      req.user._id,
+      page,
+      safeLimit,
+    );
+  }
+
+  /**
+   * GET /api/v1/remedies/orders-with-remedies
+   * Tab 3: Get list of orders that have remedy suggestions
+   * ⚠️ MUST BE BEFORE :remedyId
+   */
+  @Get('orders-with-remedies')
+  async getOrdersWithRemedies(@Req() req: AuthenticatedRequest) {
+    this.logger.log(
+      `Fetching orders with remedies for user: ${req.user._id}`,
+    );
+
+    return this.remediesService.getOrdersWithRemedies(req.user._id);
   }
 
   /**
@@ -71,6 +115,33 @@ export class RemediesController {
       req.user._id,
       page,
       safeLimit,
+    );
+  }
+
+  // ========================================================
+  // ⚠️ DYNAMIC ROUTES (LIKE :remedyId) MUST BE AT THE BOTTOM
+  // ========================================================
+
+  /**
+   * GET /api/v1/remedies
+   * Get all remedies for user (across all orders)
+   */
+  @Get()
+  async getRemedies(
+    @Req() req: AuthenticatedRequest,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('status') status?: string,
+    @Query('type') type?: string,
+  ) {
+    this.logger.log(`Fetching remedies for user: ${req.user._id}`);
+    const safeLimit = Math.min(limit, 100);
+
+    return this.remediesService.getUserRemedies(
+      req.user._id,
+      page,
+      safeLimit,
+      { status, type },
     );
   }
 
@@ -107,68 +178,4 @@ export class RemediesController {
       dto,
     );
   }
-
-  /**
-   * GET /api/v1/remedies/stats/summary
-   * Get remedy statistics
-   */
-  @Get('stats/summary')
-  async getRemedyStats(@Req() req: AuthenticatedRequest) {
-    this.logger.log(`Fetching remedy stats for user: ${req.user._id}`);
-    return this.remediesService.getUserRemedyStats(req.user._id);
-  }
-
-  /**
- * GET /api/v1/remedies/suggested
- * Tab 1: Get suggested (not purchased) remedies
- */
-@Get('suggested')
-async getSuggestedRemedies(
-  @Req() req: AuthenticatedRequest,
-  @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-  @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
-) {
-  this.logger.log(`Fetching suggested remedies for user: ${req.user._id}`);
-  const safeLimit = Math.min(limit, 100);
-
-  return this.remediesService.getSuggestedRemedies(
-    req.user._id,
-    page,
-    safeLimit,
-  );
-}
-
-/**
- * GET /api/v1/remedies/purchased
- * Tab 2: Get purchased remedies
- */
-@Get('purchased')
-async getPurchasedRemedies(
-  @Req() req: AuthenticatedRequest,
-  @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-  @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
-) {
-  this.logger.log(`Fetching purchased remedies for user: ${req.user._id}`);
-  const safeLimit = Math.min(limit, 100);
-
-  return this.remediesService.getPurchasedRemedies(
-    req.user._id,
-    page,
-    safeLimit,
-  );
-}
-
-/**
- * GET /api/v1/remedies/orders-with-remedies
- * Tab 3: Get list of orders that have remedy suggestions
- */
-@Get('orders-with-remedies')
-async getOrdersWithRemedies(@Req() req: AuthenticatedRequest) {
-  this.logger.log(
-    `Fetching orders with remedies for user: ${req.user._id}`,
-  );
-
-  return this.remediesService.getOrdersWithRemedies(req.user._id);
-}
-
 }
