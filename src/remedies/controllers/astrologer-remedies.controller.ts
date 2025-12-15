@@ -165,4 +165,22 @@ async suggestBulkProducts(
   );
 }
 
+/**
+   * GET /api/v1/astrologer/remedies/order/:orderId
+   * View remedies suggested in a specific order
+   */
+  @Get('order/:orderId')
+  async getRemediesByOrder(
+    @Param('orderId') orderId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const astrologerId = req.user.astrologerId || req.user._id;
+    this.logger.log(`Fetching order remedies for astrologer: ${astrologerId}`);
+    
+    return this.remediesService.getAstrologerRemediesByOrder(
+      orderId, 
+      astrologerId
+    );
+  }
+
 }

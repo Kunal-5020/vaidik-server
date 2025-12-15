@@ -150,6 +150,28 @@ export class RemediesService {
   }
 
   /**
+   * Get remedies for a specific order (For Astrologer View)
+   */
+  async getAstrologerRemediesByOrder(
+    orderId: string,
+    astrologerId: string,
+  ): Promise<any> {
+    const remedies = await this.remedyModel
+      .find({
+        orderId,
+        astrologerId: this.toObjectId(astrologerId), // Match the astrologer
+        isDeleted: false,
+      })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return {
+      success: true,
+      data: { remedies },
+    };
+  }
+
+  /**
    * Get remedies suggested by astrologer
    */
   async getAstrologerRemedies(
