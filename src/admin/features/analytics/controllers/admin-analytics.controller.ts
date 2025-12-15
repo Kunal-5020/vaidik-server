@@ -1,19 +1,22 @@
-// src/admin/features/analytics/controllers/admin-analytics.controller.ts
-import { Controller, Get, UseGuards } from '@nestjs/common';
-import { AdminAuthGuard } from '../../../core/guards/admin-auth.guard';
-import { PermissionsGuard } from '../../../core/guards/permissions.guard';
-import { RequirePermissions } from '../../../core/decorators/permissions.decorator';
-import { Permissions } from '../../../core/config/permissions.config';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AdminAnalyticsService } from '../services/admin-analytics.service';
+import { AdminAuthGuard } from '../../../core/guards/admin-auth.guard';
 
 @Controller('admin/analytics')
-@UseGuards(AdminAuthGuard, PermissionsGuard)
+@UseGuards(AdminAuthGuard)
 export class AdminAnalyticsController {
-  constructor(private analyticsService: AdminAnalyticsService) {}
+  constructor(private readonly analyticsService: AdminAnalyticsService) {}
 
   @Get('dashboard')
-  @RequirePermissions(Permissions.ANALYTICS_VIEW)
-  async getDashboardAnalytics() {
+  async getDashboardStats() {
     return this.analyticsService.getDashboardAnalytics();
+  }
+
+  @Get('revenue')
+  async getRevenueAnalytics(
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string
+  ) {
+    return this.analyticsService.getRevenueAnalytics(startDate, endDate);
   }
 }

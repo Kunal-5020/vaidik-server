@@ -4,6 +4,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
 import { Order, OrderDocument } from '../../../../orders/schemas/orders.schema';
+import { CallSession, CallSessionDocument } from '../../../../calls/schemas/call-session.schema';
+import { ChatSession, ChatSessionDocument } from '../../../../chat/schemas/chat-session.schema';
 import { WalletService } from '../../../../payments/services/wallet.service';
 import { AdminActivityLogService } from '../../activity-logs/services/admin-activity-log.service';
 import { NotificationService } from '../../../../notifications/services/notification.service';
@@ -17,6 +19,8 @@ export class AdminOrdersService {
 
   constructor(
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
+    @InjectModel(CallSession.name) private callSessionModel: Model<CallSessionDocument>,
+    @InjectModel(ChatSession.name) private chatSessionModel: Model<ChatSessionDocument>,
     private walletService: WalletService,
     private activityLogService: AdminActivityLogService,
     private notificationService: NotificationService,
@@ -643,6 +647,61 @@ export class AdminOrdersService {
         orderId: order.orderId,
         refundAmount,
         refundTransactionId: order.payment.refundTransactionId
+      }
+    };
+  }
+async getAllCalls(query: any) {
+    const { page = 1, limit = 20, status } = query;
+    const skip = (page - 1) * limit;
+    const filter: any = {};
+
+    if (status) filter.status = status;
+
+    const [calls, total] = await Promise.all([
+      this.callSessionModel
+        .find(filter)
+        .populate('userId', 'name phoneNumber profileImage')
+        .populate('astrologerId', 'name profilePicture')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.callSessionModel.countDocuments(filter),
+    ]);
+
+    return {
+      success: true,
+      data: {
+        orders: calls, // Maintaining 'orders' key for frontend compatibility
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+      }
+    };
+  }
+
+  async getAllChats(query: any) {
+    const { page = 1, limit = 20, status } = query;
+    const skip = (page - 1) * limit;
+    const filter: any = {};
+
+    if (status) filter.status = status;
+
+    const [chats, total] = await Promise.all([
+      this.chatSessionModel
+        .find(filter)
+        .populate('userId', 'name phoneNumber profileImage')
+        .populate('astrologerId', 'name profilePicture')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.chatSessionModel.countDocuments(filter),
+    ]);
+
+    return {
+      success: true,
+      data: {
+        orders: chats,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) }
       }
     };
   }

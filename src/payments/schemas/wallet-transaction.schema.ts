@@ -28,6 +28,7 @@ export class WalletTransaction {
       'withdrawal',
       'hold',
       'giftcard',
+      'admin_credit',
       'gift',
       'session_payment', // ✅ NEW: For unified transactions
     ],

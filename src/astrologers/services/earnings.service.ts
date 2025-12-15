@@ -60,8 +60,9 @@ export class EarningsService {
     );
   }
 
-  /**
+ /**
    * Record gift earnings
+   * ✅ FIXED: Now updates specific gift stats
    */
   async recordGiftEarning(astrologerId: string, amount: number): Promise<void> {
     const astrologer = await this.astrologerModel.findById(astrologerId);
@@ -70,22 +71,31 @@ export class EarningsService {
       throw new NotFoundException('Astrologer not found');
     }
 
-    const commissionRate = 40;
+    const commissionRate = 40; // Or fetch from config
     const commission = (amount * commissionRate) / 100;
     const astrologerEarning = amount - commission;
 
     await this.astrologerModel.findByIdAndUpdate(astrologerId, {
       $inc: {
+        // 1. General Earnings
         'earnings.totalEarned': amount,
         'earnings.platformCommission': commission,
         'earnings.netEarnings': astrologerEarning,
         'earnings.withdrawableAmount': astrologerEarning,
+
+        // 2. ✅ SPECIFIC GIFT TRACKING (The Missing Part)
+        'earnings.totalGiftEarnings': amount, 
+        
+        // 3. Stats
         'stats.totalEarnings': astrologerEarning,
+        'stats.totalGifts': 1 // ✅ Increment gift count
       },
       $set: {
         'earnings.lastUpdated': new Date(),
       },
     });
+
+    this.logger.log(`Gift recorded for ${astrologerId}: +₹${amount} (Net: ₹${astrologerEarning})`);
   }
 
   /**
@@ -105,6 +115,7 @@ export class EarningsService {
       success: true,
       data: {
         totalEarned: astrologer.earnings.totalEarned || 0,
+        totalGiftEarnings: astrologer.earnings.totalGiftEarnings || 0,
         platformCommission: astrologer.earnings.platformCommission || 0,
         platformCommissionRate: 40,
         netEarnings: astrologer.earnings.netEarnings || 0,

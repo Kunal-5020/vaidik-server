@@ -1,4 +1,4 @@
-// src/auth/services/astrologer-auth.service.ts (COMPLETELY REWRITTEN)
+// src/auth/services/astrologer-auth.service.ts (UPDATED - OPTIONAL FCM TOKEN)
 import { Injectable, BadRequestException, UnauthorizedException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -29,18 +29,26 @@ export class AstrologerAuthService {
   }
 
   /**
-   * ✅ FIXED: Handle device storage for astrologers
+   * ✅ UPDATED: Handle device storage for astrologers - FCM token is now OPTIONAL
    */
-  private async handleDeviceStorage(astrologer: AstrologerDocument, deviceInfo: any): Promise<void> {
-    if (!deviceInfo?.fcmToken || !deviceInfo?.deviceId) {
-      this.logger.warn('⚠️ Missing device info, skipping device storage');
+  private async handleDeviceStorage(astrologer: AstrologerDocument, deviceInfo?: any): Promise<void> {
+    // Early exit if no device info provided at all
+    if (!deviceInfo) {
+      this.logger.log('ℹ️ [AstrologerAuth] No device info provided, skipping device storage');
+      return;
+    }
+
+    // Allow login without FCM token - only deviceId is required for tracking
+    if (!deviceInfo.deviceId) {
+      this.logger.warn('⚠️ [AstrologerAuth] Missing deviceId, skipping device storage');
       return;
     }
 
     this.logger.log('📱 [AstrologerAuth] Processing device storage...', {
       deviceId: deviceInfo.deviceId,
-      deviceName: deviceInfo.deviceName,
-      deviceType: deviceInfo.deviceType,
+      deviceName: deviceInfo.deviceName || 'Unknown Device',
+      deviceType: deviceInfo.deviceType || 'unknown',
+      hasFcmToken: !!deviceInfo.fcmToken,
     });
 
     try {
@@ -48,18 +56,20 @@ export class AstrologerAuthService {
         astrologer.devices = [];
       }
 
+      // Search for existing device by deviceId AND deviceName
       const existingDeviceIndex = astrologer.devices.findIndex(
         (d: any) => 
           d.deviceId === deviceInfo.deviceId || 
-          (d.deviceName === deviceInfo.deviceName && d.deviceType === deviceInfo.deviceType)
+          (deviceInfo.deviceName && d.deviceName === deviceInfo.deviceName && d.deviceType === deviceInfo.deviceType)
       );
 
       if (existingDeviceIndex !== -1) {
+        // Device exists - update metadata (FCM token is optional)
         const oldFcmToken = astrologer.devices[existingDeviceIndex].fcmToken;
         
         astrologer.devices[existingDeviceIndex] = {
           ...astrologer.devices[existingDeviceIndex],
-          fcmToken: deviceInfo.fcmToken,
+          fcmToken: deviceInfo.fcmToken || astrologer.devices[existingDeviceIndex].fcmToken, // Keep old if new not provided
           deviceId: deviceInfo.deviceId,
           deviceName: deviceInfo.deviceName || astrologer.devices[existingDeviceIndex].deviceName,
           deviceType: (deviceInfo.deviceType || astrologer.devices[existingDeviceIndex].deviceType) as 'android' | 'ios' | 'web',
@@ -69,12 +79,14 @@ export class AstrologerAuthService {
 
         this.logger.log('✅ [AstrologerAuth] Device updated', {
           deviceId: deviceInfo.deviceId,
-          oldFcmToken: oldFcmToken?.substring(0, 20) + '...',
-          newFcmToken: deviceInfo.fcmToken?.substring(0, 20) + '...',
+          fcmTokenUpdated: !!deviceInfo.fcmToken,
+          oldFcmToken: oldFcmToken ? oldFcmToken.substring(0, 20) + '...' : 'none',
+          newFcmToken: deviceInfo.fcmToken ? deviceInfo.fcmToken.substring(0, 20) + '...' : 'none',
         });
       } else {
+        // New device - add to array (FCM token optional)
         astrologer.devices.push({
-          fcmToken: deviceInfo.fcmToken,
+          fcmToken: deviceInfo.fcmToken || undefined, // Store undefined if not provided
           deviceId: deviceInfo.deviceId,
           deviceType: (deviceInfo.deviceType || 'phone') as 'android' | 'ios' | 'web',
           deviceName: deviceInfo.deviceName || 'Unknown Device',
@@ -85,24 +97,27 @@ export class AstrologerAuthService {
         this.logger.log('✅ [AstrologerAuth] New device added', {
           deviceId: deviceInfo.deviceId,
           totalDevices: astrologer.devices.length,
+          hasFcmToken: !!deviceInfo.fcmToken,
         });
       }
 
       astrologer.markModified('devices');
 
-      // Single device mode (force logout other devices)
+      // Single device mode - force logout other devices ONLY if they have FCM tokens
       if (astrologer.devices.length > 1) {
-        const oldDevices = astrologer.devices
+        // Send force logout notification to old devices that have FCM tokens
+        const oldDevicesWithFcm = astrologer.devices
           .filter(d => d.deviceId !== deviceInfo.deviceId && d.fcmToken)
           .map(d => d.fcmToken);
         
-        if (oldDevices.length > 0) {
-          this.logger.log('📤 [AstrologerAuth] Sending force logout to old devices:', oldDevices.length);
-          this.sendForceLogoutNotification(oldDevices).catch(err => 
+        if (oldDevicesWithFcm.length > 0) {
+          this.logger.log('📤 [AstrologerAuth] Sending force logout to old devices:', oldDevicesWithFcm.length);
+          this.sendForceLogoutNotification(oldDevicesWithFcm).catch(err => 
             this.logger.error('Failed to send force logout:', err)
           );
         }
 
+        // Keep only current device
         astrologer.devices = astrologer.devices.filter(d => d.deviceId === deviceInfo.deviceId);
         astrologer.markModified('devices');
         
@@ -116,45 +131,43 @@ export class AstrologerAuthService {
     } catch (deviceError) {
       this.logger.error('❌ [AstrologerAuth] Device storage failed:', {
         error: (deviceError as any).message,
+        stack: (deviceError as any).stack,
       });
+      // Don't fail login if device storage fails
     }
   }
 
   /**
- * ✅ NEW: Get complete astrologer profile
- */
-async getCurrentAstrologerProfile(astrologerId: string) {
-  try {
-    // ✅ await + lean to get plain object
-    const astrologer = await this.astrologerModel
-      .findById(astrologerId)
-      .lean()
-      .exec();
+   * ✅ Get complete astrologer profile
+   */
+  async getCurrentAstrologerProfile(astrologerId: string) {
+    try {
+      const astrologer = await this.astrologerModel
+        .findById(astrologerId)
+        .lean()
+        .exec();
 
-    if (!astrologer) {
-      throw new NotFoundException('Astrologer profile not found');
+      if (!astrologer) {
+        throw new NotFoundException('Astrologer profile not found');
+      }
+
+      const { __v, ...safeAstrologer } = astrologer as any;
+
+      return { astrologer: safeAstrologer };
+    } catch (error) {
+      this.logger.error('Failed to fetch profile', { error: (error as any).message });
+      throw error;
     }
-
-    // Optionally strip internal fields
-    const { __v, ...safeAstrologer } = astrologer as any;
-
-    return { astrologer: safeAstrologer };
-  } catch (error) {
-    this.logger.error('Failed to fetch profile', { error: (error as any).message });
-    throw error;
   }
-}
-
 
   /**
-   * ✅ FIXED: Check if phone number has approved astrologer account
+   * ✅ Check if phone number has approved astrologer account
    */
   async checkPhoneForLogin(phoneNumber: string, countryCode: string) {
     const fullPhoneNumber = `+${countryCode}${phoneNumber}`;
     
     this.logger.log('🔍 Checking for approved astrologer', { fullPhoneNumber });
 
-    // ✅ FIXED: Query astrologer directly by phoneNumber (not via user)
     const astrologer = await this.astrologerModel.findOne({
       phoneNumber: fullPhoneNumber,
       accountStatus: { $in: ['active', 'inactive'] }
@@ -224,7 +237,7 @@ async getCurrentAstrologerProfile(astrologerId: string) {
   }
 
   /**
-   * ✅ FIXED: Verify OTP and login astrologer (NO USER CREATION)
+   * ✅ UPDATED: Verify OTP and login astrologer - FCM token is OPTIONAL
    */
   async verifyLoginOtp(verifyOtpDto: VerifyOtpDto) {
     const { phoneNumber, countryCode, otp, fcmToken, deviceId, deviceType, deviceName } = verifyOtpDto;
@@ -233,9 +246,10 @@ async getCurrentAstrologerProfile(astrologerId: string) {
       phoneNumber,
       otp: '****',
       fcmToken: fcmToken ? `${fcmToken.substring(0, 15)}...` : 'N/A',
-      deviceId,
-      deviceType,
-      deviceName
+      deviceId: deviceId || 'N/A',
+      deviceType: deviceType || 'N/A',
+      deviceName: deviceName || 'N/A',
+      hasDeviceInfo: !!(deviceId || fcmToken),
     });
 
     const isOtpValid = await this.otpService.verifyOTP(phoneNumber, countryCode, otp);
@@ -249,7 +263,6 @@ async getCurrentAstrologerProfile(astrologerId: string) {
 
     const fullPhoneNumber = `+${countryCode}${phoneNumber}`;
 
-    // ✅ FIXED: Query astrologer directly by phoneNumber (it's a direct field)
     const astrologer = await this.astrologerModel.findOne({ phoneNumber: fullPhoneNumber });
 
     if (!astrologer) {
@@ -270,8 +283,8 @@ async getCurrentAstrologerProfile(astrologerId: string) {
       astrologer.accountStatus = 'active';
     }
 
-    // Handle device storage
-    if (fcmToken && deviceId) {
+    // Handle device storage - now fully optional
+    if (deviceId || fcmToken) {
       await this.handleDeviceStorage(astrologer, {
         fcmToken,
         deviceId,
@@ -279,15 +292,15 @@ async getCurrentAstrologerProfile(astrologerId: string) {
         deviceName
       });
     } else {
-      this.logger.warn('⚠️ Device info missing (fcmToken or deviceId not provided)');
+      this.logger.log('ℹ️ [AstrologerAuth] No device info provided, skipping device management');
     }
 
     astrologer.availability.lastActive = new Date();
     
     await astrologer.save();
-    this.logger.log('✅ Astrologer document saved with devices');
+    this.logger.log('✅ Astrologer document saved');
 
-    // ✅ Generate astrologer-specific tokens
+    // Generate astrologer-specific tokens
     const tokens = this.jwtAuthService.generateAstrologerTokens(
       astrologer._id as Types.ObjectId,
       astrologer.phoneNumber,
@@ -300,9 +313,8 @@ async getCurrentAstrologerProfile(astrologerId: string) {
       7 * 24 * 60 * 60
     );
 
-    this.logger.log('✅ Astrologer login successful with device registered');
+    this.logger.log('✅ Astrologer login successful');
 
-    // ✅ FIXED: Return both user and astrologer (consistent with Truecaller)
     return {
       success: true,
       message: 'Login successful',
@@ -437,11 +449,15 @@ async getCurrentAstrologerProfile(astrologerId: string) {
   }
 
   /**
-   * ✅ COMPLETELY REWRITTEN: Verify Truecaller for astrologer (NO USER CREATION)
+   * ✅ UPDATED: Verify Truecaller for astrologer - FCM token is OPTIONAL
    */
   async verifyTruecaller(truecallerVerifyDto: TruecallerVerifyDto, deviceInfo?: any) {
     try {
-      this.logger.log('🔍 [AstrologerAuth] Starting Truecaller verification');
+      this.logger.log('🔍 [AstrologerAuth] Starting Truecaller verification', {
+        hasDeviceInfo: !!deviceInfo,
+        hasFcmToken: !!deviceInfo?.fcmToken,
+        hasDeviceId: !!deviceInfo?.deviceId,
+      });
 
       const verification = await this.truecallerService.verifyOAuthCode(
         truecallerVerifyDto.authorizationCode,
@@ -459,13 +475,11 @@ async getCurrentAstrologerProfile(astrologerId: string) {
 
       this.logger.log('✅ [AstrologerAuth] Truecaller provided phone', { phoneNumber, countryCode });
 
-      // ✅ FIXED: Find astrologer directly (NOT user!)
       let astrologer = await this.astrologerModel.findOne({
         phoneNumber: phoneNumber
       });
 
       if (!astrologer) {
-        // No astrologer profile — inform frontend to complete registration
         this.logger.log('⚠️ [AstrologerAuth] No astrologer profile found for phone', { phoneNumber });
         return {
           success: true,
@@ -492,17 +506,17 @@ async getCurrentAstrologerProfile(astrologerId: string) {
         astrologer.accountStatus = 'active';
       }
 
-      // Register device if provided
-      if (deviceInfo && deviceInfo.fcmToken && deviceInfo.deviceId) {
+      // Register device if provided - now fully optional
+      if (deviceInfo && (deviceInfo.deviceId || deviceInfo.fcmToken)) {
         await this.handleDeviceStorage(astrologer, deviceInfo);
       } else {
-        this.logger.warn('⚠️ [AstrologerAuth] Device info missing (skipping device storage)');
+        this.logger.log('ℹ️ [AstrologerAuth] No device info provided, skipping device management');
       }
 
       astrologer.availability.lastActive = new Date();
       await astrologer.save();
 
-      // ✅ Generate astrologer-specific tokens
+      // Generate astrologer-specific tokens
       const tokens = this.jwtAuthService.generateAstrologerTokens(
         astrologer._id as Types.ObjectId,
         astrologer.phoneNumber,
@@ -519,7 +533,6 @@ async getCurrentAstrologerProfile(astrologerId: string) {
         astrologerId: astrologer._id
       });
 
-      // ✅ FIXED: Return consistent structure (user + astrologer)
       return {
         success: true,
         message: 'Login successful',

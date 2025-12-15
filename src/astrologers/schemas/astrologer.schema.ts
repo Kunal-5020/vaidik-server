@@ -142,7 +142,8 @@ ratings: {
       totalOrders: { type: Number, default: 0 },
       callOrders: { type: Number, default: 0 },
       chatOrders: { type: Number, default: 0 },
-      repeatCustomers: { type: Number, default: 0 }
+      repeatCustomers: { type: Number, default: 0 },
+      totalGifts: { type: Number, default: 0 }
     },
     default: () => ({
       totalEarnings: 0,
@@ -150,7 +151,8 @@ ratings: {
       totalOrders: 0,
       callOrders: 0,
       chatOrders: 0,
-      repeatCustomers: 0
+      repeatCustomers: 0,
+      totalGifts: 0
     })
   })
   stats: {
@@ -160,13 +162,15 @@ ratings: {
     callOrders: number;
     chatOrders: number;
     repeatCustomers: number;
+    totalGifts: number;
   };
 
   // Earnings
   // ✅ UPDATED: Earnings with proper calculation fields
   @Prop({
     type: {
-      totalEarned: { type: Number, default: 0 },           // Total revenue generated
+      totalEarned: { type: Number, default: 0 },   
+      totalGiftEarnings: { type: Number, default: 0 },       // Total revenue generated
       platformCommission: { type: Number, default: 0 },     // Platform's cut (₹)
       platformCommissionRate: { type: Number, default: 40 }, // Commission rate (%)
       netEarnings: { type: Number, default: 0 },           // totalEarned - platformCommission
@@ -178,6 +182,7 @@ ratings: {
     },
     default: () => ({
       totalEarned: 0,
+      totalGiftEarnings: 0,
       platformCommission: 0,
       platformCommissionRate: 40,
       netEarnings: 0,
@@ -190,6 +195,7 @@ ratings: {
   })
   earnings: {
     totalEarned: number;
+    totalGiftEarnings: number;
     platformCommission: number;
     platformCommissionRate: number;
     netEarnings: number;

@@ -1,4 +1,4 @@
-// src/auth/auth.service.ts (UPDATED - DEVICE MANAGEMENT)
+// src/auth/auth.service.ts (UPDATED - OPTIONAL FCM TOKEN)
 import { 
   Injectable, 
   BadRequestException, 
@@ -55,19 +55,27 @@ export class AuthService {
   }
 
   /**
-   * Handle device storage/update logic
+   * Handle device storage/update logic - FCM token is now OPTIONAL
    * Searches by deviceId and deviceName, updates FCM token if device exists
    */
-  private async handleDeviceStorage(user: UserDocument, deviceInfo: any): Promise<void> {
-    if (!deviceInfo?.fcmToken || !deviceInfo?.deviceId) {
-      this.logger.warn('⚠️ Missing device info, skipping device storage');
+  private async handleDeviceStorage(user: UserDocument, deviceInfo?: any): Promise<void> {
+    // Early exit if no device info provided at all
+    if (!deviceInfo) {
+      this.logger.log('ℹ️ No device info provided, skipping device storage');
+      return;
+    }
+
+    // Allow login without FCM token - only deviceId is required for tracking
+    if (!deviceInfo.deviceId) {
+      this.logger.warn('⚠️ Missing deviceId, skipping device storage');
       return;
     }
 
     this.logger.log('📱 AUTH SERVICE: Processing device storage...', {
       deviceId: deviceInfo.deviceId,
-      deviceName: deviceInfo.deviceName,
-      deviceType: deviceInfo.deviceType,
+      deviceName: deviceInfo.deviceName || 'Unknown Device',
+      deviceType: deviceInfo.deviceType || 'unknown',
+      hasFcmToken: !!deviceInfo.fcmToken,
     });
 
     try {
@@ -77,16 +85,16 @@ export class AuthService {
       const existingDeviceIndex = user.devices.findIndex(
         (d: any) => 
           d.deviceId === deviceInfo.deviceId || 
-          (d.deviceName === deviceInfo.deviceName && d.deviceType === deviceInfo.deviceType)
+          (deviceInfo.deviceName && d.deviceName === deviceInfo.deviceName && d.deviceType === deviceInfo.deviceType)
       );
 
       if (existingDeviceIndex !== -1) {
-        // Device exists - update FCM token and metadata
+        // Device exists - update metadata (FCM token is optional)
         const oldFcmToken = user.devices[existingDeviceIndex].fcmToken;
         
         user.devices[existingDeviceIndex] = {
           ...user.devices[existingDeviceIndex],
-          fcmToken: deviceInfo.fcmToken, // Update FCM token
+          fcmToken: deviceInfo.fcmToken || user.devices[existingDeviceIndex].fcmToken, // Keep old if new not provided
           deviceId: deviceInfo.deviceId,
           deviceName: deviceInfo.deviceName || user.devices[existingDeviceIndex].deviceName,
           deviceType: deviceInfo.deviceType || user.devices[existingDeviceIndex].deviceType,
@@ -94,15 +102,16 @@ export class AuthService {
           isActive: true,
         };
 
-        this.logger.log('✅ AUTH SERVICE: Device updated (same device, new FCM token)', {
+        this.logger.log('✅ AUTH SERVICE: Device updated', {
           deviceId: deviceInfo.deviceId,
-          oldFcmToken: oldFcmToken?.substring(0, 20) + '...',
-          newFcmToken: deviceInfo.fcmToken?.substring(0, 20) + '...',
+          fcmTokenUpdated: !!deviceInfo.fcmToken,
+          oldFcmToken: oldFcmToken ? oldFcmToken.substring(0, 20) + '...' : 'none',
+          newFcmToken: deviceInfo.fcmToken ? deviceInfo.fcmToken.substring(0, 20) + '...' : 'none',
         });
       } else {
-        // New device - add to array
+        // New device - add to array (FCM token optional)
         user.devices.push({
-          fcmToken: deviceInfo.fcmToken,
+          fcmToken: deviceInfo.fcmToken || undefined, // Store undefined if not provided
           deviceId: deviceInfo.deviceId,
           deviceType: deviceInfo.deviceType || 'unknown',
           deviceName: deviceInfo.deviceName || 'Unknown Device',
@@ -113,30 +122,30 @@ export class AuthService {
         this.logger.log('✅ AUTH SERVICE: New device added', {
           deviceId: deviceInfo.deviceId,
           totalDevices: user.devices.length,
+          hasFcmToken: !!deviceInfo.fcmToken,
         });
       }
 
-      // Keep only last 5 active devices (sorted by last active)
+      // Single device mode - force logout other devices ONLY if they have FCM tokens
       if (user.devices.length > 1) {
-  // Send force logout notification to old devices
-  const oldDevices = user.devices
-    .filter(d => d.deviceId !== deviceInfo.deviceId && d.fcmToken)
-    .map(d => d.fcmToken);
-  
-  if (oldDevices.length > 0) {
-    this.logger.log('📤 Sending force logout to old devices:', oldDevices.length);
-    // Fire-and-forget notification
-    this.sendForceLogoutNotification(oldDevices, 'user').catch(err => 
-      this.logger.error('Failed to send force logout:', err)
-    );
-  }
+        // Send force logout notification to old devices that have FCM tokens
+        const oldDevicesWithFcm = user.devices
+          .filter(d => d.deviceId !== deviceInfo.deviceId && d.fcmToken)
+          .map(d => d.fcmToken);
+        
+        if (oldDevicesWithFcm.length > 0) {
+          this.logger.log('📤 Sending force logout to old devices:', oldDevicesWithFcm.length);
+          // Fire-and-forget notification
+          this.sendForceLogoutNotification(oldDevicesWithFcm, 'user').catch(err => 
+            this.logger.error('Failed to send force logout:', err)
+          );
+        }
 
-  // Keep only current device
-  user.devices = user.devices
-    .filter(d => d.deviceId === deviceInfo.deviceId);
-  
-  this.logger.log('✅ AUTH SERVICE: Kept only current device (single device mode)');
-}
+        // Keep only current device
+        user.devices = user.devices.filter(d => d.deviceId === deviceInfo.deviceId);
+        
+        this.logger.log('✅ AUTH SERVICE: Kept only current device (single device mode)');
+      }
 
       // Save user with updated devices
       await user.save();
@@ -199,7 +208,10 @@ export class AuthService {
       isNewUser: boolean;
     }
   }> {
-    this.logger.log('🔍 AUTH SERVICE: Starting OTP verification process');
+    this.logger.log('🔍 AUTH SERVICE: Starting OTP verification process', {
+      hasDeviceInfo: !!deviceInfo,
+      hasFcmToken: !!deviceInfo?.fcmToken,
+    });
     
     try {
       const isOtpValid = await this.otpService.verifyOTP(phoneNumber, countryCode, otp);
@@ -303,9 +315,11 @@ export class AuthService {
         7 * 24 * 60 * 60
       );
 
-      // Handle device storage using the new method
+      // Handle device storage - now fully optional
       if (deviceInfo) {
         await this.handleDeviceStorage(user, deviceInfo);
+      } else {
+        this.logger.log('ℹ️ No device info provided, skipping device management');
       }
 
       const result = {
@@ -376,7 +390,10 @@ export class AuthService {
 
   async verifyTruecaller(truecallerVerifyDto: TruecallerVerifyDto, deviceInfo?: any) {
     try {
-      this.logger.log('🔍 Truecaller verification started');
+      this.logger.log('🔍 Truecaller verification started', {
+        hasDeviceInfo: !!deviceInfo,
+        hasFcmToken: !!deviceInfo?.fcmToken,
+      });
 
       const verification = await this.truecallerService.verifyOAuthCode(
         truecallerVerifyDto.authorizationCode,
@@ -462,9 +479,11 @@ export class AuthService {
         7 * 24 * 60 * 60
       );
 
-      // Handle device storage using the new method
+      // Handle device storage - now fully optional
       if (deviceInfo) {
         await this.handleDeviceStorage(user, deviceInfo);
+      } else {
+        this.logger.log('ℹ️ No device info provided, skipping device management');
       }
 
       this.logger.log('✅ Truecaller authentication successful');
@@ -515,43 +534,43 @@ export class AuthService {
   }
 
   /**
- * Send force logout notification via FCM
- */
-private async sendForceLogoutNotification(
-  fcmTokens: string[],
-  userType: 'user' | 'astrologer'
-): Promise<void> {
-  try {
-    // TODO: Replace with your actual FCM service
-    this.logger.log('📤 Force logout notification sent to:', {
-      count: fcmTokens.length,
-      userType,
-      tokens: fcmTokens.map(t => t.substring(0, 20) + '...'),
-    });
+   * Send force logout notification via FCM
+   */
+  private async sendForceLogoutNotification(
+    fcmTokens: string[],
+    userType: 'user' | 'astrologer'
+  ): Promise<void> {
+    try {
+      // TODO: Replace with your actual FCM service
+      this.logger.log('📤 Force logout notification sent to:', {
+        count: fcmTokens.length,
+        userType,
+        tokens: fcmTokens.map(t => t.substring(0, 20) + '...'),
+      });
 
-    // Example FCM payload (uncomment when you have FCM service)
-    /*
-    const payload = {
-      tokens: fcmTokens,
-      notification: {
-        title: 'Logged Out',
-        body: 'You have been logged out because you signed in from another device.',
-      },
-      data: {
-        type: 'force_logout',
-        reason: 'new_device_login',
-        userType: userType,
-        timestamp: new Date().toISOString(),
-      },
-    };
+      // Example FCM payload (uncomment when you have FCM service)
+      /*
+      const payload = {
+        tokens: fcmTokens,
+        notification: {
+          title: 'Logged Out',
+          body: 'You have been logged out because you signed in from another device.',
+        },
+        data: {
+          type: 'force_logout',
+          reason: 'new_device_login',
+          userType: userType,
+          timestamp: new Date().toISOString(),
+        },
+      };
 
-    await this.fcmService.sendMulticast(payload);
-    */
-  } catch (error) {
-    this.logger.error('❌ Failed to send force logout notification:', error);
-    // Don't throw - this is fire-and-forget
+      await this.fcmService.sendMulticast(payload);
+      */
+    } catch (error) {
+      this.logger.error('❌ Failed to send force logout notification:', error);
+      // Don't throw - this is fire-and-forget
+    }
   }
-}
 
   private generatePhoneHash(phoneNumber: string): string {
     return crypto.createHash('sha256').update(phoneNumber).digest('hex').substring(0, 16);

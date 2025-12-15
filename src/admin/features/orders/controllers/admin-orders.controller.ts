@@ -53,6 +53,16 @@ export class AdminOrdersController {
     return this.adminOrdersService.getAllOrders(page, limit, filters);
   }
 
+  @Get('calls') // ✅ New dedicated endpoint
+  async getAllCalls(@Query() query: any) {
+    return this.adminOrdersService.getAllCalls(query);
+  }
+
+  @Get('chats') // ✅ New dedicated endpoint
+  async getAllChats(@Query() query: any) {
+    return this.adminOrdersService.getAllChats(query);
+  }
+
   /**
    * GET /admin/orders/stats
    * Get order statistics

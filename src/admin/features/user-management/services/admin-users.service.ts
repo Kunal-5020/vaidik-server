@@ -421,7 +421,7 @@ export class AdminUsersService {
     };
   }
 
-  /**
+ /**
    * Adjust user wallet balance
    */
   async adjustWalletBalance(
@@ -448,9 +448,13 @@ export class AdminUsersService {
 
     await user.save();
 
+    // Generate a Transaction ID
+    const transactionId = `TXN-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
     // Create transaction record
     const transaction = new this.transactionModel({
       userId: new Types.ObjectId(userId),
+      transactionId: transactionId, // <--- FIXED: Added this field
       type: amount > 0 ? 'admin_credit' : 'admin_debit',
       amount: Math.abs(amount),
       status: 'completed',
@@ -460,6 +464,8 @@ export class AdminUsersService {
       metadata: {
         adjustedBy: adminId,
       },
+      createdAt: new Date(), // Ensure timestamps are set
+      updatedAt: new Date()
     });
 
     await transaction.save();
@@ -478,6 +484,7 @@ export class AdminUsersService {
         reason,
         oldBalance,
         newBalance: user.wallet.balance,
+        transactionId // Log the ID
       },
     });
 
