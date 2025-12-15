@@ -57,8 +57,8 @@ export class RatingReviewService {
     }
 
     // Check if order is completed
-    if (order.status !== 'completed') {
-      throw new BadRequestException('Can only review completed sessions');
+    if (order.status !== 'active') {
+      throw new BadRequestException('Can only review active sessions');
     }
 
     // Check if already reviewed

@@ -116,6 +116,7 @@ import { AdminModule } from './admin/admin.module';
     SupportModule,
     BankAccountsModule,
     TransactionsModule,
+    RemediesModule,
   ],
   controllers: [AppController],
   providers: [

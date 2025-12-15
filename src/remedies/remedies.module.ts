@@ -11,10 +11,10 @@ import { ShopifyModule } from '../shopify/shopify.module';
     MongooseModule.forFeature([
       { name: Remedy.name, schema: RemedySchema },
     ]),
-    forwardRef(() => ShopifyModule), // ✅ FIX: Wrap with forwardRef
+    forwardRef(() => ShopifyModule),
   ],
   controllers: [RemediesController, AstrologerRemediesController],
   providers: [RemediesService],
-  exports: [RemediesService], // ✅ IMPORTANT: Export RemediesService
+  exports: [RemediesService],  
 })
 export class RemediesModule {}
