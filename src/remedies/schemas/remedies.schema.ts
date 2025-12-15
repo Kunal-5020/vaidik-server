@@ -1,4 +1,4 @@
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { Prop, raw, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
 export type RemedyDocument = Remedy & Document;
@@ -45,32 +45,23 @@ export class Remedy {
   usageInstructions?: string; // How to use
 
   // ===== SHOPIFY PRODUCT REMEDY =====
-  @Prop({
-    type: {
-      productId: Number,
-      variantId: Number,
-      productName: String,
-      productHandle: String,
-      productUrl: String,
-      price: String,
-      imageUrl: String,
-      sku: String,
-      description: String,
-      type: String, // gemstone, mantra, etc.
-    },
-  })
-  shopifyProduct?: {
-    productId: number;
-    variantId: number;
-    productName: string;
-    productHandle: string;
-    productUrl: string;
-    price: string;
-    imageUrl: string;
-    sku: string;
-    description: string;
-    type: string;
-  };
+  // ✅ FIX APPLIED HERE: Changed to generic Object type
+  // This prevents Mongoose from confusing the field named "type" with the data type definition.
+  @Prop(
+    raw({
+      productId: { type: Number },
+      variantId: { type: Number },
+      productName: { type: String },
+      productHandle: { type: String },
+      productUrl: { type: String },
+      price: { type: String },
+      imageUrl: { type: String },
+      sku: { type: String },
+      description: { type: String },
+      type: { type: String }, // ✅ Correctly defines the 'type' field
+    }),
+  )
+  shopifyProduct?: Record<string, any>;
 
   // ===== RECOMMENDATION DETAILS =====
   @Prop({ required: true })

@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Razorpay from 'razorpay'; // ✅ Fix: Use default import
 import * as crypto from 'crypto';
@@ -28,14 +28,15 @@ export class RazorpayService {
   private keyId: string;
   private keySecret: string;
   private webhookSecret: string;
+  private readonly logger = new Logger(RazorpayService.name);
 
   constructor(private configService: ConfigService) {
     this.keyId =
       this.configService.get<string>('RAZORPAY_KEY_ID') ||
-      'rzp_test_pgNwN5gpPzbjfq';
+      'rzp_test_RqbM42nX68n7Zw';
     this.keySecret =
       this.configService.get<string>('RAZORPAY_KEY_SECRET') ||
-      'FZL5DUSe4qspQ7TUDCmP3Ua9';
+      'GkklJdevrh8uiFqsqFsjLrAN';
     this.webhookSecret =
       this.configService.get<string>('RAZORPAY_WEBHOOK_SECRET') || '';
 
@@ -60,7 +61,7 @@ export class RazorpayService {
   ): Promise<RazorpayOrderResponse> {
     try {
       const options = {
-        amount: Math.round(amount * 100), // Convert to paise
+        amount: Math.round(amount * 100),
         currency: currency || 'INR',
         receipt: transactionId,
         notes: {
@@ -80,6 +81,7 @@ export class RazorpayService {
         message: 'Razorpay order created successfully',
       };
     } catch (error: any) {
+      this.logger.error('Razorpay Order API Error:', JSON.stringify(error, null, 2));
       throw new BadRequestException(
         `Razorpay order creation failed: ${error.message}`,
       );
@@ -190,7 +192,17 @@ export class RazorpayService {
         message: 'Refund processed successfully',
       };
     } catch (error: any) {
-      throw new BadRequestException(`Refund failed: ${error.message}`);
+      console.error('Razorpay Order API Error:', JSON.stringify(error, null, 2));
+
+      // ✅ FIX: Extract the actual message from Razorpay's error structure
+      const errorMessage = 
+        error.error?.description || 
+        error.message || 
+        'Unknown Razorpay Error';
+
+      throw new BadRequestException(
+        `Razorpay order creation failed: ${errorMessage}`,
+      );
     }
   }
 

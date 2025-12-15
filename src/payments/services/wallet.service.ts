@@ -150,6 +150,7 @@ export class WalletService {
       });
 
       await transaction.save();
+      this.logger.log(`Recharge transaction created: ${transactionId} for user ${userId}`, totalPayable,currency,userId,transactionId);
 
       const razorpayOrder = await this.razorpayService.createOrder(
         totalPayable,
