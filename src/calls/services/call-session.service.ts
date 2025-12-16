@@ -439,6 +439,15 @@ this.notificationService
     }
   }
 
+  // ✅ ADDED THIS METHOD
+  /**
+   * Force end a call (Used by Admin Controller)
+   */
+  async endCall(sessionId: string, options: { endedBy: string; reason: string }): Promise<any> {
+    this.logger.log(`Force ending call ${sessionId} by ${options.endedBy}`);
+    return this.endSession(sessionId, options.endedBy, options.reason);
+  }
+
   // ===== END CALL SESSION =====
 
 async endSession(

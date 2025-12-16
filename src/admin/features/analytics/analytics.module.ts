@@ -9,6 +9,8 @@ import { Astrologer, AstrologerSchema } from '../../../astrologers/schemas/astro
 import { Order, OrderSchema } from '../../../orders/schemas/orders.schema';
 import { WalletTransaction, WalletTransactionSchema } from '../../../payments/schemas/wallet-transaction.schema';
 import { Admin, AdminSchema } from '../../core/schemas/admin.schema'; // ✅ Add this
+import { CallSession, CallSessionSchema } from '../../../calls/schemas/call-session.schema'; // ✅ Added
+import { ChatSession, ChatSessionSchema } from '../../../chat/schemas/chat-session.schema'; // ✅ Added
 
 import { AdminAnalyticsController } from './controllers/admin-analytics.controller';
 import { AdminAnalyticsService } from './services/admin-analytics.service';
@@ -31,6 +33,8 @@ import { AdminAnalyticsService } from './services/admin-analytics.service';
       { name: Order.name, schema: OrderSchema },
       { name: WalletTransaction.name, schema: WalletTransactionSchema },
       { name: Admin.name, schema: AdminSchema }, // ✅ Add this
+      { name: CallSession.name, schema: CallSessionSchema }, // ✅ Added for DI
+      { name: ChatSession.name, schema: ChatSessionSchema },
     ]),
   ],
   controllers: [AdminAnalyticsController],

@@ -11,6 +11,7 @@ import {
   DefaultValuePipe,
   ParseIntPipe,
   ValidationPipe,
+  NotFoundException,
 } from '@nestjs/common';
 
 import { AdminAuthGuard } from '../../../core/guards/admin-auth.guard';
@@ -18,6 +19,8 @@ import { PermissionsGuard } from '../../../core/guards/permissions.guard';
 import { RequirePermissions } from '../../../core/decorators/permissions.decorator';
 import { CurrentAdmin } from '../../../core/decorators/current-admin.decorator';
 import { Permissions } from '../../../core/config/permissions.config';
+import { CallSessionService } from '../../../../calls/services/call-session.service';
+import { ChatSessionService } from '../../../../chat/services/chat-session.service';
 
 import { AdminOrdersService } from '../services/admin-orders.service';
 import { RefundOrderDto } from '../dto/refund-order.dto';
@@ -28,7 +31,11 @@ import { OrderQueryDto } from '../dto/order-query.dto';
 @Controller('admin/orders')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminOrdersController {
-  constructor(private adminOrdersService: AdminOrdersService) {}
+  constructor(
+    private adminOrdersService: AdminOrdersService,
+    private callSessionService: CallSessionService,
+    private readonly chatSessionService: ChatSessionService,
+  ) {}
 
   /**
    * GET /admin/orders
@@ -121,6 +128,43 @@ export class AdminOrdersController {
   @RequirePermissions(Permissions.ORDERS_VIEW)
   async getRefundStats() {
     return this.adminOrdersService.getRefundStats();
+  }
+
+  // ✅ NEW: Endpoint to force end a call
+  @Post('calls/:sessionId/end')
+  async forceEndCall(@Param('sessionId') sessionId: string) {
+    // We use the existing logic from CallSessionService which handles
+    // Agora channel closing, status updates, and billing.
+    const session = await this.callSessionService.endCall(sessionId, {
+        endedBy: 'admin',
+        reason: 'Force ended by admin'
+    });
+
+    if (!session) {
+        throw new NotFoundException('Call session not found or already ended');
+    }
+
+    return {
+        success: true,
+        message: 'Call session force ended successfully',
+        data: session
+    };
+  }
+
+  // ✅ NEW: Endpoint to force end a chat
+  @Post('chats/:sessionId/end')
+  async forceEndChat(@Param('sessionId') sessionId: string) {
+    const session = await this.chatSessionService.endSession(sessionId, 'admin', 'Force ended by admin');
+
+    if (!session) {
+        throw new NotFoundException('Chat session not found or already ended');
+    }
+
+    return {
+        success: true,
+        message: 'Chat session force ended successfully',
+        data: session
+    };
   }
 
   /**
