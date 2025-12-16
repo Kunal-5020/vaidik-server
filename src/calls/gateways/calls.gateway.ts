@@ -15,6 +15,7 @@ import { CallSessionService } from '../services/call-session.service';
 import { CallRecordingService } from '../services/call-recording.service';
 import { AgoraService } from '../services/agora.service'; // ✅ ADD
 import { CallBillingService } from '../services/call-billing.service';
+import { forwardRef, Inject } from '@nestjs/common';
 
 // Shared shape for incoming call requests (audio + video)
 export interface IncomingCallRequestPayload {
@@ -47,6 +48,7 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private activeRecordings = new Map<string, string>(); // sessionId → recordingId
 
   constructor(
+    @Inject(forwardRef(() => CallSessionService))
     private callSessionService: CallSessionService,
     private callRecordingService: CallRecordingService,
     private agoraService: AgoraService,

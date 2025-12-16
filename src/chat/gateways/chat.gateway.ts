@@ -14,6 +14,7 @@ import { Logger, BadRequestException } from '@nestjs/common';
 import { ChatSessionService } from '../services/chat-session.service';
 import { ChatMessageService } from '../services/chat-message.service';
 import { NotificationService } from '../../notifications/services/notification.service';
+import { forwardRef, Inject } from '@nestjs/common';
 
 interface AuthSocket extends Socket {
   handshake: Socket['handshake'] & {
@@ -56,6 +57,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private astrologerSockets = new Map<string, string>(); // astrologerId → socketId mapping
 
   constructor(
+    @Inject(forwardRef(() => ChatSessionService))
     private chatSessionService: ChatSessionService,
     private chatMessageService: ChatMessageService,
     private notificationService: NotificationService,
