@@ -1,6 +1,6 @@
 // src/chat/services/chat-session.service.ts
 
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, forwardRef, Inject } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ChatSession, ChatSessionDocument } from '../schemas/chat-session.schema';
@@ -12,6 +12,7 @@ import { User, UserDocument } from '../../users/schemas/user.schema';
 import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
 import { EarningsService } from '../../astrologers/services/earnings.service';
 import { PenaltyService } from '../../astrologers/services/penalty.service';
+import { ChatGateway } from '../gateways/chat.gateway';
 
 @Injectable()
 export class ChatSessionService {
@@ -25,6 +26,8 @@ export class ChatSessionService {
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
     private ordersService: OrdersService,
     private orderPaymentService: OrderPaymentService,
+    @Inject(forwardRef(() => ChatGateway))
+    private chatGateway: ChatGateway,
     private walletService: WalletService,
     private notificationService: NotificationService,
     private earningsService: EarningsService,
@@ -641,80 +644,72 @@ if (actualDurationSeconds > 0) {
 
   // ===== USER JOIN TIMEOUT (60 sec after astrologer accepts) =====
 private setUserJoinTimeout(sessionId: string) {
-  // Clear any existing join timer first
-  if (this.joinTimers.has(sessionId)) {
-    clearTimeout(this.joinTimers.get(sessionId)!);
-    this.joinTimers.delete(sessionId);
-  }
+    if (this.joinTimers.has(sessionId)) {
+      clearTimeout(this.joinTimers.get(sessionId)!);
+      this.joinTimers.delete(sessionId);
+    }
 
-  const timeout = setTimeout(async () => {
-    try {
-      const session = await this.sessionModel.findOne({ sessionId });
+    const timeout = setTimeout(async () => {
+      try {
+        const session = await this.sessionModel.findOne({ sessionId });
 
-      if (!session) {
-        return;
-      }
+        // Only act if user never joined (still waiting)
+        if (session && (session.status === 'waiting' || session.status === 'waiting_in_queue')) {
+          this.logger.warn(`User did not join chat within 60s for session ${sessionId}`);
 
-      // Only act if user never joined (still not active)
-      if (session.status === 'waiting' || session.status === 'waiting_in_queue') {
-        this.logger.warn(`User did not join chat within 60s for session ${sessionId}`);
+          session.status = 'cancelled';
+          session.endReason = 'user_no_show';
+          session.endTime = new Date();
+          session.endedBy = 'system';
+          await session.save();
 
-        // ✅ FIX: Update session directly, don't cancel order
-        session.status = 'cancelled';
-        session.endReason = 'user_no_show';
-        session.endTime = new Date();
-        session.endedBy = 'system';
-        await session.save();
-
-        // ✅ FIX: Update order status to completed (not cancelled) with 0 duration
-        try {
+          // Update order to completed with 0 duration
           await this.ordersService.completeSession(session.orderId, {
             sessionId: session.sessionId,
             sessionType: 'chat',
             actualDurationSeconds: 0,
             billedMinutes: 0,
             chargedAmount: 0,
-            recordingUrl: undefined,
-            recordingS3Key: undefined,
-            recordingDuration: undefined,
           });
-          this.logger.log(`✅ Order ${session.orderId} marked as completed with 0 duration`);
-        } catch (orderError: any) {
-          this.logger.error(`Failed to update order: ${orderError.message}`);
+
+          // Notify User
+          this.notificationService.sendNotification({
+            recipientId: session.userId.toString(),
+            recipientModel: 'User',
+            type: 'session_timeout',
+            title: 'Session cancelled',
+            message: 'You did not join the chat session. No charges applied.',
+            data: {
+              type: 'session_timeout',
+              mode: 'chat',
+              sessionId: session.sessionId,
+              orderId: session.orderId,
+              reason: 'user_no_show',
+            },
+            priority: 'medium',
+          });
+
+          // ✅ CRITICAL FIX: Emit socket event so Astrologer screen closes
+          this.chatGateway.server.to(sessionId).emit('chat_ended', {
+            sessionId,
+            reason: 'user_no_show',
+            status: 'cancelled',
+            message: 'User failed to join the session.'
+          });
+
+          this.logger.log(`✅ Chat session ${sessionId} cancelled due to user no-show`);
         }
 
-        // Notify user
-        this.notificationService.sendNotification({
-          recipientId: session.userId.toString(),
-          recipientModel: 'User',
-          type: 'session_timeout',
-          title: 'Session cancelled',
-          message: 'You did not join the chat session. No charges applied.',
-          data: {
-            type: 'session_timeout',
-            mode: 'chat',
-            sessionId: session.sessionId,
-            orderId: session.orderId,
-            reason: 'user_no_show',
-          },
-          priority: 'medium',
-        }).catch(err =>
-          this.logger.error(`User no-show notification error: ${err.message}`),
-        );
-
-        this.logger.log(`✅ Chat session ${sessionId} cancelled due to user no-show`);
+        this.joinTimers.delete(sessionId);
+      } catch (error: any) {
+        this.logger.error(`User-join timeout error for ${sessionId}: ${error.message}`);
       }
+    }, 60 * 1000); // 60 seconds
 
-      this.joinTimers.delete(sessionId);
-    } catch (error: any) {
-      this.logger.error(`User-join timeout error for ${sessionId}: ${error.message}`);
-    }
-  }, 60 * 1000); // 60 seconds
+    this.joinTimers.set(sessionId, timeout);
+  }
 
-  this.joinTimers.set(sessionId, timeout);
-}
-
-  private clearUserJoinTimeout(sessionId: string) {
+  public clearUserJoinTimeout(sessionId: string) {
     if (this.joinTimers.has(sessionId)) {
       clearTimeout(this.joinTimers.get(sessionId)!);
       this.joinTimers.delete(sessionId);
@@ -935,4 +930,5 @@ this.notificationService.sendNotification({
       }
     };
   }
+  
 }

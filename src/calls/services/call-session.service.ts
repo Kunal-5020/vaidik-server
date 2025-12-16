@@ -1,6 +1,6 @@
 // src/calls/services/call-session.service.ts
 
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, forwardRef, Inject } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { CallSession, CallSessionDocument } from '../schemas/call-session.schema';
@@ -13,6 +13,7 @@ import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrol
 import { EarningsService } from '../../astrologers/services/earnings.service';
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { PenaltyService } from '../../astrologers/services/penalty.service';
+import { CallGateway } from '../gateways/calls.gateway';
 
 @Injectable()
 export class CallSessionService {
@@ -24,6 +25,8 @@ export class CallSessionService {
     @InjectModel(CallSession.name) private sessionModel: Model<CallSessionDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
+    @Inject(forwardRef(() => CallGateway))
+    private callGateway: CallGateway,
     private ordersService: OrdersService,
     private orderPaymentService: OrderPaymentService,
     private walletService: WalletService,
@@ -787,7 +790,7 @@ async getAstrologerCallSessionDetails(
           this.logger.warn(`User did not join call within 60s for session ${sessionId}`);
 
           // No deduction; endSession handles 0-duration correctly
-          await this.endSession(sessionId, 'system', 'user_no_show');
+          await this.callGateway.terminateCall(sessionId, 'system', 'user_no_show');
         }
 
         this.joinTimers.delete(sessionId);

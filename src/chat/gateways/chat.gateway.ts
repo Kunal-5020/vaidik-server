@@ -829,6 +829,10 @@ async handleJoinSession(
     
     // Join room
     client.join(data.sessionId);
+
+    if (data.role === 'user') {
+        this.chatSessionService.clearUserJoinTimeout(data.sessionId);
+      }
     
     // Check room population
     const socketsInRoom = await this.server.in(data.sessionId).allSockets();

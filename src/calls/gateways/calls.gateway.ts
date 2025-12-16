@@ -330,6 +330,7 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     // 1. Join the Socket Room
     client.join(data.sessionId);
+    
 
     // 2. Register in Active Users Map
     this.activeUsers.set(data.userId, {
