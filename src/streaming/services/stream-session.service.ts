@@ -9,6 +9,7 @@ import { CallTransaction, CallTransactionDocument } from '../schemas/call-transa
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
 import { StreamAgoraService } from './stream-agora.service';
+import { StreamRecordingService } from './stream-recording.service';
 import { StreamGateway } from '../gateways/streaming.gateway';
 import { WalletService } from '../../payments/services/wallet.service';
 import { EarningsService } from '../../astrologers/services/earnings.service';
@@ -24,6 +25,7 @@ export class StreamSessionService {
     @InjectModel(CallTransaction.name) private callTransactionModel: Model<CallTransactionDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
+    private streamRecordingService: StreamRecordingService,
     private streamAgoraService: StreamAgoraService,
     private walletService: WalletService,
     private earningsService: EarningsService,
@@ -94,6 +96,26 @@ export class StreamSessionService {
 
   await stream.save();
 
+  try {
+      const recorderUid = this.streamAgoraService.generateUid().toString();
+      const recResult = await this.streamRecordingService.startRecording(
+        channelName,
+        recorderUid,
+        streamId
+      );
+      
+      stream.isRecording = true;
+      stream.recordingResourceId = recResult.resourceId;
+      stream.recordingSid = recResult.sid;
+      stream.recordingUid = recorderUid;
+
+      await stream.save();
+      this.logger.log(`🎥 Auto-recording started for stream ${streamId}`);
+    } catch (e) {
+      this.logger.error(`⚠️ Failed to auto-start recording for ${streamId}: ${e.message}`);
+      // Don't fail the stream start just because recording failed, but log it.
+    }
+
   await this.astrologerModel.findByIdAndUpdate(hostId, {
     'availability.isOnline': true,
     'availability.isAvailable': false,
@@ -119,48 +141,29 @@ export class StreamSessionService {
   async endStream(streamId: string, hostId?: string): Promise<any> {
     this.logger.log(`🔄 endStream called`, { streamId, hostId });
 
-    let stream = await this.streamModel.findOne(
-        hostId ? { streamId, hostId } : { streamId }
-    );
+    let stream = await this.streamModel.findOne(hostId ? { streamId, hostId } : { streamId });
+    if (!stream && hostId) stream = await this.streamModel.findOne({ streamId });
+    if (!stream) throw new NotFoundException('Stream not found');
 
-    if (!stream && hostId) {
-        stream = await this.streamModel.findOne({ streamId });
-    }
-
-    if (!stream) {
-        throw new NotFoundException('Stream not found');
-    }
-
-    if (stream.status === 'ended') {
-        return { success: true, message: 'Already ended' };
-    }
+    if (stream.status === 'ended') return { success: true, message: 'Already ended' };
 
     if (stream.currentCall?.isOnCall) {
         await this.endCurrentCall(streamId, stream.hostId.toString());
     }
 
+    // ✅ FIX: TRIGGER BACKGROUND RECORDING STOP
     if (stream.isRecording && stream.recordingResourceId && stream.recordingSid) {
-        try {
-        await this.streamAgoraService.stopRecording(
-            stream.recordingResourceId,
-            stream.recordingSid,
-            stream.agoraChannelName!,
-            stream.recordingUid!
-        );
-        } catch (e) {
-        this.logger.error('Failed to stop recording on stream end', e);
-        }
+        this.handleBackgroundStreamStop(stream);
     }
 
     stream.status = 'ended';
     stream.endedAt = new Date();
     stream.currentState = 'idle';
     stream.callWaitlist = [];
+    stream.isRecording = false; // Mark as not recording instantly
 
     if (stream.startedAt) {
-        stream.duration = Math.floor(
-        (stream.endedAt.getTime() - stream.startedAt.getTime()) / 1000
-        );
+        stream.duration = Math.floor((stream.endedAt.getTime() - stream.startedAt.getTime()) / 1000);
     }
 
     await stream.save();
@@ -172,11 +175,31 @@ export class StreamSessionService {
         'availability.lastActive': new Date(),
     });
 
-    return {
-        success: true,
-        message: 'Stream Ended',
-        data: { duration: stream.duration },
-    };
+    return { success: true, message: 'Stream Ended', data: { duration: stream.duration } };
+  }
+
+  // ✅ NEW BACKGROUND METHOD
+  private async handleBackgroundStreamStop(stream: StreamSessionDocument) {
+      try {
+          const stopResult = await this.streamRecordingService.stopRecording(
+            stream.agoraChannelName!,
+            stream.recordingUid!,
+            stream.recordingResourceId!,
+            stream.recordingSid!,
+            stream.streamId
+          );
+          
+          if (stopResult.recordingUrl) {
+             // Re-fetch to avoid version error, though less likely here
+             await this.streamModel.updateOne(
+                 { streamId: stream.streamId },
+                 { $set: { recordingFiles: [stopResult.recordingUrl] } }
+             );
+             this.logger.log(`🎥 Stream recording updated in background for ${stream.streamId}`);
+          }
+      } catch (e) {
+          this.logger.error('Failed to stop stream recording in background', e);
+      }
   }
 
   async getStreamsByHost(hostId: string, filters: any) {
@@ -360,41 +383,31 @@ export class StreamSessionService {
 // Find the cancelCallRequest method and replace it with this:
 
 async cancelCallRequest(streamId: string, userId: string) {
-  const stream = await this.streamModel.findOne({ streamId });
-  if (!stream) throw new NotFoundException('Stream not found');
+    const stream = await this.streamModel.findOne({ streamId });
+    if (!stream) throw new NotFoundException('Stream not found');
 
-  // ✅ CRITICAL FIX: If the user cancelling is currently the "Active Caller" (Race Condition)
-  // This happens if Host accepted the call, but User cancelled immediately after.
-  if (stream.currentCall?.isOnCall && stream.currentCall.callerId.toString() === userId) {
-      this.logger.warn(`⚠️ User ${userId} cancelled ACTIVE call. Force ending session.`);
-      
-      // Force clean up the call state
-      stream.currentCall = undefined as any;
-      stream.currentState = 'streaming';
-      
-      // Also clean up the waitlist entry
-      stream.callWaitlist = stream.callWaitlist.filter(r => r.userId.toString() !== userId);
-      
+    if (stream.currentCall?.isOnCall && stream.currentCall.callerId.toString() === userId) {
+        this.logger.warn(`⚠️ User ${userId} cancelled ACTIVE call. Ending session properly.`);
+        
+        // ✅ FIX: Call endCurrentCall to ensure BILLING happens
+        // Just resetting variables would give the user a free call.
+        await this.endCurrentCall(streamId, stream.hostId.toString());
+        
+        this.streamGateway.server.to(streamId).emit('user_ended_call', { userId });
+        this.streamGateway.server.to(streamId).emit('stream_state_updated', { state: 'streaming' });
+
+        return { success: true, message: 'Active call ended by user' };
+    }
+
+    const index = stream.callWaitlist.findIndex(r => r.userId.toString() === userId && r.status === 'waiting');
+    if (index !== -1) {
+      stream.callWaitlist.splice(index, 1);
+      stream.callWaitlist.filter(r => r.status === 'waiting').forEach((r, i) => r.position = i + 1);
       await stream.save();
-      
-      // Notify everyone
-      this.streamGateway.server.to(streamId).emit('user_ended_call', { userId });
-      this.streamGateway.server.to(streamId).emit('stream_state_updated', { state: 'streaming' });
-
-      return { success: true, message: 'Active call cancelled' };
+      return { success: true, message: 'Request cancelled' };
+    }
+    return { success: false, message: 'Request not found' };
   }
-
-  // Standard waitlist removal
-  const index = stream.callWaitlist.findIndex(r => r.userId.toString() === userId && r.status === 'waiting');
-  if (index !== -1) {
-    stream.callWaitlist.splice(index, 1);
-    // Re-calculate positions
-    stream.callWaitlist.filter(r => r.status === 'waiting').forEach((r, i) => r.position = i + 1);
-    await stream.save();
-    return { success: true, message: 'Request cancelled' };
-  }
-  return { success: false, message: 'Request not found' };
-}
 
 async endCurrentCall(streamId: string, hostId: string): Promise<any> {
     const stream = await this.streamModel.findOne({ streamId });
@@ -900,40 +913,47 @@ async forceEndStreamAdmin(streamId: string, reason: string): Promise<any> {
      if (!stream || stream.status !== 'live') throw new BadRequestException('Stream not live');
      if (stream.isRecording) throw new BadRequestException('Already recording');
 
-     const uid = this.streamAgoraService.generateUid().toString();
-     const token = this.streamAgoraService.generateBroadcasterToken(stream.agoraChannelName!, parseInt(uid));
+     const recorderUid = this.streamAgoraService.generateUid().toString();
      
-     const resourceId = await this.streamAgoraService.acquireResource(stream.agoraChannelName!, uid);
-     const sid = await this.streamAgoraService.startRecording(resourceId, stream.agoraChannelName!, uid, token);
+     // ✅ Use dedicated service
+     const result = await this.streamRecordingService.startRecording(
+        stream.agoraChannelName!, 
+        recorderUid, 
+        streamId
+     );
 
      stream.isRecording = true;
-     stream.recordingResourceId = resourceId;
-     stream.recordingSid = sid;
-     stream.recordingUid = uid;
+     stream.recordingResourceId = result.resourceId;
+     stream.recordingSid = result.sid;
+     stream.recordingUid = recorderUid;
      await stream.save();
 
-     return { success: true, message: 'Recording started', data: { sid } };
+     return { success: true, message: 'Recording started', data: { sid: result.sid } };
   }
 
   async stopRecording(streamId: string) {
     const stream = await this.streamModel.findOne({ streamId });
     if (!stream || !stream.isRecording) throw new BadRequestException('Not recording');
 
-    const files = await this.streamAgoraService.stopRecording(
-      stream.recordingResourceId!, 
-      stream.recordingSid!, 
+    // ✅ Use dedicated service
+    const result = await this.streamRecordingService.stopRecording(
       stream.agoraChannelName!, 
-      stream.recordingUid!
+      stream.recordingUid!, 
+      stream.recordingResourceId!, 
+      stream.recordingSid!,
+      streamId
     );
 
     stream.isRecording = false;
-    stream.recordingFiles = files.map((f: any) => f.fileName);
+    if (result.recordingUrl) {
+       stream.recordingFiles = [result.recordingUrl];
+    }
     await stream.save();
 
-    return { success: true, message: 'Recording stopped', data: { files } };
+    return { success: true, message: 'Recording stopped', data: result };
   }
 
-    async getStreamById(streamId: string) {
+  async getStreamById(streamId: string) {
     return this.streamModel.findOne({ streamId }).lean();
   }
 

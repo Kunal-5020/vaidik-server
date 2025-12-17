@@ -168,20 +168,6 @@ export class AdminRegistrationService {
       }
     });
 
-    // Send notification
-    try {
-      await this.notificationService.sendNotification({
-        recipientId: registration.phoneNumber,
-        recipientModel: 'User',
-        type: 'system_announcement',
-        title: 'Application Shortlisted! 🎉',
-        message: 'Congratulations! Your application has been shortlisted for Round 1 interview.',
-        priority: 'high'
-      });
-    } catch (error) {
-      this.logger.warn(`Failed to send notification: ${error.message}`);
-    }
-
     this.logger.log(`Candidate ${registrationId} shortlisted by admin ${adminId}`);
 
     return {

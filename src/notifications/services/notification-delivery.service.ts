@@ -2,13 +2,14 @@
 import { Injectable, Inject, Logger, forwardRef } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { MobileNotificationGateway } from '../gateways/mobile-notification.gateway';
-import { WebNotificationGateway } from '../gateways/web-notification.gateway';
+
+import { NotificationGateway } from '../gateways/notification.gateway';
 import { FcmService } from './fcm.service';
 import { Notification, NotificationDocument } from '../schemas/notification.schema';
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { Astrologer, AstrologerDocument } from '../../astrologers/schemas/astrologer.schema';
 import { getNotificationConfig, shouldUseSocketIo } from '../config/notification-types.config';
+import { ChatGateway } from '../../chat/gateways/chat.gateway';
 import { AdminNotificationGateway } from '../../admin/features/notifications/gateways/admin-notification.gateway';
 
 @Injectable()
@@ -19,19 +20,18 @@ export class NotificationDeliveryService {
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Astrologer.name) private astrologerModel: Model<AstrologerDocument>,
-    
-    // ✅ FIX: Use forwardRef for MobileGateway to prevent circular dependency
-    @Inject(forwardRef(() => MobileNotificationGateway)) 
-    private mobileGateway: MobileNotificationGateway,
 
-    // ✅ FIX: Use forwardRef for WebGateway to prevent circular dependency
-    @Inject(forwardRef(() => WebNotificationGateway)) 
-    private webGateway: WebNotificationGateway,
+    // Unified gateway (mobile + web)
+    @Inject(forwardRef(() => NotificationGateway))
+    private readonly notificationGateway: NotificationGateway,
+
+    @Inject(forwardRef(() => ChatGateway)) 
+    private readonly chatGateway: ChatGateway,
 
     @Inject(forwardRef(() => AdminNotificationGateway))
     private readonly adminGateway: AdminNotificationGateway | undefined,
-    
-    private fcmService: FcmService,
+
+    private readonly fcmService: FcmService,
   ) {}
 
   private isValidUrl(urlString?: string): boolean {
@@ -47,24 +47,23 @@ export class NotificationDeliveryService {
   }
 
   /**
-   * 🆕 UPDATED: Deliver to MOBILE (FCM + Socket.io) AND WEB (Socket.io)
+   * Deliver to WEB (socket) + MOBILE (socket) + fallback FCM
+   * (Method name kept as-is to avoid touching other callers.)
    */
   async deliverToMobile(
     notification: NotificationDocument,
     targetDeviceId?: string,
-    targetFcmToken?: string
+    targetFcmToken?: string,
   ): Promise<void> {
     try {
       const recipientId = notification.recipientId.toString();
       const typeConfig = getNotificationConfig(notification.type);
 
-      // 1. Fetch Recipient Device Data
-      let recipient;
-      if (notification.recipientModel === 'User') {
-        recipient = await this.userModel.findById(recipientId).select('devices').lean().exec();
-      } else {
-        recipient = await this.astrologerModel.findById(recipientId).select('devices').lean().exec();
-      }
+      // 1) Fetch recipient device data (for FCM fallback)
+      const recipient =
+        notification.recipientModel === 'User'
+          ? await this.userModel.findById(recipientId).select('devices').lean().exec()
+          : await this.astrologerModel.findById(recipientId).select('devices').lean().exec();
 
       if (!recipient) {
         this.logger.warn(`⚠️ Recipient not found: ${notification.recipientModel} ${recipientId}`);
@@ -72,42 +71,42 @@ export class NotificationDeliveryService {
       }
 
       // ============================================================
-      // 🌐 CHANNEL 1: WEB SOCKETS
+      // 🌐 CHANNEL 1: WEB SOCKETS (via unified gateway)
       // ============================================================
       const userType = notification.recipientModel === 'User' ? 'user' : 'astrologer';
-      const isWebConnected = this.webGateway.isUserConnected(recipientId, userType);
-      
+
+      const isWebConnected = this.notificationGateway.isUserConnected(recipientId, userType);
+
       if (isWebConnected) {
-        this.webGateway.sendToUser(
-          recipientId,
-          userType,
-          'notification',
-          {
-            notificationId: notification.notificationId,
-            type: notification.type,
-            title: notification.title,
-            message: notification.message,
-            data: notification.data,
-            imageUrl: notification.imageUrl,
-            actionUrl: notification.actionUrl,
-            priority: notification.priority || typeConfig.priority,
-            timestamp: notification.createdAt,
-          }
-        );
+        this.notificationGateway.sendToWebUser(recipientId, userType, 'notification', {
+          notificationId: notification.notificationId,
+          type: notification.type,
+          title: notification.title,
+          message: notification.message,
+          data: notification.data,
+          imageUrl: notification.imageUrl,
+          actionUrl: notification.actionUrl,
+          priority: notification.priority || typeConfig.priority,
+          timestamp: notification.createdAt,
+        });
         this.logger.log(`🌐 [Web] Sent to ${userType} ${recipientId}`);
       }
 
       // ============================================================
-      // 📱 CHANNEL 2: MOBILE SOCKETS
+      // 📱 CHANNEL 2: MOBILE SOCKETS (via unified gateway)
       // ============================================================
       const useSocketIo = shouldUseSocketIo(notification.type);
       let isMobileSocketSent = false;
 
-      if (useSocketIo && this.mobileGateway.isUserOnline(recipientId)) {
+      if (useSocketIo && this.notificationGateway.isUserOnline(recipientId)) {
         if (targetDeviceId) {
-          isMobileSocketSent = this.mobileGateway.sendToUserDevice(recipientId, targetDeviceId, notification);
+          isMobileSocketSent = this.notificationGateway.sendToUserDevice(
+            recipientId,
+            targetDeviceId,
+            notification,
+          );
         } else {
-          isMobileSocketSent = this.mobileGateway.sendToUser(recipientId, notification);
+          isMobileSocketSent = this.notificationGateway.sendToUser(recipientId, notification);
         }
 
         if (isMobileSocketSent) {
@@ -115,38 +114,28 @@ export class NotificationDeliveryService {
         }
       }
 
-      // ✅ RECURSION FIX: Use updateOne instead of save()
-      // If either Web or Mobile Socket worked, we mark as socket sent.
+      // If any socket channel worked, mark socket sent and stop (your existing behavior)
       if (isWebConnected || isMobileSocketSent) {
         await this.notificationModel.updateOne(
           { _id: notification._id },
-          { $set: { isSocketSent: true, socketSentAt: new Date() } }
+          { $set: { isSocketSent: true, socketSentAt: new Date() } },
         );
-
-        // 🛑 STOP HERE if user is online (don't spam with Push Notification unless critical)
-        // You can remove this return if you ALWAYS want Push Notifications.
-        return; 
-      }
-
-      // ============================================================
-      // 📤 CHANNEL 3: FCM (PUSH NOTIFICATION) - FALLBACK
-      // ============================================================
-      
-      if (!recipient.devices || recipient.devices.length === 0) {
         return;
       }
+
+      // ============================================================
+      // 📤 CHANNEL 3: FCM (fallback)
+      // ============================================================
+      if (!recipient.devices || recipient.devices.length === 0) return;
 
       let fcmTokens: string[] = [];
 
       if (targetDeviceId) {
-        // Target specific device
         const device = recipient.devices.find((d: any) => d.deviceId === targetDeviceId && d.isActive);
         if (device?.fcmToken) fcmTokens.push(device.fcmToken);
       } else if (targetFcmToken) {
-        // Target specific token
         fcmTokens = [targetFcmToken];
       } else {
-        // Broadcast to all active devices
         fcmTokens = recipient.devices
           .filter((d: any) => d.isActive && d.fcmToken)
           .map((d: any) => d.fcmToken);
@@ -157,7 +146,6 @@ export class NotificationDeliveryService {
         return;
       }
 
-      // Prepare FCM Payload
       const fcmData: Record<string, string> = {};
       if (notification.data) {
         for (const [key, value] of Object.entries(notification.data)) {
@@ -166,8 +154,7 @@ export class NotificationDeliveryService {
       }
       fcmData['notificationId'] = notification.notificationId;
       fcmData['type'] = notification.type;
-      
-      // Send
+
       const fcmResult = await this.fcmService.sendToMultipleDevices(
         fcmTokens,
         notification.title,
@@ -180,20 +167,17 @@ export class NotificationDeliveryService {
           sound: typeConfig.sound,
           channelId: typeConfig.androidChannelId,
           badge: 1,
-        }
+        },
       );
 
       if (fcmResult.successCount > 0) {
-        // ✅ RECURSION FIX: Update directly in DB
         await this.notificationModel.updateOne(
           { _id: notification._id },
-          { $set: { isPushSent: true, pushSentAt: new Date() } }
+          { $set: { isPushSent: true, pushSentAt: new Date() } },
         );
-
         this.logger.log(`✅ [FCM] Sent to ${recipientId} (${fcmResult.successCount} devices)`);
       }
-
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`❌ Delivery Failed: ${error.message}`, error.stack);
     }
   }
@@ -201,16 +185,16 @@ export class NotificationDeliveryService {
   async deliverToAdmins(notification: NotificationDocument): Promise<void> {
     if (!this.adminGateway) return;
     try {
-        this.adminGateway.broadcastToAllAdmins('notification', {
-            notificationId: notification.notificationId,
-            type: notification.type,
-            title: notification.title,
-            message: notification.message,
-            recipientId: notification.recipientId,
-            timestamp: notification.createdAt
-        });
-    } catch (e) {
-        this.logger.error(`Admin delivery failed: ${e.message}`);
+      this.adminGateway.broadcastToAllAdmins('notification', {
+        notificationId: notification.notificationId,
+        type: notification.type,
+        title: notification.title,
+        message: notification.message,
+        recipientId: notification.recipientId,
+        timestamp: notification.createdAt,
+      });
+    } catch (e: any) {
+      this.logger.error(`Admin delivery failed: ${e.message}`);
     }
   }
 
@@ -219,14 +203,10 @@ export class NotificationDeliveryService {
       this.logger.debug('AdminNotificationGateway not available');
       return;
     }
-
     try {
       this.adminGateway.broadcastToAllAdmins(eventType, eventData);
-    } catch (error) {
-      this.logger.error(
-        `❌ Realtime event error (Type: ${eventType}): ${(error as any).message}`,
-        (error as any).stack
-      );
+    } catch (error: any) {
+      this.logger.error(`❌ Realtime event error (Type: ${eventType}): ${error.message}`, error.stack);
     }
   }
 
@@ -235,41 +215,39 @@ export class NotificationDeliveryService {
       this.logger.debug('AdminNotificationGateway not available');
       return;
     }
-
     try {
       this.adminGateway.broadcastToAllAdmins('system_alert', { message, data });
-    } catch (error) {
-      this.logger.error(
-        `❌ System alert error (Message: ${message}): ${(error as any).message}`,
-        (error as any).stack
-      );
+    } catch (error: any) {
+      this.logger.error(`❌ System alert error (Message: ${message}): ${error.message}`, error.stack);
     }
   }
 
   getConnectedUsersCount(): number {
-    const mobileCount = this.mobileGateway.getConnectedUsersCount();
-    const webCount = this.webGateway.getConnectedCount();
+    const mobileCount = this.notificationGateway.getConnectedUsersCount();
+    const webCount = this.notificationGateway.getConnectedWebCount();
     return mobileCount + webCount;
   }
 
   getConnectedAdminsCount(): number {
-    if (!this.adminGateway) {
-      return 0;
-    }
+    if (!this.adminGateway) return 0;
     return this.adminGateway.getConnectedAdminsCount();
   }
 
   isUserOnline(userId: string): boolean {
-    const isMobileOnline = this.mobileGateway.isUserOnline(userId);
-    const isWebOnline =
-      this.webGateway.isUserConnected(userId, 'user') || this.webGateway.isUserConnected(userId, 'astrologer');
-    return isMobileOnline || isWebOnline;
+    // Check Notification Gateway (Mobile/Web)
+    const isNotifConnected = 
+      this.notificationGateway.isUserOnline(userId) || 
+      this.notificationGateway.isUserConnected(userId, 'user');
+
+    // 👇 ADD Check for Chat Gateway
+    // (Assuming your ChatGateway has a method like isUserOnline or you can check its connectedUsers map)
+    const isChatConnected = this.chatGateway.isUserOnline(userId); 
+
+    return isNotifConnected || isChatConnected;
   }
 
   isAnyAdminOnline(): boolean {
-    if (!this.adminGateway) {
-      return false;
-    }
+    if (!this.adminGateway) return false;
     return this.adminGateway.getConnectedAdminsCount() > 0;
   }
 }

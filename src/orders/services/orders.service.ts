@@ -567,6 +567,37 @@ export class OrdersService {
     };
   }
 
+  // ✅ NEW METHOD: UPDATE SESSION RECORDING (SYNC FOR PARALLEL PROCESSING)
+  async updateSessionRecording(
+    orderId: string,
+    sessionId: string,
+    recordingData: {
+      recordingUrl: string;
+      recordingS3Key: string;
+      recordingDuration: number;
+      recordingType: string;
+    }
+  ): Promise<void> {
+    const updateResult = await this.orderModel.updateOne(
+      { 
+        orderId, 
+        'sessionHistory.sessionId': sessionId 
+      },
+      {
+        $set: {
+          'sessionHistory.$.recordingUrl': recordingData.recordingUrl,
+          'sessionHistory.$.recordingType': recordingData.recordingType
+        }
+      }
+    );
+
+    if (updateResult.modifiedCount > 0) {
+      this.logger.log(`✅ Session recording synced to Order ${orderId} for session ${sessionId}`);
+    } else {
+      this.logger.warn(`⚠️ Failed to sync recording to Order ${orderId}. Session ${sessionId} not found in history.`);
+    }
+  }
+
   // ===== FIND ACTIVE ORDER WITH ASTROLOGER =====
   async findActiveOrderWithAstrologer(
     userId: string,
@@ -808,16 +839,7 @@ async getAstrologerOrders(
 
     // ✅ Log 7: Sample order data (first order only, for inspection)
     if (orders.length > 0) {
-      this.logger.log('📝 [getAstrologerOrders] Sample order (first)', {
-        orderId: orders[0].orderId,
-        type: orders[0].type,
-        status: orders[0].status,
-        userId: orders[0].userId,
-        astrologerId: orders[0].astrologerId?.toString(),
-        createdAt: orders[0].createdAt,
-        hasSessionHistory: !!orders[0].sessionHistory,
-        sessionCount: orders[0].sessionHistory?.length || 0,
-      });
+      this.logger.log('📝 [getAstrologerOrders] Sample order (first)');
     } else {
       // ✅ Log 8: Empty result investigation
       this.logger.warn('⚠️  [getAstrologerOrders] No orders found - Running diagnostics...');
@@ -859,16 +881,7 @@ async getAstrologerOrders(
     }
 
     // ✅ Log 9: Return data structure
-    this.logger.log('✅ [getAstrologerOrders] Returning response', {
-      success: true,
-      orderCount: orders.length,
-      pagination: {
-        page: filters.page,
-        limit: filters.limit,
-        total,
-        pages: Math.ceil(total / filters.limit),
-      },
-    });
+    this.logger.log('✅ [getAstrologerOrders] Returning response');
 
     return {
       success: true,

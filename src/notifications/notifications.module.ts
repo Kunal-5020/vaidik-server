@@ -13,14 +13,14 @@ import { FcmService } from './services/fcm.service';
 import { NotificationDeliveryService } from './services/notification-delivery.service';
 
 // Gateways
-import { MobileNotificationGateway } from './gateways/mobile-notification.gateway';
-import { WebNotificationGateway } from './gateways/web-notification.gateway';
+import { NotificationGateway } from './gateways/notification.gateway';
 
 // Schemas
 import { Notification, NotificationSchema } from './schemas/notification.schema';
 import { ScheduledNotification, ScheduledNotificationSchema } from './schemas/scheduled-notification.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.schema';
+import { ChatModule } from 'src/chat/chat.module';
 
 @Module({
   imports: [
@@ -40,6 +40,7 @@ import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.
       { name: User.name, schema: UserSchema },
       { name: Astrologer.name, schema: AstrologerSchema },
     ]),
+    forwardRef(() => ChatModule),
     forwardRef(() => require('../admin/features/notifications/notifications.module').AdminNotificationsModule),
   ],
   controllers: [NotificationController],
@@ -47,13 +48,12 @@ import { Astrologer, AstrologerSchema } from '../astrologers/schemas/astrologer.
     NotificationService,
     FcmService,
     NotificationDeliveryService,
-    MobileNotificationGateway,
-    WebNotificationGateway,
+    NotificationGateway,
   ],
   exports: [
     NotificationService,
     NotificationDeliveryService,
-    MobileNotificationGateway,
+    NotificationGateway,
     MongooseModule,
   ],
 })

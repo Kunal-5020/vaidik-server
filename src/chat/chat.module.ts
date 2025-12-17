@@ -1,6 +1,6 @@
 // src/chat/chat.module.ts
 
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ChatController } from './controllers/chat.controller';
 import { ChatGateway } from './gateways/chat.gateway';
@@ -30,11 +30,11 @@ import { UploadModule } from '../upload/upload.module';
     OrdersModule,
     PaymentsModule,
     AstrologersModule,
-    NotificationsModule,
+    forwardRef(() => NotificationsModule),
     UploadModule
   ],
   controllers: [ChatController],
   providers: [ChatGateway, ChatSessionService, ChatMessageService, EarningsService],
-  exports: [ChatSessionService, ChatMessageService],
+  exports: [ChatSessionService, ChatMessageService, ChatGateway],
 })
 export class ChatModule {}

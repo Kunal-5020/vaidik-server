@@ -10,6 +10,7 @@ import { WalletTransaction, WalletTransactionDocument } from '../../../../paymen
 import { AdminActivityLogService } from '../../activity-logs/services/admin-activity-log.service';
 import { NotificationService } from '../../../../notifications/services/notification.service';
 import { UserFilter } from '../interfaces/user-filter.interface';
+import { NotificationGateway } from '../../../../notifications/gateways/notification.gateway';
 
 @Injectable()
 export class AdminUsersService {
@@ -21,6 +22,7 @@ export class AdminUsersService {
     @InjectModel(WalletTransaction.name) private transactionModel: Model<WalletTransactionDocument>,
     private activityLogService: AdminActivityLogService,
     private notificationService: NotificationService,
+    private notificationGateway: NotificationGateway,
   ) {}
 
   /**
@@ -100,6 +102,7 @@ export class AdminUsersService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+    const isOnline = this.notificationGateway.isUserOnline(userId);
 
     // Get additional stats
     const [orderCount, totalSpent, lastOrder] = await Promise.all([
@@ -124,6 +127,7 @@ export class AdminUsersService {
           totalSpent: totalSpent[0]?.total || 0,
           lastOrder,
         },
+        isOnline,
       },
     };
   }

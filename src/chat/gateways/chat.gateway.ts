@@ -60,6 +60,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @Inject(forwardRef(() => ChatSessionService))
     private chatSessionService: ChatSessionService,
     private chatMessageService: ChatMessageService,
+    @Inject(forwardRef(() => NotificationService))
     private notificationService: NotificationService,
   ) {}
 
@@ -74,6 +75,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`✅ Astrologer auto-registered: ${userId} | Socket: ${client.id}`);
   }
 }
+
+isUserOnline(userId: string): boolean {
+    return this.activeUsers.has(userId);
+  }
 
 
   handleDisconnect(client: AuthSocket) {
