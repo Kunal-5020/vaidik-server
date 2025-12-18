@@ -120,7 +120,7 @@ export class User {
   // === PRIVACY SETTINGS ===
   @Prop({ 
     type: {
-      nameVisibleInReviews: { type: Boolean, default: false },
+      nameVisibleInReviews: { type: Boolean, default: true },
       restrictions: {
         astrologerChatAccessAfterEnd: { type: Boolean, default: true },
         downloadSharedImages: { type: Boolean, default: true },

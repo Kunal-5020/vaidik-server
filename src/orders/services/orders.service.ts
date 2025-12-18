@@ -922,7 +922,7 @@ async getAstrologerOrderDetails(
       astrologerId: this.toObjectId(astrologerId),
       isDeleted: false
     })
-    .populate('userId', 'name profileImage profilePicture phoneNumber email privacy')
+    .populate('userId', 'name profileImage profilePicture phoneNumber email privacy gender dateOfBirth timeOfBirth placeOfBirth')
     .lean();
 
   if (!order) {

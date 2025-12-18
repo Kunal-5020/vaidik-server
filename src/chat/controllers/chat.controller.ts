@@ -263,7 +263,13 @@ async getAstrologerChatSessionDetails(
           user: {
             _id: user?._id,
             name: user?.name,
-            profilePicture: user?.profilePicture,
+            profilePicture: user?.profileImage, 
+            kundli: {name: user?.name,
+                    gender: user?.gender,
+                    dateOfBirth: user?.dateOfBirth,
+                    timeOfBirth: user?.timeOfBirth,
+                    placeOfBirth: user?.placeOfBirth
+                  },
             // Include privacy settings so frontend can block media downloads etc.
             privacy: user?.privacy || {} 
           }
