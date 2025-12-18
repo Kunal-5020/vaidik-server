@@ -91,15 +91,41 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (error: any) { return { success: false, message: error.message }; }
   }
 
-  @SubscribeMessage('accept_call')
-  async handleAcceptCall(@ConnectedSocket() client: Socket, @MessageBody() data: any) {
-    try {
-      const result = await this.callSessionService.acceptCall(data.sessionId, data.astrologerId);
-      const userData = Array.from(this.activeUsers.values()).find(u => u.sessionId === data.sessionId);
-      if (userData) this.server.to(userData.socketId).emit('call_accepted', { sessionId: data.sessionId, astrologerId: data.astrologerId });
-      return result;
-    } catch (error: any) { return { success: false, message: error.message }; }
+ @SubscribeMessage('accept_call')
+async handleAcceptCall(@ConnectedSocket() client: Socket, @MessageBody() data: any) {
+  try {
+    const result = await this.callSessionService.acceptCall(data.sessionId, data.astrologerId);
+    
+    // ✅ FIX 1: Emit to ROOM instead of specific socket
+    // This ensures ALL participants in the session receive the event
+    this.server.to(data.sessionId).emit('call_accepted', { 
+      sessionId: data.sessionId, 
+      astrologerId: data.astrologerId,
+      timestamp: new Date().toISOString(),
+    });
+    
+    this.logger.log(`✅ [CallGateway] Broadcasted call_accepted to room: ${data.sessionId}`);
+    
+    // ✅ FIX 2: ALSO emit to specific user as fallback (if they haven't joined room yet)
+    const userData = Array.from(this.activeUsers.values()).find(
+      u => u.sessionId === data.sessionId && u.role === 'user'
+    );
+    
+    if (userData) {
+      this.server.to(userData.socketId).emit('call_accepted', { 
+        sessionId: data.sessionId, 
+        astrologerId: data.astrologerId,
+        timestamp: new Date().toISOString(),
+      });
+      this.logger.log(`✅ [CallGateway] Also sent to user socket: ${userData.socketId}`);
+    }
+    
+    return result;
+  } catch (error: any) { 
+    this.logger.error(`❌ [CallGateway] Accept call error: ${error.message}`);
+    return { success: false, message: error.message }; 
   }
+}
 
   @SubscribeMessage('reject_call')
   async handleRejectCall(@ConnectedSocket() client: Socket, @MessageBody() data: any) {
@@ -112,18 +138,45 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('join_session')
-  async handleJoinSession(@ConnectedSocket() client: Socket, @MessageBody() payload: any) {
-    const data = Array.isArray(payload) ? payload[0] : payload;
-    if (!data?.sessionId) return { success: false, message: 'Missing data' };
+async handleJoinSession(@ConnectedSocket() client: Socket, @MessageBody() payload: any) {
+  const data = Array.isArray(payload) ? payload[0] : payload;
+  if (!data?.sessionId) return { success: false, message: 'Missing data' };
 
-    client.join(data.sessionId);
-    this.activeUsers.set(data.userId, { socketId: client.id, userId: data.userId, role: data.role, sessionId: data.sessionId });
-    this.logger.log(`👥 ${data.role} joined call room: ${data.sessionId}`);
-    client.to(data.sessionId).emit('participant_joined', { userId: data.userId, role: data.role, isOnline: true });
+  // ✅ Join room FIRST
+  client.join(data.sessionId);
+  
+  // ✅ Register user in activeUsers
+  this.activeUsers.set(data.userId, { 
+    socketId: client.id, 
+    userId: data.userId, 
+    role: data.role, 
+    sessionId: data.sessionId 
+  });
+  
+  this.logger.log(`👥 ${data.role} (${data.userId}) joined call room: ${data.sessionId} via socket ${client.id}`);
+  
+  // Notify others
+  client.to(data.sessionId).emit('participant_joined', { 
+    userId: data.userId, 
+    role: data.role, 
+    isOnline: true 
+  });
 
-    await this.checkAndStartSession(data.sessionId);
-    return { success: true };
+  // ✅ FIX 3: Check if call was ALREADY accepted (race condition handler)
+  // If astrologer accepted before user joined room, resend the acceptance
+  const session = await this.callSessionService.getSession(data.sessionId);
+  if (session && session.status === 'accepted' && data.role === 'user') {
+    this.logger.log(`🔄 [CallGateway] Resending call_accepted to late-joining user`);
+    client.emit('call_accepted', {  
+      sessionId: data.sessionId,
+      astrologerId: session.astrologerId.toString(),
+      timestamp: session.acceptedAt?.toISOString(),
+    });
   }
+
+  await this.checkAndStartSession(data.sessionId);
+  return { success: true };
+}
 
   private async checkAndStartSession(sessionId: string) {
     const participants = Array.from(this.activeUsers.values()).filter(u => u.sessionId === sessionId);
