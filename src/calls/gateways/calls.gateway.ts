@@ -91,32 +91,31 @@ export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (error: any) { return { success: false, message: error.message }; }
   }
 
- @SubscribeMessage('accept_call')
+@SubscribeMessage('accept_call')
 async handleAcceptCall(@ConnectedSocket() client: Socket, @MessageBody() data: any) {
   try {
     const result = await this.callSessionService.acceptCall(data.sessionId, data.astrologerId);
     
-    // ✅ FIX 1: Emit to ROOM instead of specific socket
-    // This ensures ALL participants in the session receive the event
-    this.server.to(data.sessionId).emit('call_accepted', { 
+    // ✅ FIX: Use the full data object returned from the service
+    // This includes astrologerName, Image, Rate, OrderId, etc.
+    const eventPayload = { 
+      ...(result.data || {}), 
       sessionId: data.sessionId, 
       astrologerId: data.astrologerId,
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    // Emit to ROOM
+    this.server.to(data.sessionId).emit('call_accepted', eventPayload);
+    this.logger.log(`✅ [CallGateway] Broadcasted rich call_accepted to room: ${data.sessionId}`);
     
-    this.logger.log(`✅ [CallGateway] Broadcasted call_accepted to room: ${data.sessionId}`);
-    
-    // ✅ FIX 2: ALSO emit to specific user as fallback (if they haven't joined room yet)
+    // Emit to USER socket (fallback)
     const userData = Array.from(this.activeUsers.values()).find(
       u => u.sessionId === data.sessionId && u.role === 'user'
     );
     
     if (userData) {
-      this.server.to(userData.socketId).emit('call_accepted', { 
-        sessionId: data.sessionId, 
-        astrologerId: data.astrologerId,
-        timestamp: new Date().toISOString(),
-      });
+      this.server.to(userData.socketId).emit('call_accepted', eventPayload);
       this.logger.log(`✅ [CallGateway] Also sent to user socket: ${userData.socketId}`);
     }
     
@@ -137,15 +136,13 @@ async handleAcceptCall(@ConnectedSocket() client: Socket, @MessageBody() data: a
     } catch (error: any) { return { success: false, message: error.message }; }
   }
 
-  @SubscribeMessage('join_session')
+ @SubscribeMessage('join_session')
 async handleJoinSession(@ConnectedSocket() client: Socket, @MessageBody() payload: any) {
   const data = Array.isArray(payload) ? payload[0] : payload;
   if (!data?.sessionId) return { success: false, message: 'Missing data' };
 
-  // ✅ Join room FIRST
   client.join(data.sessionId);
   
-  // ✅ Register user in activeUsers
   this.activeUsers.set(data.userId, { 
     socketId: client.id, 
     userId: data.userId, 
@@ -155,21 +152,27 @@ async handleJoinSession(@ConnectedSocket() client: Socket, @MessageBody() payloa
   
   this.logger.log(`👥 ${data.role} (${data.userId}) joined call room: ${data.sessionId} via socket ${client.id}`);
   
-  // Notify others
   client.to(data.sessionId).emit('participant_joined', { 
     userId: data.userId, 
     role: data.role, 
     isOnline: true 
   });
 
-  // ✅ FIX 3: Check if call was ALREADY accepted (race condition handler)
-  // If astrologer accepted before user joined room, resend the acceptance
   const session = await this.callSessionService.getSession(data.sessionId);
   if (session && session.status === 'accepted' && data.role === 'user') {
     this.logger.log(`🔄 [CallGateway] Resending call_accepted to late-joining user`);
+    
+    // Fetch astrologer details again to be safe
+    const astrologer = await this.callSessionService['astrologerModel'].findById(session.astrologerId).select('name profilePicture').lean();
+    
     client.emit('call_accepted', {  
       sessionId: data.sessionId,
+      orderId: session.orderId,
+      callType: session.callType,
+      ratePerMinute: session.ratePerMinute,
       astrologerId: session.astrologerId.toString(),
+      astrologerName: astrologer?.name || 'Astrologer',
+      astrologerImage: astrologer?.profilePicture,
       timestamp: session.acceptedAt?.toISOString(),
     });
   }
@@ -381,11 +384,17 @@ async handleJoinSession(@ConnectedSocket() client: Socket, @MessageBody() payloa
     return result;
   }
 
-  public async notifyUserOfAcceptance(sessionId: string, astrologerId: string) {
+public async notifyUserOfAcceptance(sessionId: string, astrologerId: string, data?: any) {
     const userData = Array.from(this.activeUsers.values()).find(u => u.sessionId === sessionId && u.role === 'user');
+    
     if (userData) {
-      this.server.to(userData.socketId).emit('call_accepted', { sessionId, astrologerId });
-      this.logger.log(`Notify User: Call accepted for ${sessionId}`);
+      // Use provided rich data, or fallback to basic IDs if missing
+      const payload = data ? { ...data, sessionId, astrologerId } : { sessionId, astrologerId };
+      
+      this.server.to(userData.socketId).emit('call_accepted', payload);
+      this.logger.log(`Notify User: Call accepted for ${sessionId} with rich data`);
+    } else {
+        this.logger.warn(`Notify User: User not found for session ${sessionId}`);
     }
   }
 

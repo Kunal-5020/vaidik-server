@@ -121,33 +121,39 @@ export class ChatSessionService {
 
     await session.save();
 
+    const userData = await this.userModel.findById(sessionData.userId).select('name profileImage').lean();
+    const userName = userData?.name || 'User';
+    const userProfilePic = userData?.profileImage || '';
+
     // Set 3-min timeout
     this.setRequestTimeout(sessionId, order.orderId, sessionData.userId);
 
     // ✅ Fire-and-forget notification to astrologer
     // ✅ Notify astrologer (incoming chat request) – type MUST be "chat_request"
-this.notificationService.sendNotification({
-  recipientId: sessionData.astrologerId,
-  recipientModel: 'Astrologer',
-  type: 'chat_request', // matches astrologer app getNotificationConfig
-  title: 'New chat request',
-  message: 'You have a new chat request from a user.',
-  data: {
-    type: 'chat_request',            // so app sees data.type correctly
-    mode: 'chat',
-    sessionId,
-    orderId: order.orderId,
-    conversationThreadId: order.conversationThreadId,
-    userId: sessionData.userId,
-    astrologerId: sessionData.astrologerId,
-    ratePerMinute: sessionData.ratePerMinute,
-    step: 'user_initiated',
-    fullScreen: 'true',
-  },
-  priority: 'high',
-}).catch(err =>
-  this.logger.error(`Chat incoming notification error: ${err.message}`),
-);
+    this.notificationService.sendNotification({
+    recipientId: sessionData.astrologerId,
+    recipientModel: 'Astrologer',
+    type: 'chat_request', // matches astrologer app getNotificationConfig
+    title: 'New chat request',
+    message: 'You have a new chat request from a user.',
+    data: {
+      type: 'chat_request',            // so app sees data.type correctly
+      mode: 'chat',
+      sessionId,
+      orderId: order.orderId,
+      conversationThreadId: order.conversationThreadId,
+      userId: sessionData.userId,
+      userName,
+      userProfilePic,
+      astrologerId: sessionData.astrologerId,
+      ratePerMinute: sessionData.ratePerMinute,
+      step: 'user_initiated',
+      fullScreen: 'true',
+    },
+    priority: 'high',
+  }).catch(err =>
+    this.logger.error(`Chat incoming notification error: ${err.message}`),
+  );
 
 
     this.logger.log(
@@ -191,6 +197,10 @@ this.notificationService.sendNotification({
     // 🆕 Start 60s join timeout for user
     this.setUserJoinTimeout(sessionId);
 
+    const astrologerData = await this.astrologerModel.findById(astrologerId).select('name profilePicture').lean();
+    const astrologerName = astrologerData?.name || 'Astrologer';
+    const astrologerImage = astrologerData?.profilePicture || '';
+
     // Notify user that astrologer accepted
     // Notify user that astrologer accepted – use "request_accepted"
 this.notificationService.sendNotification({
@@ -200,14 +210,13 @@ this.notificationService.sendNotification({
   title: 'Astrologer accepted your chat',
   message: 'Tap to start your chat session.',
   data: {
-    type: 'request_accepted',
     mode: 'chat',
     sessionId: session.sessionId,
     orderId: session.orderId,
     astrologerId,
+    astrologerName,
+    astrologerImage,
     ratePerMinute: session.ratePerMinute,
-    step: 'astrologer_accepted',
-    fullScreen: 'true',
   },
   priority: 'high',
 }).catch(err =>

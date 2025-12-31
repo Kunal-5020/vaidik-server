@@ -130,6 +130,10 @@ export class CallSessionService {
 
     const astroNotifType = sessionData.callType === 'video' ? 'call_request_video' : 'call_request_audio';
 
+    const user = await this.userModel.findById(sessionData.userId).select('name profileImage').lean();
+    const userName = user?.name || 'User';
+    const userProfilePic = user?.profileImage || '';
+
     this.notificationService.sendNotification({
       recipientId: sessionData.astrologerId,
       recipientModel: 'Astrologer',
@@ -144,6 +148,8 @@ export class CallSessionService {
         orderId: order.orderId,
         conversationThreadId: order.conversationThreadId,
         userId: sessionData.userId,
+        userName,
+        userProfilePic,
         astrologerId: sessionData.astrologerId,
         ratePerMinute: sessionData.ratePerMinute,
         sessionNumber,
@@ -190,6 +196,10 @@ export class CallSessionService {
 
     const userNotifType = session.callType === 'video' ? 'call_video' : 'call_audio';
 
+    const astrologer = await this.astrologerModel.findById(astrologerId).select('name profilePicture').lean();
+    const astrologerName = astrologer?.name || 'Astrologer';
+    const astrologerImage = astrologer?.profilePicture || '';
+
     this.notificationService.sendNotification({
       recipientId: session.userId.toString(),
       recipientModel: 'User',
@@ -203,14 +213,29 @@ export class CallSessionService {
         sessionId: session.sessionId,
         orderId: session.orderId,
         astrologerId,
+        astrologerName,
+        astrologerImage,
         ratePerMinute: session.ratePerMinute,
         step: 'astrologer_accepted',
-        fullScreen: 'true',
       },
       priority: 'urgent',
     }).catch(err => this.logger.error(`Call accepted notification error: ${err.message}`));
 
-    return { success: true, message: 'Call accepted', status: 'waiting' };
+    return { 
+        success: true, 
+        message: 'Call accepted', 
+        status: 'waiting',
+        data: {
+            sessionId: session.sessionId,
+            orderId: session.orderId,
+            callType: session.callType,
+            ratePerMinute: session.ratePerMinute,
+            astrologerId,
+            astrologerName,
+            astrologerImage,
+            userId: session.userId
+        }
+    };
   }
 
   // ===== REJECT CALL =====

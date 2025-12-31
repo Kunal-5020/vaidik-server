@@ -114,7 +114,7 @@ async acceptCallAsAstrologer(
 
   const astrologerId = req.user._id;
   const result = await this.callSessionService.acceptCall(sessionId, astrologerId);
-  await this.callGateway.notifyUserOfAcceptance(sessionId, astrologerId);
+  await this.callGateway.notifyUserOfAcceptance(sessionId, astrologerId, result.data);
 
   return {
     success: true,

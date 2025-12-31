@@ -254,6 +254,9 @@ export class AstrologerService {
     // If going offline, also set isAvailable to false
     if (!isOnline) {
       astrologer.availability.isAvailable = false;
+    }else{
+      // If going online, set isAvailable to true
+      astrologer.availability.isAvailable = true;
     }
 
     await astrologer.save();
