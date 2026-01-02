@@ -342,33 +342,7 @@ async handleStartChat(
       }
       
       this.logger.log(`📜 Creating kundli message for session ${data.sessionId}`);
-      
-      const kundliMessage = await this.chatMessageService.sendKundliDetailsMessage(
-        data.sessionId,
-        session.astrologerId.toString(),
-        data.userId,
-        session.orderId,
-        data.kundliDetails
-      );
 
-      this.server.to(data.sessionId).emit('chat_message', {
-        messageId: kundliMessage.messageId,
-        sessionId: kundliMessage.sessionId,
-        senderId: kundliMessage.senderId,
-        senderModel: kundliMessage.senderModel,
-        type: 'kundli_details',
-        content: kundliMessage.content,
-        message: kundliMessage.content,
-        kundliDetails: kundliMessage.kundliDetails,
-        isVisibleToUser: false,
-        isVisibleToAstrologer: true,
-        deliveryStatus: 'sent',
-        sentAt: kundliMessage.sentAt,
-        automatic: true,
-        threadId: data.sessionId,
-      });
-
-      this.logger.log(`✅ Kundli message emitted for session ${data.sessionId}`);
     }
 
     // ✅ Emit timer_start
@@ -880,40 +854,6 @@ async handleJoinSession(
           return { success: true, message: 'Joined but session not found' };
         }
         
-        // ✅ Save kundli message to database
-        const kundliMessage = await this.chatMessageService.sendKundliDetailsMessage(
-          data.sessionId,
-          session.astrologerId.toString(),
-          data.userId,
-          session.orderId,
-          data.kundliDetails
-        );
-
-        // ✅ Broadcast to ALL in room (including sender)
-        this.server.to(data.sessionId).emit('chat_message', {
-          messageId: kundliMessage.messageId,
-          sessionId: kundliMessage.sessionId,
-          senderId: data.userId,
-          senderModel: 'User',
-          receiverId: session.astrologerId.toString(),
-          receiverModel: 'Astrologer',
-          type: 'kundli_details',
-          content: '📜 User Kundli Details',
-          message: '📜 User Kundli Details',
-          kundliDetails: {
-            name: data.kundliDetails.name,
-            dob: data.kundliDetails.dob,
-            birthTime: data.kundliDetails.birthTime,
-            birthPlace: data.kundliDetails.birthPlace,
-            gender: data.kundliDetails.gender,
-          },
-          deliveryStatus: 'sent',
-          sentAt: kundliMessage.sentAt || new Date(),
-          threadId: data.sessionId,
-          automatic: true,
-        });
-
-        this.logger.log(`✅ Kundli message broadcasted to ${socketsInRoom.size} sockets`);
       } catch (kundliError) {
         this.logger.error(`❌ Kundli send error: ${kundliError.message}`);
       }

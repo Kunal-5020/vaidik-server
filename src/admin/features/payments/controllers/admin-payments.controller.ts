@@ -264,4 +264,29 @@ async createGiftCard(
   ) {
     return this.adminPaymentsService.updateGiftCardStatus(code, admin._id, updateDto.status);
   }
+
+  @Post('transactions/:transactionId/refund-razorpay')
+  @RequirePermissions(Permissions.PAYMENTS_REFUND)
+  async refundRazorpayTransaction(
+    @Param('transactionId') transactionId: string,
+    @CurrentAdmin() admin: any,
+    @Body('reason') reason: string,
+  ) {
+    return this.adminPaymentsService.refundRazorpayTransaction(transactionId, admin._id, reason);
+  }
+
+  @Post('bonus/manage')
+  @RequirePermissions(Permissions.PAYMENTS_PROCESS) // Or a specific bonus permission
+  async manageBonus(
+    @CurrentAdmin() admin: any,
+    @Body() body: { userId: string; amount: number; action: 'add' | 'deduct'; reason: string },
+  ) {
+    return this.adminPaymentsService.manageUserBonus(
+        body.userId, 
+        body.amount, 
+        body.action, 
+        body.reason, 
+        admin._id
+    );
+  }
 }

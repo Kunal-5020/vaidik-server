@@ -6,7 +6,7 @@ import {
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
-export class SendOtpDto {
+export class RegisterSendOtpDto {
   @ApiProperty({ 
     description: 'Phone number (without country code)', 
     example: '9876543210' 

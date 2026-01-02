@@ -92,7 +92,7 @@ export class WalletTransaction {
   @Prop()
   paymentId?: string;
 
-  @Prop({ enum: ['pending', 'completed', 'failed', 'cancelled'], default: 'pending' })
+  @Prop({ enum: ['pending', 'completed', 'failed', 'cancelled', 'refunded'], default: 'pending' })
   status: string;
 
   @Prop({ type: Object })

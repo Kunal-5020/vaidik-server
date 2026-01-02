@@ -11,8 +11,8 @@ import {
 } from '@nestjs/common';
 import { RegistrationService } from '../services/registration.service';
 import { RegisterDto } from '../dto/register.dto';
-import { SendOtpDto } from '../dto/send-otp.dto';
-import { VerifyOtpDto } from '../dto/verify-otp.dto';
+import { RegisterSendOtpDto } from '../dto/send-otp.dto';
+import { RegisterVerifyOtpDto } from '../dto/verify-otp.dto';
 
 @Controller('registration')
 export class RegistrationController {
@@ -26,7 +26,7 @@ export class RegistrationController {
    */
   @Post('otp/send')
   @HttpCode(HttpStatus.OK)
-  async sendOTP(@Body(ValidationPipe) sendOtpDto: SendOtpDto) {
+  async sendOTP(@Body(ValidationPipe) sendOtpDto: RegisterSendOtpDto) {
     return this.registrationService.sendOTP(sendOtpDto);
   }
 
@@ -36,7 +36,7 @@ export class RegistrationController {
    */
   @Post('otp/verify')
   @HttpCode(HttpStatus.OK)
-  async verifyOTP(@Body(ValidationPipe) verifyOtpDto: VerifyOtpDto) {
+  async verifyOTP(@Body(ValidationPipe) verifyOtpDto: RegisterVerifyOtpDto) {
     return this.registrationService.verifyOTP(verifyOtpDto);
   }
 

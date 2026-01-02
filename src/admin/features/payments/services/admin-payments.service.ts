@@ -736,4 +736,13 @@ export class AdminPaymentsService {
       data: { code: giftCard.code, status: giftCard.status },
     };
   }
+
+  async refundRazorpayTransaction(transactionId: string, adminId: string, reason: string) {
+      // Delegate to WalletService
+      return this.walletService.refundRazorpayTransaction(transactionId, adminId, reason);
+  }
+
+  async manageUserBonus(userId: string, amount: number, action: 'add' | 'deduct', reason: string, adminId: string) {
+      return this.walletService.manageUserBonus(userId, amount, action, reason, adminId);
+  }
 }

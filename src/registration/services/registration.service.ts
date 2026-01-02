@@ -8,8 +8,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Registration, RegistrationDocument, RegistrationStatus } from '../schemas/registration.schema';
 import { RegisterDto } from '../dto/register.dto';
-import { SendOtpDto } from '../dto/send-otp.dto';
-import { VerifyOtpDto } from '../dto/verify-otp.dto';
+import { RegisterSendOtpDto } from '../dto/send-otp.dto';
+import { RegisterVerifyOtpDto } from '../dto/verify-otp.dto';
 import { OtpService } from '../../auth/services/otp/otp.service';
 
 // Add this interface after imports
@@ -36,7 +36,7 @@ export class RegistrationService {
   /**
    * Send OTP to phone number (NO database record created)
    */
-  async sendOTP(sendOtpDto: SendOtpDto): Promise<any> {
+  async sendOTP(sendOtpDto: RegisterSendOtpDto): Promise<any> {
     const { phoneNumber, countryCode } = sendOtpDto;
 
     try {
@@ -60,7 +60,7 @@ export class RegistrationService {
  /**
  * Verify OTP (and check if phone is already registered)
  */
-async verifyOTP(verifyOtpDto: VerifyOtpDto): Promise<any> {
+async verifyOTP(verifyOtpDto: RegisterVerifyOtpDto): Promise<any> {
   const { phoneNumber, countryCode, otp } = verifyOtpDto;
 
   try {

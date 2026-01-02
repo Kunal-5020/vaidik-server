@@ -75,7 +75,6 @@ export class AdminAnalyticsService {
     const bonusDeductions = bonusUsage[0]?.total || 0;
     
     // Net Revenue = (Commissions + Penalties) - Bonus Usage
-    // We allow negative values here so you can see if you are burning cash
     const netRevenue = (grossCommission + totalPenalties) - bonusDeductions;
 
     return {
@@ -94,14 +93,16 @@ export class AdminAnalyticsService {
     };
   }
 
+  /**
+   * ✅ GET REVENUE ANALYTICS (ROBUST)
+   * Merges multiple data sources and ensures continuous timeline
+   */
   async getRevenueAnalytics(startDate: string, endDate: string): Promise<any> {
     const start = new Date(startDate);
     const end = new Date(endDate);
-    
-    // Adjust end date to include the full day
-    end.setHours(23, 59, 59, 999);
+    end.setHours(23, 59, 59, 999); // ✅ Include the full end day
 
-    // 1. Call Commissions per day
+    // 1. Aggregations (Full Code Restored)
     const callRevenue = await this.callSessionModel.aggregate([
       {
         $match: {
@@ -118,7 +119,6 @@ export class AdminAnalyticsService {
       }
     ]);
 
-    // 2. Chat Commissions per day
     const chatRevenue = await this.chatSessionModel.aggregate([
       {
         $match: {
@@ -135,12 +135,12 @@ export class AdminAnalyticsService {
       }
     ]);
 
-    // 3. Bonus Deductions per day
     const bonusDeductions = await this.transactionModel.aggregate([
       {
         $match: {
-          type: 'debit',
-          $or: [{ subType: 'bonus' }, { subType: 'gift_card' }],
+          status: 'completed',
+          // Matches your WalletTransaction schema types for 'deductions'
+          type: { $in: ['bonus', 'giftcard', 'admin_credit'] }, 
           createdAt: { $gte: start, $lte: end }
         }
       },
@@ -152,8 +152,7 @@ export class AdminAnalyticsService {
       }
     ]);
 
-    // 4. Merge Data
-    // Define exact type for the daily data object
+    // 2. Data Merging Structure
     interface DailyStats {
       date: string;
       gross: number;
@@ -162,9 +161,9 @@ export class AdminAnalyticsService {
       orders: number;
     }
 
-    const dailyData: DailyStats[] = [];
     const dateMap = new Map<string, DailyStats>();
 
+    // Helper to initialize day
     const getDayObj = (date: string): DailyStats => {
       if (!dateMap.has(date)) {
         dateMap.set(date, { date, gross: 0, deductions: 0, net: 0, orders: 0 });
@@ -172,40 +171,42 @@ export class AdminAnalyticsService {
       return dateMap.get(date)!;
     };
 
-    // Process Calls
-    callRevenue.forEach(item => {
+    // Populate data
+    [...callRevenue, ...chatRevenue].forEach(item => {
+      if (!item._id) return;
       const obj = getDayObj(item._id);
       obj.gross += item.commission || 0;
       obj.orders += item.count || 0;
     });
 
-    // Process Chats
-    chatRevenue.forEach(item => {
-      const obj = getDayObj(item._id);
-      obj.gross += item.commission || 0;
-      obj.orders += item.count || 0;
-    });
-
-    // Process Bonuses (Subtract from Net)
     bonusDeductions.forEach(item => {
+      if (!item._id) return;
       const obj = getDayObj(item._id);
-      obj.deductions += item.amount || 0;
+      obj.deductions += Math.abs(item.amount || 0);
     });
 
-    // Finalize Calculation & Fill Gaps
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const dateStr = d.toISOString().split('T')[0];
+    // 3. Fill Missing Dates (Continuous Timeline)
+    const dailyData: DailyStats[] = [];
+    
+    // Clone start date to avoid mutation issues
+    const current = new Date(start);
+    
+    while (current <= end) {
+      const dateStr = current.toISOString().split('T')[0];
       const data = dateMap.get(dateStr) || { date: dateStr, gross: 0, deductions: 0, net: 0, orders: 0 };
       
-      // Net = Gross Commission - Bonus Deductions
+      // Net Calculation
       data.net = data.gross - data.deductions;
       
       dailyData.push(data);
+      
+      // Move to next day
+      current.setDate(current.getDate() + 1);
     }
 
     return {
       success: true,
-      data: dailyData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      data: dailyData
     };
   }
 }

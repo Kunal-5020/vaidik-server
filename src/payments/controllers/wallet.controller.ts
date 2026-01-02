@@ -68,6 +68,20 @@ export class WalletController {
 
   // ===== RECHARGE =====
 
+  // ===== NEW ENDPOINT FOR APP =====
+  /**
+   * Get active recharge packs
+   * GET /wallet/recharge-packs
+   */
+  @Get('recharge-packs')
+  async getRechargePacks() {
+    const packs = await this.walletService.getActiveRechargePacks();
+    return {
+      success: true,
+      data: packs,
+    };
+  }
+
   /**
    * Create recharge transaction (Razorpay only)
    * POST /wallet/recharge

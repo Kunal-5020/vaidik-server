@@ -80,7 +80,6 @@ export class ZohoDeskService {
         this.tokenExpiresAt = Date.now() + (expires_in - 300) * 1000;
         this.axiosInstance.defaults.headers.common.Authorization = `Zoho-oauthtoken ${access_token}`;
 
-        this.logger.log('✅ Zoho Desk access token refreshed successfully');
       } catch (error: any) {
         this.logger.error('❌ Failed to refresh Zoho access token:', error.message);
         throw error;

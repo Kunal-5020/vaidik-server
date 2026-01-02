@@ -1360,6 +1360,20 @@
         ]
       }
     },
+    "/api/v1/wallet/recharge-packs": {
+      "get": {
+        "operationId": "WalletController_getRechargePacks",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Wallet"
+        ]
+      }
+    },
     "/api/v1/wallet/recharge": {
       "post": {
         "operationId": "WalletController_rechargeWallet",
@@ -6658,6 +6672,92 @@
         ]
       }
     },
+    "/api/v1/admin/payments/transactions/{transactionId}/refund-razorpay": {
+      "post": {
+        "operationId": "AdminPaymentsController_refundRazorpayTransaction",
+        "parameters": [
+          {
+            "name": "transactionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "AdminPayments"
+        ]
+      }
+    },
+    "/api/v1/admin/payments/bonus/manage": {
+      "post": {
+        "operationId": "AdminPaymentsController_manageBonus",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "AdminPayments"
+        ]
+      }
+    },
+    "/api/v1/admin/payments/recharge-packs": {
+      "get": {
+        "operationId": "AdminRechargePacksController_getAll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "AdminRechargePacks"
+        ]
+      },
+      "post": {
+        "operationId": "AdminRechargePacksController_savePack",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "AdminRechargePacks"
+        ]
+      }
+    },
+    "/api/v1/admin/payments/recharge-packs/{amount}": {
+      "delete": {
+        "operationId": "AdminRechargePacksController_deletePack",
+        "parameters": [
+          {
+            "name": "amount",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "AdminRechargePacks"
+        ]
+      }
+    },
     "/api/v1/admin/analytics/dashboard": {
       "get": {
         "operationId": "AdminAnalyticsController_getDashboardStats",
@@ -8325,7 +8425,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SendOtpDto"
+                "$ref": "#/components/schemas/RegisterSendOtpDto"
               }
             }
           }
@@ -8349,7 +8449,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/VerifyOtpDto"
+                "$ref": "#/components/schemas/RegisterVerifyOtpDto"
               }
             }
           }
@@ -8947,49 +9047,11 @@
     "schemas": {
       "SendOtpDto": {
         "type": "object",
-        "properties": {
-          "phoneNumber": {
-            "type": "string",
-            "description": "Phone number (without country code)",
-            "example": "9876543210"
-          },
-          "countryCode": {
-            "type": "string",
-            "description": "Country code (without + sign)",
-            "example": "91",
-            "default": "91"
-          }
-        },
-        "required": [
-          "phoneNumber",
-          "countryCode"
-        ]
+        "properties": {}
       },
       "VerifyOtpDto": {
         "type": "object",
-        "properties": {
-          "phoneNumber": {
-            "type": "string",
-            "description": "Phone number (without country code)",
-            "example": "9876543210"
-          },
-          "countryCode": {
-            "type": "string",
-            "description": "Country code (without + sign)",
-            "example": "91",
-            "default": "91"
-          },
-          "otp": {
-            "type": "string",
-            "description": "6-digit OTP",
-            "example": "123456"
-          }
-        },
-        "required": [
-          "phoneNumber",
-          "countryCode",
-          "otp"
-        ]
+        "properties": {}
       },
       "RefreshTokenDto": {
         "type": "object",
@@ -9194,6 +9256,52 @@
       "UpdateReportDto": {
         "type": "object",
         "properties": {}
+      },
+      "RegisterSendOtpDto": {
+        "type": "object",
+        "properties": {
+          "phoneNumber": {
+            "type": "string",
+            "description": "Phone number (without country code)",
+            "example": "9876543210"
+          },
+          "countryCode": {
+            "type": "string",
+            "description": "Country code (without + sign)",
+            "example": "91",
+            "default": "91"
+          }
+        },
+        "required": [
+          "phoneNumber",
+          "countryCode"
+        ]
+      },
+      "RegisterVerifyOtpDto": {
+        "type": "object",
+        "properties": {
+          "phoneNumber": {
+            "type": "string",
+            "description": "Phone number (without country code)",
+            "example": "9876543210"
+          },
+          "countryCode": {
+            "type": "string",
+            "description": "Country code (without + sign)",
+            "example": "91",
+            "default": "91"
+          },
+          "otp": {
+            "type": "string",
+            "description": "6-digit OTP",
+            "example": "123456"
+          }
+        },
+        "required": [
+          "phoneNumber",
+          "countryCode",
+          "otp"
+        ]
       },
       "RegisterDto": {
         "type": "object",

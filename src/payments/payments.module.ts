@@ -16,6 +16,7 @@ import { StreamSession, StreamSessionSchema } from '../streaming/schemas/stream-
 import { UsersModule } from '../users/users.module'; 
 import { AstrologersModule } from '../astrologers/astrologers.module';
 import { GiftService } from './services/gift.service';
+import { RechargePack, RechargePackSchema } from './schemas/recharge-pack.schema';
 
 
 @Module({
@@ -27,6 +28,7 @@ import { GiftService } from './services/gift.service';
       { name: WalletRefundRequest.name, schema: WalletRefundRequestSchema }, // ADD THIS
       { name: GiftCard.name, schema: GiftCardSchema }, // ADD THIS
       { name: StreamSession.name, schema: StreamSessionSchema },
+      { name: RechargePack.name, schema: RechargePackSchema },
     ]),
     UsersModule,
     forwardRef(() => AstrologersModule),

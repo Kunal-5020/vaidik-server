@@ -47,6 +47,12 @@ recordingMessageId?: string;
   @Prop()
   requestCreatedAt: Date;
 
+  @Prop({ default: false })
+  userJoinedAgora: boolean;
+
+  @Prop({ default: false })
+  astrologerJoinedAgora: boolean;
+
   @Prop()
   acceptedAt?: Date;
 

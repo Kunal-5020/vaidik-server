@@ -16,6 +16,7 @@ import { ActivityLogsModule } from '../activity-logs/activity-logs.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Admin, AdminSchema } from '../../core/schemas/admin.schema';
+import { AdminRechargePacksController } from './controllers/admin-recharge-packs.controller'; // ✅ ADD THIS
 
 @Module({
   imports: [
@@ -39,7 +40,7 @@ import { Admin, AdminSchema } from '../../core/schemas/admin.schema';
     ActivityLogsModule,
     forwardRef(() => require('../../../notifications/notifications.module').NotificationsModule),
   ],
-  controllers: [AdminPaymentsController],
+  controllers: [AdminPaymentsController, AdminRechargePacksController],
   providers: [AdminPaymentsService],
   exports: [AdminPaymentsService],
 })

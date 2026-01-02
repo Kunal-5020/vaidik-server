@@ -12,6 +12,7 @@ import { User, UserDocument } from '../../users/schemas/user.schema';
 import { RazorpayService } from './razorpay.service';
 import { GiftCard, GiftCardDocument } from '../schemas/gift-card.schema';
 import { WalletRefundRequest, WalletRefundRequestDocument } from '../schemas/wallet-refund-request.schema';
+import { RechargePack, RechargePackDocument } from '../schemas/recharge-pack.schema';
 
 const GST_PERCENTAGE = 18;
 
@@ -28,30 +29,23 @@ export class WalletService {
     private giftCardModel: Model<GiftCardDocument>,
     @InjectModel(WalletRefundRequest.name)
     private walletRefundModel: Model<WalletRefundRequestDocument>,
+    @InjectModel(RechargePack.name)
+    private rechargePackModel: Model<RechargePackDocument>,
     private razorpayService: RazorpayService, // ✅ Only Razorpay
   ) {}
 
   // ===== UTILITY METHODS =====
 
-  /**
-   * Generate unique transaction ID
-   */
-  private generateTransactionId(prefix: string = 'TXN'): string {
+private generateTransactionId(prefix: string = 'TXN'): string {
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 8).toUpperCase();
     return `${prefix}_${timestamp}_${random}`;
   }
 
-  /**
-   * Start MongoDB session helper
-   */
   private async startSession(): Promise<ClientSession> {
     return this.transactionModel.db.startSession();
   }
 
-  /**
-   * Ensure wallet object has split balances (cash/bonus)
-   */
   private ensureWallet(user: UserDocument): void {
     if (!user.wallet) {
       user.wallet = {
@@ -72,13 +66,9 @@ export class WalletService {
     user.wallet.bonusBalance = user.wallet.bonusBalance ?? 0;
     user.wallet.totalBonusReceived = user.wallet.totalBonusReceived ?? 0;
     user.wallet.totalBonusSpent = user.wallet.totalBonusSpent ?? 0;
-
     user.wallet.balance = (user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0);
   }
 
-  /**
-   * Apply debit to wallet using bonus first, then cash
-   */
   private applyDebit(
     wallet: any,
     amount: number,
@@ -86,14 +76,12 @@ export class WalletService {
     if (amount <= 0) {
       throw new BadRequestException('Amount must be greater than 0');
     }
-
     const totalAvailable = (wallet.cashBalance || 0) + (wallet.bonusBalance || 0);
     if (totalAvailable < amount) {
       throw new BadRequestException(
         `Insufficient wallet balance. Required: ₹${amount}, Available: ₹${totalAvailable}`,
       );
     }
-
     const bonusAvailable = wallet.bonusBalance || 0;
     const bonusDebited = Math.min(bonusAvailable, amount);
     const cashDebited = amount - bonusDebited;
@@ -108,26 +96,95 @@ export class WalletService {
     return { cashDebited, bonusDebited };
   }
 
-  // ✅ NEW HELPER: Check if user already got bonus for this amount
- private async hasReceivedBonusForAmount(userId: string, amount: number): Promise<boolean> {
+  private async hasReceivedBonusForAmount(userId: string, amount: number): Promise<boolean> {
     const count = await this.transactionModel.countDocuments({
       userId: new Types.ObjectId(userId),
       type: 'recharge',
       status: 'completed',
       amount: amount,
-      'metadata.hasBonus': true, // Improved check
+      'metadata.hasBonus': true,
     });
     return count > 0;
   }
 
- async createRechargeTransaction(
-    userId: string,
-    amount: number,
-    currency: string = 'INR',
-  ): Promise<any> {
+  /**
+   * ✅ DYNAMIC BONUS CALCULATION (DB Based)
+   */
+  private async calculateBonusForAmount(amount: number): Promise<{ bonusAmount: number; percentage: number }> {
+    // 1. Try to find an exact match first (Active packs only)
+    const exactPack = await this.rechargePackModel.findOne({ 
+      amount: amount, 
+      isActive: true 
+    });
+
+    if (exactPack) {
+      return {
+        bonusAmount: Math.floor((amount * exactPack.bonusPercentage) / 100),
+        percentage: exactPack.bonusPercentage
+      };
+    }
+
+    // 2. Fallback: Find the highest active tier less than or equal to the amount
+    const lowerPack = await this.rechargePackModel
+      .findOne({ amount: { $lte: amount }, isActive: true })
+      .sort({ amount: -1 });
+
+    if (lowerPack) {
+      return {
+        bonusAmount: Math.floor((amount * lowerPack.bonusPercentage) / 100),
+        percentage: lowerPack.bonusPercentage
+      };
+    }
+
+    return { bonusAmount: 0, percentage: 0 };
+  }
+
+  // ===== RECHARGE PACK MANAGEMENT (USER & ADMIN) =====
+
+  /**
+   * Get all active recharge packs (For User App)
+   */
+  async getActiveRechargePacks() {
+    return this.rechargePackModel
+      .find({ isActive: true })
+      .sort({ amount: 1 })
+      .select('amount bonusPercentage isPopular isActive createdAt') // Select only needed fields
+      .lean();
+  }
+
+  /**
+   * Get all packs (For Admin)
+   */
+  async getAllRechargePacks() {
+    return this.rechargePackModel.find().sort({ amount: 1 });
+  }
+
+  /**
+   * Create or Update a pack (For Admin)
+   */
+  async saveRechargePack(data: { amount: number; bonusPercentage: number; isPopular?: boolean; isActive?: boolean }) {
+    if (data.amount <= 0) throw new BadRequestException('Amount must be positive');
+    
+    return this.rechargePackModel.findOneAndUpdate(
+      { amount: data.amount },
+      { ...data },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
+
+  /**
+   * Delete a pack (For Admin)
+   */
+  async deleteRechargePack(amount: number) {
+    return this.rechargePackModel.findOneAndDelete({ amount });
+  }
+
+  // ===== RECHARGE TRANSACTION =====
+
+  async createRechargeTransaction(userId: string, amount: number, currency: string = 'INR'): Promise<any> {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException('User not found');
-    if (amount < 50) throw new BadRequestException('Minimum recharge amount is ₹50');
+    if (amount < 1) throw new BadRequestException('Invalid recharge amount');
 
     const transactionId = this.generateTransactionId('TXN');
     const gstAmount = Math.ceil((amount * GST_PERCENTAGE) / 100);
@@ -150,14 +207,7 @@ export class WalletService {
       });
 
       await transaction.save();
-      this.logger.log(`Recharge transaction created: ${transactionId} for user ${userId}`, totalPayable,currency,userId,transactionId);
-
-      const razorpayOrder = await this.razorpayService.createOrder(
-        totalPayable,
-        currency,
-        userId,
-        transactionId,
-      );
+      const razorpayOrder = await this.razorpayService.createOrder(totalPayable, currency, userId, transactionId);
 
       return {
         success: true,
@@ -183,14 +233,14 @@ export class WalletService {
     }
   }
 
-  // ===== VERIFY PAYMENT (UPDATED FOR SEPARATE BONUS TXN) =====
+  // ===== VERIFY PAYMENT =====
 
-async verifyPayment(
-    transactionId: string,
-    paymentId: string,
-    status: 'completed' | 'failed',
-    promotionId?: string,
-    bonusPercentage?: number,
+  async verifyPayment(
+    transactionId: string, 
+    paymentId: string, 
+    status: 'completed' | 'failed', 
+    promotionId?: string, 
+    _ignoredBonus?: number // Legacy param ignored in favor of DB logic
   ): Promise<any> {
     const session = await this.startSession();
     session.startTransaction();
@@ -205,77 +255,64 @@ async verifyPayment(
 
       transaction.paymentId = paymentId;
       transaction.status = status;
-
-      // ✅ FIX: Explicitly type the variable
       let bonusTransaction: WalletTransactionDocument | null = null;
 
       if (status === 'completed') {
         this.ensureWallet(user as any);
-
         const initialBalance = user.wallet.balance;
         const initialCash = user.wallet.cashBalance || 0;
         const initialBonus = user.wallet.bonusBalance || 0;
 
-        // 1. Calculate Bonus
-        let finalBonusPercentage = bonusPercentage || 0;
-        const alreadyGotBonus = await this.hasReceivedBonusForAmount(user._id.toString(), transaction.amount);
-        
-        if (alreadyGotBonus) {
-          finalBonusPercentage = 0; 
-        }
+        // ✅ 1. CALCULATE BONUS DYNAMICALLY
+        const { bonusAmount: calculatedBonus, percentage } = await this.calculateBonusForAmount(transaction.amount);
         
         let bonusAmount = 0;
-        if (finalBonusPercentage > 0) {
-          bonusAmount = Math.floor((transaction.amount * finalBonusPercentage) / 100);
+        let finalPercentage = 0;
+
+        const alreadyGotBonus = await this.hasReceivedBonusForAmount(user._id.toString(), transaction.amount);
+        
+        // Only give bonus if not received before (or modify this logic if you want recursive bonuses)
+        if (!alreadyGotBonus && calculatedBonus > 0) {
+           bonusAmount = calculatedBonus;
+           finalPercentage = percentage;
         }
 
-        // 2. Process RECHARGE (Cash Component)
+        // ✅ 2. Update Cash Balance
         user.wallet.cashBalance = initialCash + transaction.amount;
         user.wallet.totalRecharged = (user.wallet.totalRecharged || 0) + transaction.amount;
         
-        // Update main transaction balances
         transaction.balanceBefore = initialBalance;
         transaction.balanceAfter = initialBalance + transaction.amount;
         transaction.description = `Wallet recharge of ₹${transaction.amount}`;
         
         if (promotionId) (transaction as any).metadata = { ...transaction.metadata, promotionId };
-        
+        if (bonusAmount > 0) transaction.metadata = { ...transaction.metadata, hasBonus: true, bonusAmount };
+
+        // ✅ 3. Process Bonus Transaction
         if (bonusAmount > 0) {
-           transaction.metadata = { ...transaction.metadata, hasBonus: true, bonusAmount };
+           user.wallet.bonusBalance = initialBonus + bonusAmount;
+           user.wallet.totalBonusReceived = (user.wallet.totalBonusReceived || 0) + bonusAmount;
+
+           const bonusTransactionId = this.generateTransactionId('BNS');
+           bonusTransaction = new this.transactionModel({
+               transactionId: bonusTransactionId,
+               userId: user._id,
+               userModel: 'User',
+               type: 'bonus',
+               amount: bonusAmount,
+               bonusAmount: bonusAmount,
+               isBonus: true,
+               status: 'completed',
+               description: `Bonus for recharge of ₹${transaction.amount} (${finalPercentage}%)`,
+               linkedTransactionId: transactionId,
+               balanceBefore: transaction.balanceAfter, 
+               balanceAfter: (transaction.balanceAfter || 0) + bonusAmount,
+               createdAt: new Date(),
+               metadata: { relatedRechargeId: transactionId, percentage: finalPercentage }
+           });
+           transaction.linkedTransactionId = bonusTransactionId;
         }
 
-        // 3. Process BONUS (Separate Transaction)
-        if (bonusAmount > 0) {
-            user.wallet.bonusBalance = initialBonus + bonusAmount;
-            user.wallet.totalBonusReceived = (user.wallet.totalBonusReceived || 0) + bonusAmount;
-
-            const bonusTransactionId = this.generateTransactionId('BNS');
-            
-            bonusTransaction = new this.transactionModel({
-                transactionId: bonusTransactionId,
-                userId: user._id,
-                userModel: 'User',
-                type: 'bonus', // Separate type for analytics
-                amount: bonusAmount,
-                bonusAmount: bonusAmount,
-                isBonus: true,
-                status: 'completed',
-                description: `Bonus for recharge of ₹${transaction.amount} (${finalBonusPercentage}%)`,
-                linkedTransactionId: transactionId,
-                balanceBefore: transaction.balanceAfter, 
-                balanceAfter: (transaction.balanceAfter || 0) + bonusAmount,
-                createdAt: new Date(),
-                metadata: {
-                    relatedRechargeId: transactionId,
-                    percentage: finalBonusPercentage
-                }
-            });
-
-            // Link main transaction to bonus
-            transaction.linkedTransactionId = bonusTransactionId;
-        }
-
-        // 4. Update Final User Totals
         user.wallet.balance = user.wallet.cashBalance + user.wallet.bonusBalance;
         user.wallet.lastRechargeAt = new Date();
         user.wallet.lastTransactionAt = new Date();
@@ -283,11 +320,7 @@ async verifyPayment(
 
       await user.save({ session });
       await transaction.save({ session });
-      
-      if (bonusTransaction) {
-          await bonusTransaction.save({ session });
-      }
-
+      if (bonusTransaction) await bonusTransaction.save({ session });
       await session.commitTransaction();
 
       return {
@@ -1578,4 +1611,245 @@ async redeemGiftCard(userId: string, code: string): Promise<any> {
       session.endSession();
     }
   }
+
+  // ==========================================================
+  // ✅ NEW ADMIN FEATURES
+  // ==========================================================
+
+  /**
+   * ✅ REFUND RAZORPAY TRANSACTION
+   * 1. Refunds payment via Razorpay
+   * 2. Deducts cash from user wallet
+   * 3. Removes associated bonus if it exists
+   */
+async refundRazorpayTransaction(
+    transactionId: string,
+    adminId: string,
+    reason: string
+  ): Promise<any> {
+    const session = await this.startSession();
+    session.startTransaction();
+
+    try {
+      // 1. Find the transaction
+      // Strict query construction to avoid CastError on _id
+      let query: any;
+      if (Types.ObjectId.isValid(transactionId)) {
+          query = { $or: [{ transactionId }, { _id: transactionId }] };
+      } else {
+          query = { transactionId };
+      }
+
+      const transaction = await this.transactionModel.findOne(query).session(session);
+
+      if (!transaction) throw new NotFoundException('Transaction not found');
+      if (transaction.type !== 'recharge') throw new BadRequestException('Only recharge transactions can be refunded here');
+      if (transaction.status === 'refunded') throw new BadRequestException('Transaction already refunded in DB');
+      if (!transaction.paymentId) throw new BadRequestException('No payment gateway ID found');
+
+      // 2. Find User
+      const user = await this.userModel.findById(transaction.userId).session(session);
+      if (!user) throw new NotFoundException('User not found');
+      this.ensureWallet(user as any);
+
+      // 3. ✅ CHECK RAZORPAY STATUS FIRST (Prevent Double Refund Error)
+      let shouldCallRefundApi = true;
+      try {
+        const payment = await this.razorpayService.fetchPayment(transaction.paymentId);
+        
+        const amountPaidPaise = payment.amount;
+        const amountRefundedPaise = payment.amount_refunded || 0;
+        const amountToRefundPaise = Math.round(transaction.amount * 100);
+
+        // Check if already refunded on Gateway
+        if (payment.status === 'refunded' || (amountPaidPaise - amountRefundedPaise) < amountToRefundPaise) {
+           this.logger.warn(`Transaction ${transactionId} is already refunded/partially refunded on Gateway. Skipping API call & Syncing DB.`);
+           shouldCallRefundApi = false;
+           
+           // Optional: You could throw error here if you don't want to auto-sync
+           // but usually auto-syncing (deducting wallet) is the correct recovery.
+           if (amountRefundedPaise < amountToRefundPaise && payment.status !== 'refunded') {
+              // Only throw if it's a messy partial refund state that doesn't match our full refund attempt
+              throw new BadRequestException(`Gateway mismatch: Available to refund: ${(amountPaidPaise - amountRefundedPaise)/100}, Requested: ${transaction.amount}`);
+           }
+        }
+      } catch (err: any) {
+        // If fetch fails, we proceed cautiously or fail. 
+        // Failing is safer to avoid data inconsistencies.
+        this.logger.error(`Could not fetch payment status from Razorpay: ${err.message}`);
+        throw new InternalServerErrorException('Could not verify payment status with gateway. Please check Razorpay Dashboard.');
+      }
+
+      // 4. Process Razorpay Refund (Only if needed)
+      if (shouldCallRefundApi) {
+        await this.razorpayService.refundPayment(transaction.paymentId, transaction.amount, reason);
+      }
+
+      // 5. Update User Cash Balance
+      // We allow negative balance if they already spent the money (Debt)
+      const beforeBalance = user.wallet.balance;
+      user.wallet.cashBalance = (user.wallet.cashBalance || 0) - transaction.amount;
+      
+      // 6. Handle Linked Bonus Removal
+      let bonusReversed = 0;
+      if (transaction.linkedTransactionId) {
+        const bonusTxn = await this.transactionModel.findOne({ 
+          transactionId: transaction.linkedTransactionId 
+        }).session(session);
+
+        if (bonusTxn && (bonusTxn.status === 'completed' || bonusTxn.status === 'active')) {
+            bonusReversed = bonusTxn.amount;
+            user.wallet.bonusBalance = Math.max(0, (user.wallet.bonusBalance || 0) - bonusReversed);
+            
+            // Mark bonus txn as reversed
+            bonusTxn.status = 'refunded';
+            bonusTxn.metadata = { ...bonusTxn.metadata, reversedBy: 'refund_handler', reason };
+            await bonusTxn.save({ session });
+        }
+      }
+
+      // Update final balance
+      user.wallet.balance = (user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0);
+      user.wallet.lastTransactionAt = new Date();
+
+      // 7. Update Original Transaction
+      transaction.status = 'refunded';
+      transaction.metadata = { 
+          ...transaction.metadata, 
+          refundedBy: adminId, 
+          refundReason: reason, 
+          bonusReversed,
+          gatewaySync: !shouldCallRefundApi // Flag if we just synced
+      };
+
+      // 8. Create Refund Record (Internal Log)
+      const refundTxnId = this.generateTransactionId('REF');
+      const refundTxn = new this.transactionModel({
+        transactionId: refundTxnId,
+        userId: user._id,
+        type: 'refund',
+        amount: transaction.amount,
+        cashAmount: transaction.amount,
+        bonusAmount: bonusReversed > 0 ? bonusReversed : undefined,
+        balanceBefore: beforeBalance,
+        balanceAfter: user.wallet.balance,
+        description: `Refund for ${transaction.transactionId}${!shouldCallRefundApi ? ' (Gateway Sync)' : ''}`,
+        status: 'completed',
+        metadata: { originalTransactionId: transaction.transactionId, reason },
+        createdAt: new Date(),
+      });
+
+      await Promise.all([
+        user.save({ session }),
+        transaction.save({ session }),
+        refundTxn.save({ session })
+      ]);
+
+      await session.commitTransaction();
+
+      return {
+        success: true,
+        message: shouldCallRefundApi 
+          ? 'Transaction refunded via Razorpay and Wallet adjusted'
+          : 'Transaction was already refunded on Gateway. Wallet adjusted to match.',
+        data: {
+          refundId: refundTxnId,
+          refundedAmount: transaction.amount,
+          bonusRemoved: bonusReversed,
+          newBalance: user.wallet.balance
+        }
+      };
+
+    } catch (error: any) {
+      await session.abortTransaction();
+      // Extract the meaningful error message
+      const msg = error.error?.description || error.message || 'Refund failed';
+      this.logger.error(`Razorpay Refund failed: ${msg}`);
+      throw new BadRequestException(msg);
+    } finally {
+      session.endSession();
+    }
+  }
+
+  /**
+   * ✅ MANIPULATE BONUS (Admin)
+   * Manually add or deduct bonus balance
+   */
+  async manageUserBonus(
+    userId: string,
+    amount: number,
+    action: 'add' | 'deduct',
+    reason: string,
+    adminId: string
+  ): Promise<any> {
+    if (amount <= 0) throw new BadRequestException('Amount must be positive');
+
+    const session = await this.startSession();
+    session.startTransaction();
+
+    try {
+      const user = await this.userModel.findById(userId).session(session);
+      if (!user) throw new NotFoundException('User not found');
+      this.ensureWallet(user as any);
+
+      const beforeBalance = user.wallet.balance;
+      let finalAmount = amount; // For transaction record
+
+      if (action === 'add') {
+         user.wallet.bonusBalance = (user.wallet.bonusBalance || 0) + amount;
+         user.wallet.totalBonusReceived = (user.wallet.totalBonusReceived || 0) + amount;
+      } else {
+         if ((user.wallet.bonusBalance || 0) < amount) {
+             throw new BadRequestException(`Insufficient bonus balance. Available: ${user.wallet.bonusBalance}`);
+         }
+         user.wallet.bonusBalance = (user.wallet.bonusBalance || 0) - amount;
+         finalAmount = -amount; // Deductions are negative in some logs, but transaction model usually uses positive + type
+      }
+
+      user.wallet.balance = (user.wallet.cashBalance || 0) + (user.wallet.bonusBalance || 0);
+      user.wallet.lastTransactionAt = new Date();
+
+      const txnId = this.generateTransactionId('ADM_BNS');
+      const transaction = new this.transactionModel({
+        transactionId: txnId,
+        userId: user._id,
+        type: action === 'add' ? 'bonus' : 'deduction', // Use standard types or create 'admin_adjustment'
+        amount: amount,
+        bonusAmount: amount,
+        isBonus: true,
+        balanceBefore: beforeBalance,
+        balanceAfter: user.wallet.balance,
+        description: `Admin Bonus ${action === 'add' ? 'Credit' : 'Deduction'}: ${reason}`,
+        status: 'completed',
+        metadata: { 
+            adminId, 
+            action, 
+            reason,
+            manualAdjustment: true
+        },
+        createdAt: new Date(),
+      });
+
+      await user.save({ session });
+      await transaction.save({ session });
+      await session.commitTransaction();
+
+      return {
+          success: true,
+          message: `Bonus ${action}ed successfully`,
+          data: {
+              newBonusBalance: user.wallet.bonusBalance,
+              totalBalance: user.wallet.balance,
+              transactionId: txnId
+          }
+      };
+
+    } catch (error: any) {
+        await session.abortTransaction();
+        throw error;
+    } finally {
+        session.endSession();
+    }
+  }
 }
+

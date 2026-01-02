@@ -126,6 +126,27 @@ async handleAcceptCall(@ConnectedSocket() client: Socket, @MessageBody() data: a
   }
 }
 
+@SubscribeMessage('user_joined_agora')
+  async handleUserJoinedAgora(@ConnectedSocket() client: Socket, @MessageBody() data: { sessionId: string; role: string }) {
+    this.logger.log(`✅ ${data.role} joined Agora for ${data.sessionId}`);
+    
+    const session = await this.callSessionService.getSession(data.sessionId);
+    if (!session) return;
+
+    if (data.role === 'user') session.userJoinedAgora = true;
+    else if (data.role === 'astrologer') session.astrologerJoinedAgora = true;
+    
+    await session.save();
+
+    // STRICT CHECK: Both must be in Agora to start timer
+    if (session.userJoinedAgora === true && session.astrologerJoinedAgora === true && session.status !== 'active') {
+      this.logger.log(`🚀 Both parties explicitly joined Agora for ${data.sessionId}. Starting timer NOW!`);
+      await this.startCallInternal(data.sessionId);
+    } else {
+      this.logger.log(`⏳ Waiting for other party... User: ${session.userJoinedAgora}, Astro: ${session.astrologerJoinedAgora}`);
+    }
+  }
+
   @SubscribeMessage('reject_call')
   async handleRejectCall(@ConnectedSocket() client: Socket, @MessageBody() data: any) {
     try {
@@ -177,19 +198,80 @@ async handleJoinSession(@ConnectedSocket() client: Socket, @MessageBody() payloa
     });
   }
 
-  await this.checkAndStartSession(data.sessionId);
+  await this.checkAndPrepareCredentials(data.sessionId);
   return { success: true };
 }
 
-  private async checkAndStartSession(sessionId: string) {
+ private async checkAndPrepareCredentials(sessionId: string) {
     const participants = Array.from(this.activeUsers.values()).filter(u => u.sessionId === sessionId);
     const hasUser = participants.some(u => u.role === 'user');
     const hasAstrologer = participants.some(u => u.role === 'astrologer');
 
     if (hasUser && hasAstrologer) {
-      if (this.sessionTimers.has(sessionId)) return;
-      this.logger.log(`🚀 Both parties present in ${sessionId}. Auto-starting call...`);
-      await this.startCallInternal(sessionId);
+       this.logger.log(`🔔 Both parties connected to socket in ${sessionId}. Sending Agora credentials...`);
+       await this.prepareCallCredentials(sessionId);
+    }
+  }
+
+  // ✅ 2. Generates tokens and sends 'call_credentials', but DOES NOT start timer
+  private async prepareCallCredentials(sessionId: string) {
+    try {
+      const session = await this.callSessionService.getSession(sessionId);
+      if (!session) throw new BadRequestException('Session not found');
+
+      let isNew = false;
+      if (!session.agoraChannelName) {
+        session.agoraChannelName = this.agoraService.generateChannelName();
+        isNew = true;
+      }
+
+      const channelName = session.agoraChannelName;
+      // Reuse existing or generate new
+      const userUid = session.agoraUserUid || this.agoraService.generateUid();
+      const astrologerUid = session.agoraAstrologerUid || this.agoraService.generateUid();
+      const userToken = session.agoraUserToken || this.agoraService.generateRtcToken(channelName, userUid, 'publisher');
+      const astrologerToken = session.agoraAstrologerToken || this.agoraService.generateRtcToken(channelName, astrologerUid, 'publisher');
+
+      if (isNew || !session.agoraUserToken) {
+        session.agoraUserToken = userToken;
+        session.agoraAstrologerToken = astrologerToken;
+        session.agoraUserUid = userUid;
+        session.agoraAstrologerUid = astrologerUid;
+        await session.save();
+      }
+
+      const basePayload = {
+        sessionId: sessionId,
+        callType: session.callType,
+        agoraAppId: this.agoraService.getAppId(),
+        agoraChannelName: channelName,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Send to User
+      const userSocket = Array.from(this.activeUsers.values()).find(u => u.role === 'user' && u.sessionId === sessionId);
+      if (userSocket) {
+        this.server.to(userSocket.socketId).emit('call_credentials', { 
+          ...basePayload, 
+          agoraToken: userToken, 
+          agoraUid: userUid,
+          agoraAstrologerUid: astrologerUid 
+        });
+      }
+
+      // Send to Astrologer
+      const astroSocket = Array.from(this.activeUsers.values()).find(u => u.role === 'astrologer' && u.sessionId === sessionId);
+      if (astroSocket) {
+        this.server.to(astroSocket.socketId).emit('call_credentials', { 
+          ...basePayload, 
+          agoraToken: astrologerToken, 
+          agoraUid: astrologerUid,
+          agoraUserUid: userUid 
+        });
+      }
+
+    } catch (error) {
+      this.logger.error(`Prepare credentials error: ${error.message}`);
     }
   }
 

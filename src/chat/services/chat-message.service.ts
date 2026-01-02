@@ -5,6 +5,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ChatMessage, ChatMessageDocument } from '../schemas/chat-message.schema';
 import { Order, OrderDocument } from '../../orders/schemas/orders.schema';
+import { ChatSession, ChatSessionDocument } from '../schemas/chat-session.schema'; // ✅ IMPORTED
 
 @Injectable()
 export class ChatMessageService {
@@ -13,6 +14,7 @@ export class ChatMessageService {
   constructor(
     @InjectModel(ChatMessage.name) private messageModel: Model<ChatMessageDocument>,
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
+    @InjectModel(ChatSession.name) private sessionModel: Model<ChatSessionDocument>,
   ) {}
 
   private generateMessageId(): string {
@@ -74,6 +76,7 @@ export class ChatMessageService {
     });
 
     await message.save();
+
     await this.updateConversationStats(
       data.orderId, 
       {
@@ -85,9 +88,37 @@ export class ChatMessageService {
       }
     );
 
+    await this.updateSessionStats(data.sessionId, {
+      content: data.content,
+      type: data.type,
+      sentBy: data.senderId,
+      sentAt: new Date()
+    });
+
     this.logger.log(`Message created: ${messageId} | Type: ${data.type} | Thread: ${data.orderId}`);
 
     return message;
+  }
+
+  // ✅ New helper to update ChatSession document
+  private async updateSessionStats(
+    sessionId: string, 
+    lastMessage: { content: string; type: string; sentBy: string; sentAt: Date }
+  ): Promise<void> {
+    try {
+      await this.sessionModel.findOneAndUpdate(
+        { sessionId }, 
+        {
+          $inc: { messageCount: 1 }, // ✅ Increments count for Admin Panel
+          $set: { 
+            lastMessageAt: new Date(),
+            lastMessage: lastMessage
+          }
+        }
+      );
+    } catch (error: any) {
+      this.logger.error(`Failed to update session stats: ${error.message}`);
+    }
   }
 
   private async updateConversationStats(
@@ -160,46 +191,6 @@ export class ChatMessageService {
         pages: Math.ceil(total / limit)
       }
     };
-  }
-
-  async sendKundliDetailsMessage(
-    sessionId: string,
-    astrologerId: string,
-    userId: string,
-    orderId: string,
-    kundliData: {
-      name: string;
-      dob: string;
-      birthTime: string;
-      birthPlace: string;
-      gender: string;
-    }
-  ): Promise<ChatMessageDocument> {
-    const messageId = this.generateMessageId();
-
-    const message = new this.messageModel({
-      messageId,
-      sessionId: sessionId,
-      orderId,
-      senderId: this.toObjectId(userId),
-      senderModel: 'User',
-      receiverId: this.toObjectId(astrologerId),
-      receiverModel: 'Astrologer',
-      type: 'kundli_details',
-      content: `Kundli Details: ${kundliData.name}, DOB: ${kundliData.dob}, Birth Time: ${kundliData.birthTime}, Place: ${kundliData.birthPlace}, Gender: ${kundliData.gender}`,
-      kundliDetails: kundliData,
-      isVisibleToUser: true,
-      isVisibleToAstrologer: true,
-      deleteStatus: 'visible',
-      deliveryStatus: 'sent',
-      sentAt: new Date(),
-      createdAt: new Date()
-    });
-
-    await message.save();
-    this.logger.log(`Kundli details message sent: ${messageId}`);
-
-    return message;
   }
 
   async markAsSent(messageIds: string[]): Promise<void> {
